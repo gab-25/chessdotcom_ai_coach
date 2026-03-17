@@ -1,0 +1,22 @@
+[project]
+name = "chessdotcom-ai-coach"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "gab-25",email = "gabrielesorci.25@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "chess-com (>=3.13.0,<4.0.0)",
+    "fastapi[standard] (>=0.135.1,<0.136.0)",
+    "python-dotenv (>=1.2.2,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.basedpyright]
+typeCheckingMode = "off"

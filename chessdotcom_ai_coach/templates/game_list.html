@@ -1,0 +1,41 @@
+{% if not games %}
+<div class="bg-gray-800 p-6 rounded-lg border border-gray-700 text-center">
+  <p class="text-gray-400 text-lg">No games in progress at the moment.</p>
+</div>
+{% else %} {% for game in games %}
+<div
+  class="bg-gray-800 p-4 rounded-lg border-l-4 border-green-500 shadow-lg flex justify-between items-center"
+>
+  <div class="flex-1">
+    <div class="flex items-center gap-4 mb-2">
+      <span class="bg-gray-700 px-2 py-1 rounded text-xs uppercase"
+        >{{ game.time_class }}</span
+      >
+      <span class="text-gray-400 text-sm">Time: {{ game.time_control }}</span>
+    </div>
+    <div class="flex flex-col gap-1">
+      <div class="flex items-center gap-2">
+        <span class="w-3 h-3 bg-white rounded-full"></span>
+        <span class="font-bold">{{ game.white.username }}</span>
+        <span class="text-gray-500 text-sm">({{ game.white.rating }})</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span
+          class="w-3 h-3 bg-black border border-gray-600 rounded-full"
+        ></span>
+        <span class="font-bold">{{ game.black.username }}</span>
+        <span class="text-gray-500 text-sm">({{ game.black.rating }})</span>
+      </div>
+    </div>
+  </div>
+  <div>
+    <a
+      href="{{ game.url }}"
+      target="_blank"
+      class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm transition"
+    >
+      View Board
+    </a>
+  </div>
+</div>
+{% endfor %} {% endif %}
