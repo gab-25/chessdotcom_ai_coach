@@ -1,2 +1,2 @@
-# chess_helper_agent
-Chess Helper Agent
+# chessdotcom_ai_coach
+Chessdotcom AI Coach
