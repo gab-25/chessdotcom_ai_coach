@@ -4,7 +4,7 @@
 </div>
 {% else %} {% for game in games %}
 <div
-  class="bg-gray-800 p-4 rounded-lg border-l-4 border-green-500 shadow-lg flex justify-between items-center"
+  class="bg-gray-800 p-4 rounded-lg border-l-4 {% if game.is_my_turn %}border-green-500 animate-pulse-slow{% else %}border-gray-700{% endif %} shadow-lg flex justify-between items-center"
 >
   <div class="flex-1">
     <div class="flex items-center gap-4 mb-2">
@@ -12,6 +12,12 @@
         >{{ game.time_class }}</span
       >
       <span class="text-gray-400 text-sm">Time: {{ game.time_control }}</span>
+      {% if game.is_my_turn %}
+      <span
+        class="bg-green-600 text-white px-2 py-0.5 rounded text-[10px] font-bold animate-bounce"
+        >YOUR TURN</span
+      >
+      {% endif %}
     </div>
     <div class="flex flex-col gap-1">
       <div class="flex items-center gap-2">
