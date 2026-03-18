@@ -3,7 +3,7 @@
 // Example:
 [
   {
-    "label": "Run server main",
+    "label": "Run Server",
     "command": "fastapi dev chessdotcom_ai_coach/main.py",
     //"args": [],
     // Env overrides for the command, will be appended to the terminal's environment from the settings.

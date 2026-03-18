@@ -3,46 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Chess.com Live Games</title>
+    <title>Chessdotcom AI Coach</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined"
+      rel="stylesheet"
+    />
+    <script type="importmap">
+      {
+        "imports": {
+          "@material/web/": "https://esm.run/@material/web/"
+        }
+      }
+    </script>
+    <script type="module">
+      import "@material/web/all.js";
+      import { styles as typescaleStyles } from "@material/web/typography/md-typescale-styles.js";
+
+      document.adoptedStyleSheets.push(typescaleStyles.styleSheet);
+    </script>
+    <link rel="stylesheet" href="/static/css/styles.css" />
   </head>
   <body class="bg-gray-900 text-white min-h-screen p-8">
     <div class="max-w-4xl mx-auto">
       <header
         class="mb-8 flex justify-between items-center border-b border-gray-700 pb-4"
       >
-        <h1 class="text-3xl font-bold text-green-500">Chess Coach AI</h1>
-        <div class="text-gray-400">
-          User: <span class="font-mono text-white">{{ username }}</span>
+        <div class="flex items-center gap-4">
+          <a
+            href="/"
+            class="flex items-center gap-4 hover:opacity-80 transition-opacity"
+          >
+            <img
+              src="/static/img/logo.png"
+              alt="Logo"
+              class="h-10 w-10 object-contain rounded-md"
+            />
+            <h1 class="text-3xl font-bold text-green-500">
+              Chessdotcom AI Coach
+            </h1>
+          </a>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-gray-400 text-sm">User:</span>
+          <md-assist-chip label="{{ username }}" disabled>
+            <md-icon slot="icon">person</md-icon>
+          </md-assist-chip>
         </div>
       </header>
 
-      <div class="mb-6">
-        <button
-          hx-get="/current-games"
-          hx-target="#games-container"
-          hx-indicator="#loading"
-          class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded font-semibold transition"
-        >
-          Refresh Games
-        </button>
-        <span id="loading" class="htmx-indicator ml-4 text-gray-400 italic"
-          >Fetching data...</span
-        >
-      </div>
-
-      <div
-        id="games-container"
-        hx-get="/current-games"
-        hx-trigger="load"
-        class="grid gap-4"
-      >
-        <!-- Content will be loaded here via HTMX -->
-        <div class="flex items-center justify-center p-12">
-          <p class="text-gray-500 animate-pulse">Loading ongoing games...</p>
-        </div>
-      </div>
+      <main>{% block content %}{% endblock %}</main>
     </div>
   </body>
 </html>

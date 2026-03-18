@@ -1,0 +1,27 @@
+:root {
+  --md-sys-color-primary: #4ade80;
+  --md-sys-color-on-primary: #003917;
+  --md-sys-color-primary-container: #005224;
+  --md-sys-color-on-primary-container: #67ff9b;
+  --md-sys-color-surface: #111827;
+  --md-sys-color-on-surface: #e5e7eb;
+  --md-sys-color-surface-container: #1f2937;
+  --md-sys-color-outline: #374151;
+}
+
+body {
+  font-family: "Roboto", sans-serif;
+}
+
+/* Custom styling for HTMX indicator with Material Components */
+.htmx-indicator {
+  display: none;
+}
+
+.htmx-request .htmx-indicator {
+  display: inline-block;
+}
+
+.htmx-request.htmx-indicator {
+  display: inline-block;
+}

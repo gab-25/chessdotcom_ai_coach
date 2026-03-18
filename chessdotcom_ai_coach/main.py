@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 from chessdotcom import ChessDotComClient
@@ -13,6 +14,9 @@ app = FastAPI()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+# Static Files Configuration
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+
 # Chess.com Client Configuration
 USER_AGENT = os.getenv("USER_AGENT", "Chess-AI-Coach-App/1.0 (contact: your-email@example.com)")
 client = ChessDotComClient(user_agent=USER_AGENT)
@@ -20,15 +24,23 @@ USERNAME = os.getenv("CHESSDOTCOM_USERNAME")
 
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
+async def home_page(request: Request):
     """
-    Serves the main application page.
+    Serves the home page.
     """
-    return templates.TemplateResponse("index.html", {"request": request, "username": USERNAME})
+    return templates.TemplateResponse("home_page.html", {"request": request, "username": USERNAME})
+
+
+@app.get("/detail", response_class=HTMLResponse)
+async def detail_page(request: Request):
+    """
+    Serves the detail page.
+    """
+    return templates.TemplateResponse("detail_page.html", {"request": request, "username": USERNAME})
 
 
 @app.get("/current-games", response_class=HTMLResponse)
-async def get_current_games(request: Request):
+async def current_games(request: Request):
     """
     Retrieves ongoing games and returns the HTML fragment for HTMX.
     """
