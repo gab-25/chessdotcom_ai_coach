@@ -57,12 +57,30 @@
           <div class="text-[10px] font-black opacity-30">CHESS.COM LIVE</div>
         </div>
 
+        <!-- Alpine.js Chessboard -->
         <div class="p-4 sm:p-8 bg-[#262421]">
           <div
-            id="board"
-            class="mx-auto shadow-2xl rounded-sm border-4 border-[#312e2b]"
+            x-data="chessBoard({
+              position: '{{ fen }}',
+              orientation: '{{ 'white' if white_name.lower() == username.lower() else 'black' }}'
+            })"
+            class="mx-auto shadow-2xl rounded-sm border-4 border-[#312e2b] chess-board relative grid grid-cols-8 grid-rows-8"
             style="width: 100%; aspect-ratio: 1 / 1; max-width: 550px"
-          ></div>
+          >
+            <template x-for="(square, index) in squares" :key="index">
+              <div
+                class="flex items-center justify-center relative w-full h-full"
+              >
+                <template x-if="square">
+                  <img
+                    :src="square.src"
+                    class="w-[90%] h-[90%] object-contain select-none pointer-events-none piece-img"
+                    :alt="square.name"
+                  />
+                </template>
+              </div>
+            </template>
+          </div>
         </div>
 
         <div class="bg-base-300 p-2 flex justify-between items-center px-6">
@@ -164,20 +182,6 @@
   </div>
 
   <script src="/static/js/board.js"></script>
-  <script>
-    document.addEventListener("DOMContentLoaded", function () {
-      const config = {
-        position: "{{ fen }}",
-        orientation:
-          '{{ "white" if white_name.lower() == username.lower() else "black" }}',
-        pieceTheme: function (piece) {
-          return "/static/img/" + piece.toLowerCase() + ".png";
-        },
-      };
-
-      window.chessBoard = initChessBoard("board", config);
-    });
-  </script>
   {% endif %}
 </div>
 {% endblock %}
