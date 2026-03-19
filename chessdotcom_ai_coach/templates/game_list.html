@@ -1,44 +1,102 @@
 {% if not games %}
-<div class="bg-gray-800 p-6 rounded-lg border border-gray-700 text-center">
-  <p class="text-gray-400 text-lg">No games in progress at the moment.</p>
+<div
+  class="alert alert-warning shadow-lg bg-base-100 border-warning/30 col-span-full"
+>
+  <i class="fa-solid fa-circle-info text-2xl"></i>
+  <div>
+    <h3 class="font-bold">No active games</h3>
+    <p class="text-xs">
+      You don't have any ongoing games on Chess.com at the moment.
+    </p>
+  </div>
 </div>
 {% else %} {% for game in games %}
 <div
-  class="bg-gray-800 p-4 rounded-lg border-l-4 {% if game.is_my_turn %}border-green-500 animate-pulse-slow{% else %}border-gray-700{% endif %} shadow-lg flex justify-between items-center"
+  class="card bg-base-100 shadow-xl border border-base-200 hover:border-success/50 transition-all duration-300 group {% if game.is_my_turn %}ring-2 ring-success/50 animate-pulse-slow{% endif %}"
 >
-  <div class="flex-1">
-    <div class="flex items-center gap-4 mb-2">
-      <span class="bg-gray-700 px-2 py-1 rounded text-xs uppercase"
-        >{{ game.time_class }}</span
-      >
-      <span class="text-gray-400 text-sm">Time: {{ game.time_control }}</span>
+  <div class="card-body p-5">
+    <!-- Game Header -->
+    <div class="flex justify-between items-start mb-4">
+      <div class="flex flex-wrap gap-2">
+        <div
+          class="badge badge-outline badge-sm uppercase font-bold tracking-tighter"
+        >
+          {{ game.time_class }}
+        </div>
+        <div class="badge badge-ghost badge-sm font-mono opacity-70">
+          {{ game.time_control }}
+        </div>
+      </div>
       {% if game.is_my_turn %}
-      <span
-        class="bg-green-600 text-white px-2 py-0.5 rounded text-[10px] font-bold animate-bounce"
-        >YOUR TURN</span
+      <div
+        class="badge badge-success gap-1 text-[10px] font-black animate-bounce"
       >
+        <i class="fa-solid fa-play text-[8px]"></i> YOUR TURN
+      </div>
       {% endif %}
     </div>
-    <div class="flex flex-col gap-1">
-      <div class="flex items-center gap-2">
-        <span class="w-3 h-3 bg-white rounded-full"></span>
-        <span class="font-bold">{{ game.white.username }}</span>
-        <span class="text-gray-500 text-sm">({{ game.white.rating }})</span>
+
+    <!-- Players -->
+    <div class="space-y-3">
+      <!-- White Player -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="avatar placeholder">
+            <div class="bg-neutral text-neutral-content rounded-full w-8">
+              <span class="text-xs">W</span>
+            </div>
+          </div>
+          <div>
+            <div class="font-bold text-sm truncate max-w-[120px]">
+              {{ game.white.username }}
+            </div>
+            <div class="text-[10px] opacity-50 font-mono">
+              {{ game.white.rating }}
+            </div>
+          </div>
+        </div>
+        {% if game.turn == 'white' %}
+        <div class="badge badge-xs badge-success badge-outline">Moving...</div>
+        {% endif %}
       </div>
-      <div class="flex items-center gap-2">
-        <span
-          class="w-3 h-3 bg-black border border-gray-600 rounded-full"
-        ></span>
-        <span class="font-bold">{{ game.black.username }}</span>
-        <span class="text-gray-500 text-sm">({{ game.black.rating }})</span>
+
+      <div class="divider my-0 opacity-10 text-[10px]">VS</div>
+
+      <!-- Black Player -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="avatar placeholder">
+            <div
+              class="bg-base-300 text-base-content rounded-full w-8 border border-base-content/10"
+            >
+              <span class="text-xs">B</span>
+            </div>
+          </div>
+          <div>
+            <div class="font-bold text-sm truncate max-w-[120px]">
+              {{ game.black.username }}
+            </div>
+            <div class="text-[10px] opacity-50 font-mono">
+              {{ game.black.rating }}
+            </div>
+          </div>
+        </div>
+        {% if game.turn == 'black' %}
+        <div class="badge badge-xs badge-success badge-outline">Moving...</div>
+        {% endif %}
       </div>
     </div>
-  </div>
-  <div>
-    <md-filled-button href="{{ game.url }}" target="_blank">
-      View Board
-      <md-icon slot="icon">visibility</md-icon>
-    </md-filled-button>
+
+    <!-- Actions -->
+    <div class="card-actions justify-end mt-6 pt-4 border-t border-base-200">
+      <a
+        href="/detail-board/{{ game.game_id }}"
+        class="btn btn-success btn-sm btn-block group-hover:shadow-lg transition-all"
+      >
+        <i class="fa-solid fa-chess-board"></i>
+        View Board
+      </a>
+    </div>
   </div>
 </div>
 {% endfor %} {% endif %}

@@ -1,19 +1,8 @@
-:root {
-  --md-sys-color-primary: #4ade80;
-  --md-sys-color-on-primary: #003917;
-  --md-sys-color-primary-container: #005224;
-  --md-sys-color-on-primary-container: #67ff9b;
-  --md-sys-color-surface: #111827;
-  --md-sys-color-on-surface: #e5e7eb;
-  --md-sys-color-surface-container: #1f2937;
-  --md-sys-color-outline: #374151;
-}
-
 body {
-  font-family: "Roboto", sans-serif;
+  font-family: "Inter", sans-serif;
 }
 
-/* Custom styling for HTMX indicator with Material Components */
+/* Custom styling for HTMX indicator */
 .htmx-indicator {
   display: none;
 }
@@ -24,4 +13,29 @@ body {
 
 .htmx-request.htmx-indicator {
   display: inline-block;
+}
+
+/* Animations */
+.animate-pulse-slow {
+  animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Chessboard Overrides */
+.chessboard-63f28 {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.board-b72b1 {
+  border: none !important;
 }

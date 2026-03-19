@@ -1,31 +1,72 @@
 {% extends "index.html" %} {% block content %}
-<div class="mb-6 flex items-center gap-4">
-  <md-filled-button
-    hx-get="/current-games"
-    hx-target="#games-container"
-    hx-indicator="#loading"
+<div class="space-y-8">
+  <!-- Welcome Hero Section -->
+  <div
+    class="hero bg-base-100 rounded-box shadow-xl p-8 border border-base-200"
   >
-    Refresh Games
-    <md-icon slot="icon">refresh</md-icon>
-  </md-filled-button>
+    <div class="hero-content flex-col lg:flex-row gap-10">
+      <div class="max-w-md">
+        <h2 class="text-4xl font-black text-success mb-2">Welcome Back!</h2>
+        <p class="text-base-content/70 text-lg leading-relaxed">
+          Analyze your ongoing
+          <span class="text-primary font-bold">Chess.com</span> games with
+          real-time AI insights and improve your strategy move by move.
+        </p>
+      </div>
+      <div class="flex-1 w-full">
+        <div
+          class="stats stats-vertical lg:stats-horizontal shadow bg-base-200 w-full border border-base-300"
+        >
+          <div class="stat">
+            <div class="stat-figure text-success">
+              <i class="fa-solid fa-chess-knight fa-2x"></i>
+            </div>
+            <div class="stat-title text-xs uppercase tracking-widest font-bold">
+              Status
+            </div>
+            <div class="stat-value text-2xl">Connected</div>
+            <div class="stat-desc text-success/80">v{{ version }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  <md-linear-progress
-    id="loading"
-    class="htmx-indicator flex-1"
-    indeterminate
-    style="max-width: 200px"
-  ></md-linear-progress>
-</div>
+  <!-- Games Section -->
+  <div class="space-y-4">
+    <div class="flex items-center justify-between px-2">
+      <h3 class="text-2xl font-bold flex items-center gap-3">
+        <i class="fa-solid fa-clock-rotate-left text-success"></i>
+        Current Games
+      </h3>
+      <div class="flex items-center gap-2">
+        <span
+          class="loading loading-spinner loading-sm text-success htmx-indicator"
+          id="loader"
+        ></span>
+        <button
+          class="btn btn-ghost btn-sm btn-circle tooltip tooltip-left"
+          data-tip="Refresh List"
+          hx-get="/current-games"
+          hx-target="#games-container"
+          hx-indicator="#loader"
+        >
+          <i class="fa-solid fa-rotate"></i>
+        </button>
+      </div>
+    </div>
 
-<div
-  id="games-container"
-  hx-get="/current-games"
-  hx-trigger="load"
-  class="grid gap-4"
->
-  <!-- Content will be loaded here via HTMX -->
-  <div class="flex items-center justify-center p-12">
-    <p class="text-gray-500 animate-pulse">Loading ongoing games...</p>
+    <!-- This container will be populated by HTMX -->
+    <div
+      id="games-container"
+      hx-get="/current-games"
+      hx-trigger="load"
+      class="grid grid-cols-1 md:grid-cols-2 gap-4"
+    >
+      <div class="col-span-full flex justify-center py-20">
+        <span class="loading loading-dots loading-lg text-success"></span>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
