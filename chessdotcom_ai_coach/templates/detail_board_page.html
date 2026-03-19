@@ -76,14 +76,6 @@
             </div>
             <span class="font-bold text-sm">{{ white_name }}</span>
           </div>
-          <div class="flex gap-2">
-            <button
-              class="btn btn-ghost btn-xs btn-square"
-              onclick="board.flip()"
-            >
-              <i class="fa-solid fa-repeat"></i>
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -171,21 +163,19 @@
     </div>
   </div>
 
+  <script src="/static/js/board.js"></script>
   <script>
-    $(document).ready(function () {
-      if (typeof Chessboard === "undefined") return;
-
-      var config = {
+    document.addEventListener("DOMContentLoaded", function () {
+      const config = {
         position: "{{ fen }}",
         orientation:
           '{{ "white" if white_name.lower() == username.lower() else "black" }}',
-        draggable: false,
-        pieceTheme:
-          "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png",
+        pieceTheme: function (piece) {
+          return "/static/img/" + piece.toLowerCase() + ".png";
+        },
       };
 
-      window.board = Chessboard("board", config);
-      $(window).resize(board.resize);
+      window.chessBoard = initChessBoard("board", config);
     });
   </script>
   {% endif %}

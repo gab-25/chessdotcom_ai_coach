@@ -30,12 +30,19 @@ body {
   }
 }
 
-/* Chessboard Overrides */
-.chessboard-63f28 {
-  border-radius: 4px;
+/* Pure CSS Chessboard Styles */
+.chess-board {
+  background-image: url("../img/board.png") !important;
+  background-size: 100% 100% !important;
+  background-repeat: no-repeat !important;
+  background-color: transparent !important;
+  border: none !important;
   overflow: hidden;
 }
 
-.board-b72b1 {
-  border: none !important;
+/* Ensure pieces are not selectable and transition smoothly when flipped */
+.piece-img {
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: transform 0.5s ease-in-out;
 }
