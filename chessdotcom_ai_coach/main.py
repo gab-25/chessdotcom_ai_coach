@@ -27,6 +27,9 @@ USERNAME = os.getenv("CHESSDOTCOM_USERNAME")
 
 # Load version from pyproject.toml
 def get_version():
+    """
+    Load the version from pyproject.toml.
+    """
     try:
         pyproject_path = os.path.join(os.path.dirname(BASE_DIR), "pyproject.toml")
         with open(pyproject_path, "rb") as f:
@@ -63,7 +66,7 @@ async def detail_board_page(request: Request, id: str):
         if not game_detail:
             return templates.TemplateResponse(
                 "detail_board_page.html",
-                {"request": request, "username": USERNAME, "error": "Game not found or no longer active."},
+                {"request": request, "username": USERNAME, "id": id, "error": "Game not found or no longer active."},
             )
 
         # Process PGN for player names
@@ -80,6 +83,7 @@ async def detail_board_page(request: Request, id: str):
                 "request": request,
                 "username": USERNAME,
                 "version": VERSION,
+                "id": id,
                 "game": game_detail,
                 "white_name": white_name,
                 "black_name": black_name,

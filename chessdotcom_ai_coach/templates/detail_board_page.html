@@ -14,7 +14,7 @@
           Game Analysis
         </h2>
         <p class="text-[10px] opacity-50 font-mono tracking-widest uppercase">
-          ID: {{ game.game_id if game else id }}
+          ID: {{ id }}
         </p>
       </div>
     </div>
@@ -46,7 +46,9 @@
         <div class="bg-base-300 p-2 flex justify-between items-center px-6">
           <div class="flex items-center gap-3">
             <div class="avatar placeholder">
-              <div class="bg-neutral text-neutral-content rounded-full w-6">
+              <div
+                class="bg-neutral text-neutral-content rounded-full w-6 flex items-center justify-center"
+              >
                 <span class="text-[10px]">B</span>
               </div>
             </div>
@@ -67,7 +69,7 @@
           <div class="flex items-center gap-3">
             <div class="avatar placeholder">
               <div
-                class="bg-base-100 text-base-content rounded-full w-6 border border-base-content/10"
+                class="bg-base-100 text-base-content rounded-full w-6 border border-base-content/10 flex items-center justify-center"
               >
                 <span class="text-[10px]">W</span>
               </div>
@@ -140,8 +142,8 @@
               <div
                 class="chat-bubble chat-bubble-success text-sm leading-relaxed"
               >
-                Ciao <strong>{{ username }}</strong>! Sto analizzando la
-                posizione attuale. Sembra una partita interessante.
+                Hi <strong>{{ username }}</strong>! I'm analyzing the current
+                position. It looks like an interesting game.
               </div>
             </div>
 
@@ -150,7 +152,7 @@
             >
               <span class="loading loading-ring loading-lg text-success"></span>
               <p class="text-xs font-medium italic">
-                Il Coach sta valutando le migliori continuazioni...
+                The Coach is evaluating the best continuations...
               </p>
             </div>
           </div>
@@ -161,7 +163,7 @@
               disabled
             >
               <i class="fa-solid fa-wand-magic-sparkles"></i>
-              Richiedi Suggerimento
+              Request Suggestion
             </button>
           </div>
         </div>
