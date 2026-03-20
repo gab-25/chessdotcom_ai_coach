@@ -1,13 +1,18 @@
 import os
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request, HTTPException, status
 from dotenv import load_dotenv
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from chessdotcom_ai_coach.client import Client
 
 load_dotenv()
+
+
+class AuthRedirectException(Exception):
+    pass
+
 
 # Database Configuration
 sqlite_file_name = os.getenv("DATABASE_NAME", "database.db")
@@ -43,6 +48,16 @@ def get_session():
 
 def get_client(username: str):
     return Client(username=username)
+
+
+def auth_required(request: Request):
+    """
+    Checks if the user is authenticated (not a Guest).
+    Raises AuthRedirectException if not.
+    """
+    if request.app.state.username == "Guest":
+        raise AuthRedirectException()
+    return request.app.state.username
 
 
 SessionDep = Annotated[Session, Depends(get_session)]

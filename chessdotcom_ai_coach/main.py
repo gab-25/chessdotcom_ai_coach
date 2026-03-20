@@ -2,13 +2,15 @@ import os
 import tomllib
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
+from starlette.responses import RedirectResponse
+from starlette import status
 from dotenv import load_dotenv
 
-from chessdotcom_ai_coach.routers import pages
-from chessdotcom_ai_coach.dependencies import create_db_and_tables, BASE_DIR, get_client, get_session
+from chessdotcom_ai_coach.routers import pages, auth
+from chessdotcom_ai_coach.dependencies import create_db_and_tables, AuthRedirectException, auth_required
 
 load_dotenv()
 
@@ -22,6 +24,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(AuthRedirectException)
+async def auth_redirect_exception_handler(request, exc):
+    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# Initialize application state
+app.state.username = "Guest"
 
 # Template Configuration
 app.state.templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -38,4 +49,5 @@ except FileNotFoundError:
     app.state.version = "0.1.0"
 
 # Include Routers
-app.include_router(pages.router, dependencies=[get_session, get_client])
+app.include_router(auth.router)
+app.include_router(pages.router, dependencies=[Depends(auth_required)])

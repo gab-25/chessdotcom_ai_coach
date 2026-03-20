@@ -60,10 +60,10 @@ class Client:
 
             processed_games.append(game)
 
-            return processed_games
+        return processed_games
 
-    def game_detail(self) -> Dict:
-        response = self._chessdotcomclient.client.get_player_current_games(self.username)
+    def game_detail(self, id: str) -> Dict:
+        response = self._chessdotcomclient.get_player_current_games(self.username)
         games_data = response.json
         games = games_data.get("games", []) if isinstance(games_data, dict) else []
 
