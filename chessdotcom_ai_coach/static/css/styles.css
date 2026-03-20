@@ -2,19 +2,6 @@ body {
   font-family: "Inter", sans-serif;
 }
 
-/* Custom styling for HTMX indicator */
-.htmx-indicator {
-  display: none;
-}
-
-.htmx-request .htmx-indicator {
-  display: inline-block;
-}
-
-.htmx-request.htmx-indicator {
-  display: inline-block;
-}
-
 /* Animations */
 .animate-pulse-slow {
   animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;

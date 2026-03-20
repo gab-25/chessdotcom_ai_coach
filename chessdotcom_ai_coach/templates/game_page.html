@@ -1,5 +1,5 @@
 {% extends "index.html" %} {% block content %}
-<div class="space-y-6">
+<div class="space-y-6" id="game-detail-container">
   <!-- Top Navigation & Title -->
   <div
     class="flex items-center justify-between bg-base-100 p-4 rounded-box shadow-md border border-base-200"
@@ -19,21 +19,34 @@
       </div>
     </div>
 
-    {% if error %}
-    <div class="badge badge-error gap-2 px-4 py-3">
-      <i class="fa-solid fa-circle-exclamation"></i>
-      {{ error }}
-    </div>
-    {% else %}
-    <div class="flex gap-2">
-      <div class="badge badge-outline badge-sm">
-        {{ game.time_class | capitalize }}
+    <div class="flex items-center gap-4">
+      <button
+        class="btn btn-ghost btn-sm gap-2 group"
+        hx-get="/detail-board/{{ id }}"
+        hx-target="#game-detail-container"
+        hx-select="#game-detail-container"
+        hx-swap="outerHTML"
+      >
+        <i class="fa-solid fa-rotate group-[.htmx-request]:animate-spin"></i>
+        <span class="hidden sm:inline">Refresh Data</span>
+      </button>
+
+      {% if error %}
+      <div class="badge badge-error gap-2 px-4 py-3">
+        <i class="fa-solid fa-circle-exclamation"></i>
+        {{ error }}
       </div>
-      <div class="badge badge-success badge-sm font-bold uppercase">
-        {{ game.turn }}'s TURN
+      {% else %}
+      <div class="flex gap-2">
+        <div class="badge badge-outline badge-sm">
+          {{ game.time_class | capitalize }}
+        </div>
+        <div class="badge badge-success badge-sm font-bold uppercase">
+          {{ game.turn }}'s TURN
+        </div>
       </div>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 
   {% if not error %}
@@ -180,8 +193,8 @@
       </div>
     </div>
   </div>
-
-  <script src="/static/js/board.js"></script>
   {% endif %}
 </div>
+
+<script src="/static/js/board.js"></script>
 {% endblock %}
