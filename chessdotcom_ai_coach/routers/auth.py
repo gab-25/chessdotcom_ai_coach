@@ -48,16 +48,10 @@ async def login(
             },
         )
 
-    # In a production app, we would use sessions or JWT.
-    # For now, we set the username in the app state as requested by the existing architecture.
-    request.app.state.username = user.username
-    # If the user has a chessdotcom_username, we should use that for the client
-    chess_user = user.chessdotcom_username or user.username
-
-    # Re-initialize the client with the correct username
-    from chessdotcom_ai_coach.client import Client
-
-    request.app.state.client = Client(username=chess_user)
+    # Use session to store the username for the current user
+    request.session["username"] = user.username
+    # Store the chess.com username in the session for the client
+    request.session["chess_username"] = user.chessdotcom_username or user.username
 
     return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -67,5 +61,5 @@ async def logout(request: Request):
     """
     Clears the current session.
     """
-    request.app.state.username = "Guest"
+    request.session.clear()
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)

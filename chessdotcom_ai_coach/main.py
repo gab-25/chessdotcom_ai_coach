@@ -6,6 +6,7 @@ from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.responses import RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 from starlette import status
 from dotenv import load_dotenv
 
@@ -25,14 +26,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Session Configuration
+# In a real app, use a secure secret key from environment variables
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "a-very-secret-key"))
+
 
 @app.exception_handler(AuthRedirectException)
 async def auth_redirect_exception_handler(request, exc):
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-
-# Initialize application state
-app.state.username = "Guest"
 
 # Template Configuration
 app.state.templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))

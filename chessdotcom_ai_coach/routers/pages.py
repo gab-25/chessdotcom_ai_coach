@@ -1,24 +1,29 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
+from chessdotcom_ai_coach.dependencies import ClientDep, auth_required
 
 router = APIRouter()
 
 
 @router.get("/", response_class=HTMLResponse)
-async def home_page(request: Request):
+async def home_page(
+    request: Request,
+    username: str = Depends(auth_required),
+    client: ClientDep = Depends(),
+):
     """
     Serves the home page.
     """
     try:
         templates = request.app.state.templates
-        processed_games = request.app.state.client.my_current_games()
+        processed_games = client.my_current_games() if client else []
 
         return templates.TemplateResponse(
             "home_page.html",
             {
                 "request": request,
-                "username": request.app.state.username,
-                "version": request.app.state.version,
+                "username": username,
+                "version": getattr(request.app.state, "version", "0.1.0"),
                 "games": processed_games,
             },
         )
@@ -27,20 +32,29 @@ async def home_page(request: Request):
 
 
 @router.get("/game/{id}", response_class=HTMLResponse)
-async def game_page(request: Request, id: str):
+async def game_page(
+    request: Request,
+    id: str,
+    username: str = Depends(auth_required),
+    client: ClientDep = Depends(),
+):
     """
     Serves the game page by id.
     """
     try:
         templates = request.app.state.templates
-        game_data = request.app.state.client.game_detail(id)
+
+        if not client:
+            return HTMLResponse(content="Client not initialized", status_code=500)
+
+        game_data = client.game_detail(id)
 
         if not game_data:
             return templates.TemplateResponse(
                 "game_page.html",
                 {
                     "request": request,
-                    "username": request.app.state.username,
+                    "username": username,
                     "id": id,
                     "error": "Game not found or no longer active.",
                 },
@@ -50,8 +64,8 @@ async def game_page(request: Request, id: str):
             "game_page.html",
             {
                 "request": request,
-                "username": request.app.state.username,
-                "version": request.app.state.version,
+                "username": username,
+                "version": getattr(request.app.state, "version", "0.1.0"),
                 "id": id,
                 "game": game_data["game"],
                 "white_name": game_data["white_name"],

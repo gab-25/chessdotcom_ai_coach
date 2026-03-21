@@ -46,8 +46,11 @@ def get_session():
         yield session
 
 
-def get_client(username: str):
-    return Client(username=username)
+def get_client(request: Request):
+    chess_username = request.session.get("chess_username")
+    if not chess_username:
+        return None
+    return Client(username=chess_username)
 
 
 def auth_required(request: Request):
@@ -55,10 +58,11 @@ def auth_required(request: Request):
     Checks if the user is authenticated (not a Guest).
     Raises AuthRedirectException if not.
     """
-    if request.app.state.username == "Guest":
+    username = request.session.get("username")
+    if not username:
         raise AuthRedirectException()
-    return request.app.state.username
+    return username
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
-ClientDep = Annotated[Client, Depends(get_client)]
+ClientDep = Annotated[Client | None, Depends(get_client)]
