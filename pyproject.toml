@@ -13,7 +13,7 @@ dependencies = [
     "python-dotenv (>=1.2.2,<2.0.0)",
     "google-genai (>=1.68.0,<2.0.0)",
     "sqlmodel (>=0.0.37,<0.0.38)",
-    "itsdangerous (>=2.2.0,<3.0.0)"
+    "alembic (>=1.18.4,<2.0.0)",
 ]
 
 
@@ -23,3 +23,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.basedpyright]
 typeCheckingMode = "off"
+
+[tool.fastapi]
+entrypoint = "chessdotcom_ai_coach.main:app"
