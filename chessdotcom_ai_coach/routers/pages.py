@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
 from chessdotcom_ai_coach.dependencies import ClientDep, auth_required
+from chessdotcom_ai_coach.user import User
 
 router = APIRouter()
 
@@ -8,8 +9,8 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 async def home_page(
     request: Request,
-    username: str = Depends(auth_required),
-    client: ClientDep = Depends(),
+    user: User = Depends(auth_required),
+    client: ClientDep = None,
 ):
     """
     Serves the home page.
@@ -22,7 +23,7 @@ async def home_page(
             "home_page.html",
             {
                 "request": request,
-                "username": username,
+                "username": user.username,
                 "version": getattr(request.app.state, "version", "0.1.0"),
                 "games": processed_games,
             },
@@ -35,8 +36,8 @@ async def home_page(
 async def game_page(
     request: Request,
     id: str,
-    username: str = Depends(auth_required),
-    client: ClientDep = Depends(),
+    user: User = Depends(auth_required),
+    client: ClientDep = None,
 ):
     """
     Serves the game page by id.
@@ -54,7 +55,7 @@ async def game_page(
                 "game_page.html",
                 {
                     "request": request,
-                    "username": username,
+                    "username": user.username,
                     "id": id,
                     "error": "Game not found or no longer active.",
                 },
@@ -64,7 +65,7 @@ async def game_page(
             "game_page.html",
             {
                 "request": request,
-                "username": username,
+                "username": user.username,
                 "version": getattr(request.app.state, "version", "0.1.0"),
                 "id": id,
                 "game": game_data["game"],

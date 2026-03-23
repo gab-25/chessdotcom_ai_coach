@@ -1,6 +1,5 @@
 import os
 import tomllib
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
@@ -11,20 +10,14 @@ from starlette import status
 from dotenv import load_dotenv
 
 from chessdotcom_ai_coach.routers import pages, auth
-from chessdotcom_ai_coach.dependencies import create_db_and_tables, AuthRedirectException, auth_required
+from chessdotcom_ai_coach.dependencies import AuthRedirectException, auth_required
 
 load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    create_db_and_tables()
-    yield
-
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 # Session Configuration
 # In a real app, use a secure secret key from environment variables
