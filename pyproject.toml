@@ -25,8 +25,5 @@ dependencies = [
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.basedpyright]
-typeCheckingMode = "off"
-
 [tool.fastapi]
 entrypoint = "chessdotcom_ai_coach.main:app"

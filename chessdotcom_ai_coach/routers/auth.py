@@ -51,7 +51,7 @@ async def login_page(request: Request):
         {
             "request": request,
             "username": "Guest",
-            "version": getattr(request.app.state, "version", "0.1.0"),
+            "version": request.app.state.version,
         },
     )
 
