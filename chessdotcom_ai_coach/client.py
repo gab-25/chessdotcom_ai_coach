@@ -5,6 +5,10 @@ from chessdotcom import ChessDotComClient
 
 
 class Client:
+    """
+    Client for interacting with the Chess.com API.
+    """
+
     def __init__(self, username: str) -> None:
         self._chessdotcomclient = ChessDotComClient(
             user_agent="Chessdotcom-AI-Coach (Contact: gabrielesorci.25@gmail.com)"
@@ -12,7 +16,10 @@ class Client:
         self.username = username
 
     def my_current_games(self) -> List:
-        response = self._chessdotcomclient.get_player_current_games(self.username)
+        """
+        Returns the current games for the authenticated user.
+        """
+        response = self._chessdotcomclient.get_player_current_games(self.username)  # pyright: ignore[reportAttributeAccessIssue]
         # The chessdotcom library returns an object with a .json attribute (property or dictionary)
         games_data = response.json
         raw_games = games_data.get("games", []) if isinstance(games_data, dict) else []
@@ -62,8 +69,11 @@ class Client:
 
         return processed_games
 
-    def game_detail(self, id: str) -> Dict:
-        response = self._chessdotcomclient.get_player_current_games(self.username)
+    def game_detail(self, id: str) -> Dict | None:
+        """
+        Returns the game detail for a given game ID.
+        """
+        response = self._chessdotcomclient.get_player_current_games(self.username)  # pyright: ignore[reportAttributeAccessIssue]
         games_data = response.json
         games = games_data.get("games", []) if isinstance(games_data, dict) else []
 
