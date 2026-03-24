@@ -31,42 +31,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Games Section -->
-  <div class="space-y-4">
-    <div class="flex items-center justify-between px-2">
-      <h3 class="text-2xl font-bold flex items-center gap-3">
-        <i class="fa-solid fa-clock-rotate-left text-success"></i>
-        Current Games
-      </h3>
-      <div class="flex items-center gap-2">
-        <span
-          class="loading loading-spinner loading-sm text-success htmx-indicator"
-          id="loader"
-        ></span>
-        <button
-          class="btn btn-ghost btn-sm btn-circle tooltip tooltip-left"
-          data-tip="Refresh List"
-          hx-get="/current-games"
-          hx-target="#games-container"
-          hx-indicator="#loader"
-        >
-          <i class="fa-solid fa-rotate"></i>
-        </button>
-      </div>
-    </div>
-
-    <!-- This container will be populated by HTMX -->
-    <div
-      id="games-container"
-      hx-get="/current-games"
-      hx-trigger="load"
-      class="grid grid-cols-1 md:grid-cols-2 gap-4"
-    >
-      <div class="col-span-full flex justify-center py-20">
-        <span class="loading loading-dots loading-lg text-success"></span>
-      </div>
-    </div>
-  </div>
+  {% include "components/game_list.html" %}
 </div>
 {% endblock %}

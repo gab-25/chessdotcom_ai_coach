@@ -1,6 +1,6 @@
 [project]
 name = "chessdotcom-ai-coach"
-version = "0.1.0"
+version = "0.2.0"
 description = ""
 authors = [
     {name = "gab-25",email = "gabrielesorci.25@gmail.com"}
@@ -10,7 +10,14 @@ requires-python = ">=3.13"
 dependencies = [
     "chess-com (>=3.13.0,<4.0.0)",
     "fastapi[standard] (>=0.135.1,<0.136.0)",
-    "python-dotenv (>=1.2.2,<2.0.0)"
+    "python-dotenv (>=1.2.2,<2.0.0)",
+    "sqlmodel (>=0.0.37,<0.0.38)",
+    "alembic (>=1.18.4,<2.0.0)",
+    "psycopg2-binary (>=2.9.11,<3.0.0)",
+    "bcrypt (>=5.0.0,<6.0.0)",
+    "python-jose[cryptography] (>=3.5.0,<4.0.0)",
+    "itsdangerous (>=2.2.0,<3.0.0)",
+    "ollama (>=0.6.1,<0.7.0)",
 ]
 
 
@@ -18,5 +25,5 @@ dependencies = [
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.basedpyright]
-typeCheckingMode = "off"
+[tool.fastapi]
+entrypoint = "chessdotcom_ai_coach.main:app"
