@@ -95,7 +95,7 @@ async def get_suggestion(
         suggestion = await get_best_move(fen, pgn)
 
         # Return the suggestion as a chat bubble
-        # whitespace-pre-wrap is used to preserve formatting from Stockfish analysis
+        # whitespace-pre-wrap is used to preserve formatting from LC0 analysis
         return HTMLResponse(
             content=f"""
             <div class="chat chat-start animate-in fade-in slide-in-from-bottom-2 duration-300">

@@ -3,7 +3,7 @@ import chess
 import chess.engine
 import ollama
 
-STOCKFISH_PATH = "libs/stockfish/stockfish-ubuntu-x86-64-avx2"
+LC0_PATH = "libs/lc0/lc0"
 
 # LLM Configuration (Local Llama 3 via Ollama)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
@@ -12,7 +12,7 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 
 async def get_best_move(fen: str, pgn: str | None = None) -> str:
     """
-    Uses the Stockfish engine to act as an AI Chess Coach.
+    Uses the LC0 engine to act as an AI Chess Coach.
     Returns an analysis of the position and suggests a move.
 
     Args:
@@ -24,8 +24,8 @@ async def get_best_move(fen: str, pgn: str | None = None) -> str:
     """
 
     try:
-        # Start the Stockfish engine in asynchronous mode
-        transport, engine = await chess.engine.popen_uci(STOCKFISH_PATH)
+        # Start the LC0 engine in asynchronous mode
+        transport, engine = await chess.engine.popen_uci(LC0_PATH)
 
         board = chess.Board(fen)
 
@@ -71,19 +71,19 @@ async def get_best_move(fen: str, pgn: str | None = None) -> str:
 
         # Generate LLM response using Llama 3
         prompt = f"""
-Sei un Grandmaster AI Coach di scacchi. Analizza la seguente posizione e suggerisci la mossa migliore.
+You are a Grandmaster AI Chess Coach. Analyze the following position and suggest the best move.
 
-Contesto:
+Context:
 - FEN: {fen}
-- PGN (storia): {pgn if pgn else "N/A"}
-- Valutazione Stockfish: {eval_text}
-- Miglior mossa suggerita: {best_move_san}
+- PGN (History): {pgn if pgn else "N/A"}
+- LC0 Evaluation: {eval_text}
+- Suggested Best Move: {best_move_san}
 
-Istruzioni:
-1. Commenta brevemente la valutazione della posizione.
-2. Spiega perché {best_move_san} è la mossa migliore in termini strategici o tattici.
-3. Fornisci un breve consiglio per il proseguimento della partita.
-4. Rispondi in modo professionale, incoraggiante ed educativo in lingua italiana.
+Instructions:
+1. Briefly comment on the evaluation of the position.
+2. Explain why {best_move_san} is the best move in strategic or tactical terms.
+3. Provide a short piece of advice for the continuation of the game.
+4. Respond in a professional, encouraging, and educational manner in English.
 """
 
         try:
@@ -93,7 +93,7 @@ Istruzioni:
                 messages=[
                     {
                         "role": "system",
-                        "content": "Sei un esperto allenatore di scacchi che analizza partite in tempo reale.",
+                        "content": "You are an expert chess coach analyzing games in real-time.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -108,13 +108,13 @@ Istruzioni:
 
         # Fallback response if LLM is disabled or fails
         return f"""
-Ecco l'analisi del tuo Grandmaster AI Coach (basata su Stockfish):
+Here is the analysis from your Grandmaster AI Coach (based on LC0):
 
-1. Valutazione: {eval_text}
-2. Miglior mossa: {best_move_san}
-3. Nota: Il servizio di analisi avanzata LLM non è al momento disponibile, ma Stockfish consiglia questa mossa per mantenere il vantaggio posizionale.
+1. Evaluation: {eval_text}
+2. Best Move: {best_move_san}
+3. Note: The advanced LLM analysis service is currently unavailable, but LC0 recommends this move to maintain positional advantage.
 """.strip()
 
     except Exception as e:
         # Error handling (e.g. binary not found, permission denied, UCI error)
-        return f"Errore durante l'analisi con Stockfish: {str(e)}"
+        return f"Error during LC0 analysis: {str(e)}"
