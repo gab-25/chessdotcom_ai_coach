@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, Form
 from fastapi.responses import HTMLResponse
 from chessdotcom_ai_coach.dependencies import ClientDep, auth_required
 from chessdotcom_ai_coach.user import User
+from chessdotcom_ai_coach.game_service import get_best_move
 
 router = APIRouter()
 
@@ -77,3 +78,33 @@ async def game_page(
         )
     except Exception as e:
         return HTMLResponse(content=f"Error retrieving game details: {str(e)}", status_code=500)
+
+
+@router.post("/game/{id}/suggest", response_class=HTMLResponse)
+async def get_suggestion(
+    request: Request,
+    id: str,
+    fen: str = Form(...),
+    pgn: str = Form(None),
+    user: User = Depends(auth_required),
+):
+    """
+    Returns the AI coach suggestion for the given position.
+    """
+    try:
+        suggestion = await get_best_move(fen, pgn)
+
+        # Return the suggestion as a chat bubble
+        # whitespace-pre-wrap is used to preserve formatting from Stockfish analysis
+        return HTMLResponse(
+            content=f"""
+            <div class="chat chat-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div class="chat-bubble chat-bubble-success text-sm leading-relaxed whitespace-pre-wrap">{suggestion}</div>
+            </div>
+        """
+        )
+    except Exception as e:
+        return HTMLResponse(
+            content=f'<div class="alert alert-error text-xs">{str(e)}</div>',
+            status_code=500,
+        )

@@ -60,7 +60,7 @@ async def get_current_user(
     # 1. Try to get username from JWT Token (OAuth2 flow)
     if token:
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])  # pyright: ignore[reportArgumentType]
             username = payload.get("sub")
         except JWTError:
             pass

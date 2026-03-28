@@ -21,7 +21,7 @@ app = FastAPI()
 
 # Session Configuration
 # In a real app, use a secure secret key from environment variables
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "a-very-secret-key"))
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY"))  # pyright: ignore[reportArgumentType]
 
 
 @app.exception_handler(AuthRedirectException)

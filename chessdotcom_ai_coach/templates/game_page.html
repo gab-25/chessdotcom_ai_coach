@@ -160,7 +160,7 @@
             </div>
           </div>
 
-          <div class="p-6 space-y-4">
+          <div class="p-6 space-y-4" id="suggestions-container">
             <div class="chat chat-start">
               <div
                 class="chat-bubble chat-bubble-success text-sm leading-relaxed"
@@ -169,25 +169,40 @@
                 position. It looks like an interesting game.
               </div>
             </div>
-
-            <div
-              class="flex flex-col items-center justify-center py-12 text-center space-y-4 opacity-40"
-            >
-              <span class="loading loading-ring loading-lg text-success"></span>
-              <p class="text-xs font-medium italic">
-                The Coach is evaluating the best continuations...
-              </p>
-            </div>
           </div>
 
-          <div class="card-actions p-4 mt-auto border-t border-base-200">
-            <button
-              class="btn btn-success btn-sm btn-block no-animation"
-              disabled
+          <div
+            class="card-actions p-4 mt-auto border-t border-base-200 flex flex-col gap-2"
+          >
+            <form
+              hx-post="/game/{{ id }}/suggest"
+              hx-target="#suggestions-container"
+              hx-swap="beforeend"
+              hx-indicator="#suggestion-loading"
+              hx-disabled-elt="find button"
+              class="w-full"
             >
-              <i class="fa-solid fa-wand-magic-sparkles"></i>
-              Request Suggestion
-            </button>
+              <input type="hidden" name="fen" value="{{ fen }}" />
+              <input type="hidden" name="pgn" value="{{ pgn }}" />
+              <button
+                type="submit"
+                class="btn btn-success btn-sm btn-block no-animation"
+              >
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                Request Suggestion
+              </button>
+            </form>
+
+            <!-- Loading Indicator -->
+            <div
+              id="suggestion-loading"
+              class="htmx-indicator flex items-center justify-center gap-2 opacity-60 w-full py-2"
+            >
+              <span class="loading loading-ring loading-sm text-success"></span>
+              <p class="text-[10px] font-medium italic">
+                The Coach is thinking...
+              </p>
+            </div>
           </div>
         </div>
       </div>
