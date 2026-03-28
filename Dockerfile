@@ -11,7 +11,6 @@ COPY pyproject.toml .
 
 RUN pip install --no-cache-dir .
 
-COPY ./libs ./libs
 COPY ./alembic ./alembic
 COPY ./alembic.ini .
 COPY ./entrypoint.sh .

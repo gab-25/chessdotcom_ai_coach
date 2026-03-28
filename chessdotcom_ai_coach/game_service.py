@@ -1,9 +1,12 @@
 import os
+import asyncio
 import chess
 import chess.engine
 import ollama
 
-LC0_PATH = "libs/lc0/lc0"
+# LC0 Engine Configuration (Remote service)
+CHESS_ENGINE_HOST = os.getenv("CHESS_ENGINE_HOST")
+CHESS_ENGINE_PORT = int(os.getenv("CHESS_ENGINE_PORT"))  # pyright: ignore[reportArgumentType]
 
 # LLM Configuration (Local Llama 3 via Ollama)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
@@ -24,8 +27,9 @@ async def get_best_move(fen: str, pgn: str | None = None) -> str:
     """
 
     try:
-        # Start the LC0 engine in asynchronous mode
-        transport, engine = await chess.engine.popen_uci(LC0_PATH)
+        # Connect to the remote LC0 engine service via network
+        loop = asyncio.get_running_loop()
+        transport, engine = await loop.create_connection(chess.engine.UciProtocol, CHESS_ENGINE_HOST, CHESS_ENGINE_PORT)  # pyright: ignore[reportArgumentType]
 
         board = chess.Board(fen)
 
