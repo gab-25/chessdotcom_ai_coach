@@ -59,7 +59,7 @@ def game_detail(request, id):
 
 
 @login_required
-def coach_suggestion(request, id):
+async def coach_suggestion(request, id):
     """HTMX endpoint: returns the AI coach's analysis fragment for a game."""
     game_data = _client_for(request.user).game_detail(id)
     if not game_data:
@@ -70,7 +70,7 @@ def coach_suggestion(request, id):
         )
 
     game = game_data["game"]
-    analysis = get_best_move(game.get("fen", ""), game.get("pgn"))
+    analysis = await get_best_move(game.get("fen", ""), game.get("pgn"))
     return render(request, "partials/coach_suggestion.html", {"analysis": analysis})
 
 
