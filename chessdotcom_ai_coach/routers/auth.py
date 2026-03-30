@@ -1,85 +1,48 @@
-from datetime import timedelta
-from typing import Annotated
-
-from fastapi import APIRouter, Request, Form, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, Request, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlmodel import select
 
 from chessdotcom_ai_coach.dependencies import SessionDep
 from chessdotcom_ai_coach.user import User
-from chessdotcom_ai_coach.auth_service import (
-    verify_password,
-    create_access_token,
-    ACCESS_TOKEN_EXPIRE_MINUTES,
-)
+from chessdotcom_ai_coach.auth_service import oauth
 
 router = APIRouter()
 
 
-@router.post("/token")
-async def login_for_access_token(
-    session: SessionDep,
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-):
+@router.get("/login")
+async def login(request: Request):
     """
-    OAuth2 compatible token login, retrieve an access token for future requests.
+    Redirects to Zitadel for authentication.
     """
-    statement = select(User).where(User.username == form_data.username)
-    user = session.exec(statement).first()
+    redirect_uri = request.url_for("auth_callback")
+    return await oauth.zitadel.authorize_redirect(request, str(redirect_uri))
 
-    if not user or not verify_password(form_data.password, user.hashed_password):
+
+@router.get("/auth/callback", name="auth_callback")
+async def auth_callback(request: Request, session: SessionDep):
+    """
+    Handles the callback from Zitadel and initializes the user session.
+    """
+    token = await oauth.zitadel.authorize_access_token(request)
+    user_info = token.get("userinfo")
+    if not user_info:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Failed to retrieve user information from Zitadel"
         )
 
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Zitadel typically provides 'preferred_username' or 'email'
+    username = user_info.get("preferred_username") or user_info.get("email") or user_info.get("sub")
 
-
-@router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    """
-    Serves the login page.
-    """
-    templates = request.app.state.templates
-    return templates.TemplateResponse(
-        "login.html",
-        {
-            "request": request,
-            "username": "Guest",
-            "version": request.app.state.version,
-        },
-    )
-
-
-@router.post("/login")
-async def login(
-    request: Request,
-    session: SessionDep,
-    username: str = Form(...),
-    password: str = Form(...),
-):
-    """
-    Handles login logic by checking credentials against the database.
-    """
+    # Check if user exists in local DB to maintain chessdotcom settings
     statement = select(User).where(User.username == username)
     user = session.exec(statement).first()
 
-    if not user or not verify_password(password, user.hashed_password):
-        templates = request.app.state.templates
-        return templates.TemplateResponse(
-            "login.html",
-            {
-                "request": request,
-                "username": "Guest",
-                "version": getattr(request.app.state, "version", "0.1.0"),
-                "error": "Invalid username or password",
-            },
-        )
+    if not user:
+        # Create a user for Zitadel authenticated users
+        user = User(username=username)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
 
     # Use session to store the username for the current user (Web flow)
     request.session["username"] = user.username

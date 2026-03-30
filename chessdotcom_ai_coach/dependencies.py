@@ -1,14 +1,11 @@
 import os
 from typing import Annotated
 
-from fastapi import Depends, Request, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+from fastapi import Depends, Request
 from dotenv import load_dotenv
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, create_engine, select
 
 from chessdotcom_ai_coach.client import Client
-from chessdotcom_ai_coach.auth_service import SECRET_KEY, ALGORITHM, get_password_hash
 from chessdotcom_ai_coach.user import User
 
 load_dotenv()
@@ -33,9 +30,6 @@ DATABASE_URL = os.getenv(
 # Create the engine (PostgreSQL doesn't need check_same_thread=False)
 engine = create_engine(DATABASE_URL)
 
-# OAuth2 scheme for token-based authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
-
 
 def get_session():
     """
@@ -48,26 +42,12 @@ def get_session():
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-async def get_current_user(
-    request: Request, session: SessionDep, token: Annotated[str | None, Depends(oauth2_scheme)] = None
-) -> User | None:
+async def get_current_user(request: Request, session: SessionDep) -> User | None:
     """
-    Retrieves the current user from either a JWT token (OAuth2) or a Session (Web).
+    Retrieves the current user from the Session (Web interface flow).
     Returns None if no user is found or authenticated.
     """
-    username = None
-
-    # 1. Try to get username from JWT Token (OAuth2 flow)
-    if token:
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])  # pyright: ignore[reportArgumentType]
-            username = payload.get("sub")
-        except JWTError:
-            pass
-
-    # 2. Try to get username from Session (Web interface flow)
-    if not username:
-        username = request.session.get("username")
+    username = request.session.get("username")
 
     if not username:
         return None
