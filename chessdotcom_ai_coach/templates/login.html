@@ -1,58 +1,26 @@
 {% extends "index.html" %} {% block content %}
 <div class="flex justify-center items-center min-h-[60vh]">
   <div class="card w-full max-w-md bg-base-100 shadow-xl">
-    <div class="card-body">
-      <h2 class="card-title text-2xl font-bold text-center justify-center mb-6">
-        <i class="fa-solid fa-right-to-bracket text-success mr-2"></i>
-        Login
-      </h2>
-
-      {% if error %}
-      <div class="alert alert-error mb-4">
-        <i class="fa-solid fa-circle-exclamation"></i>
-        <span>{{ error }}</span>
+    <div class="card-body items-center text-center">
+      <div class="mb-4">
+        <img
+          src="/static/img/logo.png"
+          alt="Logo"
+          class="h-20 w-20 object-contain rounded-xl mx-auto"
+        />
       </div>
-      {% endif %}
 
-      <form action="/login" method="POST" class="space-y-4">
-        <div class="form-control">
-          <label class="label">
-            <span class="label-text">Username</span>
-          </label>
-          <div class="input input-bordered flex w-full items-center gap-2">
-            <i class="fa-solid fa-user text-base-content/50"></i>
-            <input
-              type="text"
-              name="username"
-              class="grow"
-              placeholder="Username"
-              required
-            />
-          </div>
-        </div>
+      <h2 class="card-title text-2xl font-bold mb-2">Chess Coach AI</h2>
+      <p class="text-base-content/60 text-sm mb-6">
+        Accedi con il tuo account per analizzare le tue partite
+      </p>
 
-        <div class="form-control">
-          <label class="label">
-            <span class="label-text">Password</span>
-          </label>
-          <div class="input input-bordered flex w-full items-center gap-2">
-            <i class="fa-solid fa-lock text-base-content/50"></i>
-            <input
-              type="password"
-              name="password"
-              class="grow"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-        </div>
-
-        <div class="form-control mt-6">
-          <button type="submit" class="btn btn-success btn-block mb-8">
-            Login
-          </button>
-        </div>
-      </form>
+      <div class="w-full">
+        <a href="/auth/zitadel" class="btn btn-success btn-block btn-lg gap-3">
+          <i class="fa-solid fa-right-to-bracket"></i>
+          Accedi con Zitadel
+        </a>
+      </div>
     </div>
   </div>
 </div>
