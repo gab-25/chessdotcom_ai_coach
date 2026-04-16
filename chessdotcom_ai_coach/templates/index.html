@@ -52,18 +52,24 @@
             </span>
           </a>
         </div>
+        {% if username %}
         <div class="flex-none gap-4 items-center">
           <div class="badge badge-outline badge-lg gap-2 py-4 px-4">
             <i class="fa-solid fa-user text-xs"></i>
             <span class="font-medium text-sm">{{ username }}</span>
           </div>
           {% if username != "Guest" %}
+          <a href="/profile" class="btn btn-ghost btn-sm gap-2">
+            <i class="fa-solid fa-user-gear"></i>
+            Profilo
+          </a>
           <a href="/logout" class="btn btn-ghost btn-sm text-error gap-2">
             <i class="fa-solid fa-right-from-bracket"></i>
             Logout
           </a>
           {% endif %}
         </div>
+        {% endif %}
       </header>
 
       <main>{% block content %}{% endblock %}</main>

@@ -6,7 +6,7 @@ import ollama
 
 # LC0 Engine Configuration (Remote service)
 CHESS_ENGINE_HOST = os.getenv("CHESS_ENGINE_HOST")
-CHESS_ENGINE_PORT = int(os.getenv("CHESS_ENGINE_PORT"))  # pyright: ignore[reportArgumentType]
+CHESS_ENGINE_PORT = os.getenv("CHESS_ENGINE_PORT")
 
 # LLM Configuration (Local Llama 3 via Ollama)
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")

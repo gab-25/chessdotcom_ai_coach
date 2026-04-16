@@ -1,61 +1,54 @@
-from fastapi import APIRouter, Request, HTTPException, status
-from fastapi.responses import RedirectResponse
-from sqlmodel import select
+import httpx
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-from chessdotcom_ai_coach.dependencies import SessionDep
-from chessdotcom_ai_coach.user import User
-from chessdotcom_ai_coach.auth_service import oauth
+from chessdotcom_ai_coach.auth_service import ZITADEL_URL, get_user_metadata, oauth
 
 router = APIRouter()
 
 
-@router.get("/login")
-async def login(request: Request):
-    """
-    Redirects to Zitadel for authentication.
-    """
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    templates = request.app.state.templates
+    return templates.TemplateResponse("login.html", {"request": request})
+
+
+@router.get("/auth/zitadel")
+async def login_zitadel(request: Request):
     redirect_uri = request.url_for("auth_callback")
-    return await oauth.zitadel.authorize_redirect(request, str(redirect_uri))
+    return await oauth.zitadel.authorize_redirect(request, redirect_uri)
 
 
 @router.get("/auth/callback", name="auth_callback")
-async def auth_callback(request: Request, session: SessionDep):
-    """
-    Handles the callback from Zitadel and initializes the user session.
-    """
+async def auth_callback(request: Request):
     token = await oauth.zitadel.authorize_access_token(request)
-    user_info = token.get("userinfo")
-    if not user_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Failed to retrieve user information from Zitadel"
-        )
+    access_token = token.get("access_token")
 
-    # Zitadel typically provides 'preferred_username' or 'email'
-    username = user_info.get("preferred_username") or user_info.get("email") or user_info.get("sub")
+    user_info = dict(await oauth.zitadel.userinfo(token=token))
+    sub = user_info.get("sub")
+    display_name = (
+        user_info.get("name")
+        or user_info.get("preferred_username")
+        or user_info.get("email")
+        or sub
+    )
 
-    # Check if user exists in local DB to maintain chessdotcom settings
-    statement = select(User).where(User.username == username)
-    user = session.exec(statement).first()
+    async with httpx.AsyncClient() as client:
+        chess_username = await get_user_metadata(client, access_token, "chessdotcom_username")
 
-    if not user:
-        # Create a user for Zitadel authenticated users
-        user = User(username=username)
-        session.add(user)
-        session.commit()
-        session.refresh(user)
+    request.session["sub"] = sub
+    request.session["display_name"] = display_name
+    request.session["access_token"] = access_token
+    request.session["chess_username"] = chess_username or ""
 
-    # Use session to store the username for the current user (Web flow)
-    request.session["username"] = user.username
-    # Store the chess.com username in the session for the client
-    request.session["chess_username"] = user.chessdotcom_username or user.username
-
-    return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @router.get("/logout")
 async def logout(request: Request):
-    """
-    Clears the current session.
-    """
     request.session.clear()
-    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    post_logout_uri = str(request.url_for("login_page"))
+    return RedirectResponse(
+        url=f"{ZITADEL_URL}/oidc/v1/end_session?post_logout_redirect_uri={post_logout_uri}",
+        status_code=303,
+    )
