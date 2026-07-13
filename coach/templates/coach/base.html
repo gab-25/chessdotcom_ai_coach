@@ -1,0 +1,55 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}Chess Coach AI{% endblock %}</title>
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <!-- Alpine.js (chessboard rendering) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <!-- Fonts & icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+    />
+
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
+  </head>
+  <body>
+    <div class="site">
+      <header class="navbar">
+        <a href="/" class="navbar__brand">
+          <img src="{% static 'img/logo.png' %}" alt="Chess Coach AI logo" class="navbar__logo" />
+          <span class="navbar__title">Chess Coach <em>AI</em></span>
+        </a>
+        <div class="navbar__actions">
+          {% if user.is_authenticated %}
+          <span class="user-chip">
+            <i class="fa-solid fa-user"></i>{{ user.get_username }}
+          </span>
+          <a href="{% url 'logout' %}" class="btn btn--danger btn--sm">
+            <i class="fa-solid fa-right-from-bracket"></i> Logout
+          </a>
+          {% endif %}
+        </div>
+      </header>
+
+      <main>{% block content %}{% endblock %}</main>
+
+      <footer class="footer">
+        <div class="checker-strip" style="max-width: 160px; margin: 0 auto 16px"></div>
+        &copy; 2026 Chess Coach AI · Analysis powered by Ollama · v{{ version }}
+      </footer>
+    </div>
+  </body>
+</html>

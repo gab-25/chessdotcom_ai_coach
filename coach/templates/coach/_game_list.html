@@ -1,0 +1,59 @@
+<div class="game-grid">
+  {% if not games %}
+  <div class="empty">
+    <i class="fa-solid fa-circle-info"></i>
+    <div>
+      <h3>No active games</h3>
+      <p>You don't have any ongoing games on Chess.com right now.</p>
+    </div>
+  </div>
+  {% else %}
+  {% for game in games %}
+  <article class="game-card{% if game.is_my_turn %} game-card--live{% endif %}">
+    <div class="game-card__head">
+      <div class="game-card__tags">
+        <span class="badge">{{ game.time_class }}</span>
+        <span class="badge badge--mono">{{ game.time_control }}</span>
+      </div>
+      {% if game.is_my_turn %}
+      <span class="badge badge--live"><i class="fa-solid fa-play"></i> Your turn</span>
+      {% endif %}
+    </div>
+
+    <div class="player">
+      <div class="player__id">
+        <span class="player__avatar player__avatar--w">W</span>
+        <div>
+          <div class="player__name">{{ game.white.username }}</div>
+          <div class="player__rating">{{ game.white.rating }}</div>
+        </div>
+      </div>
+      {% if game.turn == 'white' %}
+      <span class="badge badge--gold">Moving</span>
+      {% endif %}
+    </div>
+
+    <div class="vs">vs</div>
+
+    <div class="player">
+      <div class="player__id">
+        <span class="player__avatar player__avatar--b">B</span>
+        <div>
+          <div class="player__name">{{ game.black.username }}</div>
+          <div class="player__rating">{{ game.black.rating }}</div>
+        </div>
+      </div>
+      {% if game.turn == 'black' %}
+      <span class="badge badge--gold">Moving</span>
+      {% endif %}
+    </div>
+
+    <div class="game-card__foot">
+      <a href="{% url 'game_detail' game.game_id %}" class="btn btn--accent btn--sm btn--block">
+        <i class="fa-solid fa-chess-board"></i> View board
+      </a>
+    </div>
+  </article>
+  {% endfor %}
+  {% endif %}
+</div>

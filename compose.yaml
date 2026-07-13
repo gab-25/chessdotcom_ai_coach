@@ -3,8 +3,15 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      # Override host names to match the compose network.
+      - POSTGRES_HOST=postgres
+      - OLLAMA_HOST=http://ollama:11434
     ports:
       - "8000:8000"
+    depends_on:
+      - postgres
+      - ollama
 
   postgres:
     image: postgres:18-alpine

@@ -1,0 +1,55 @@
+{% extends "coach/base.html" %}
+{% block title %}Sign in · Chess Coach AI{% endblock %}
+{% block content %}
+<div class="auth">
+  <div class="auth-card">
+    <h2 class="auth-card__title">Sign in</h2>
+    <p class="auth-card__sub">Enter the room and review your games.</p>
+
+    {% if form.errors %}
+    <div class="alert alert--danger" style="margin-bottom: 20px">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <span>Invalid username or password.</span>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'login' %}">
+      {% csrf_token %}
+      <div class="field">
+        <label class="field__label" for="id_username">Username</label>
+        <div class="input">
+          <i class="fa-solid fa-user"></i>
+          <input
+            type="text"
+            name="username"
+            id="id_username"
+            placeholder="Username"
+            autocomplete="username"
+            required
+            autofocus
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field__label" for="id_password">Password</label>
+        <div class="input">
+          <i class="fa-solid fa-lock"></i>
+          <input
+            type="password"
+            name="password"
+            id="id_password"
+            placeholder="••••••••"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn--accent btn--block" style="margin-top: 24px">
+        <i class="fa-solid fa-right-to-bracket"></i> Sign in
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
