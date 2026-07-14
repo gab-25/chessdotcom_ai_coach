@@ -7,11 +7,14 @@ grandmaster coach.
 ## Stack
 
 - **Django 5** — ORM, templates, admin, session auth (custom `User` model)
-- **PostgreSQL** — via `psycopg2`
+- **PostgreSQL** — via `psycopg2-binary`
 - **Ollama** — the AI coach (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
-- **HTMX + Alpine.js** — board rendering and on-demand coach analysis
-- Custom hand-written CSS theme (no Tailwind) in `static/css/styles.css`
+- **HTMX** — on-demand game loading and coach analysis, vendored via `django-htmx`
+- **Alpine.js** — board rendering (loaded from CDN, only on the game page)
+- **Gunicorn** — WSGI server in the container
+- Custom hand-written CSS theme (no Tailwind) in the `theme` app
+  (`theme/static/css/styles.css`)
 
 ## Run with Docker
 
@@ -19,20 +22,31 @@ grandmaster coach.
 docker compose up --build
 ```
 
-The app runs migrations and `collectstatic` on start, then serves on
-http://localhost:8000. Create a user via the admin (see below).
+The `entrypoint.sh` runs `migrate` and `collectstatic` on start, then serves
+with Gunicorn on http://localhost:8000. In Compose the `POSTGRES_HOST` and
+`OLLAMA_HOST` are overridden to reach the `postgres` and `ollama` services;
+everything else comes from `.env`. Create a user via the admin (see below).
 
 ## Run locally
 
 Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
-`compose.yaml` works). Configure `.env` (see the `POSTGRES_*`, `SECRET_KEY`,
-`OLLAMA_HOST`, `OLLAMA_MODEL` keys).
+`docker-compose.yaml` works). Configure `.env` — the settings read these keys
+(defaults in parentheses):
+
+| Key | Purpose |
+| --- | --- |
+| `SECRET_KEY` | Django secret key |
+| `DEBUG` | `true`/`false` (default `true`) |
+| `ALLOWED_HOSTS` | comma-separated hosts (default `*`) |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
+| `OLLAMA_HOST` | Ollama base URL, e.g. `http://localhost:11434` |
+| `OLLAMA_MODEL` | model name (default `llama3:8b`) |
 
 ```bash
-poetry install          # or: pip install .
-python manage.py migrate
-python manage.py createsuperuser
-python manage.py runserver
+uv sync
+uv run python manage.py migrate
+uv run python manage.py createsuperuser
+uv run python manage.py runserver
 ```
 
 Then open http://localhost:8000, sign in, and set your **Chess.com username**
