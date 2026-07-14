@@ -1,4 +1,4 @@
-{% load static %}
+{% load static django_htmx %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -6,26 +6,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Chess Coach AI{% endblock %}</title>
 
-    <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <!-- Alpine.js (chessboard rendering) -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- HTMX (vendored by django-htmx) -->
+    {% htmx_script %}
 
-    <!-- Fonts & icons -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
-    />
+    <!-- Fonts & icons (self-hosted in the theme app) -->
+    <link rel="stylesheet" href="{% static 'css/fonts.css' %}" />
+    <link rel="stylesheet" href="{% static 'fontawesome/css/all.min.css' %}" />
 
     <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
+
+    {% block head_extra %}{% endblock %}
   </head>
-  <body>
+  <body hx-headers='{"x-csrftoken": "{{ csrf_token }}"}'>
     <div class="site">
       <header class="navbar">
         <a href="/" class="navbar__brand">

@@ -32,6 +32,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django_htmx",
+    "theme",
     "chessdotcom_ai_coach.apps.ChessdotcomAiCoach",
 ]
 
@@ -43,6 +45,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django_htmx.middleware.HtmxMiddleware",
 ]
 
 ROOT_URLCONF = "chessdotcom_ai_coach.urls"
@@ -99,7 +102,6 @@ USE_TZ = True
 
 # --- Static files ----------------------------------------------------------
 STATIC_URL = "/static/"
-STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
