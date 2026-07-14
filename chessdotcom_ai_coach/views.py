@@ -71,7 +71,10 @@ def game_detail(request, id):
 @login_required
 async def coach_suggestion(request, id):
     """HTMX endpoint: returns the AI coach's analysis fragment for a game."""
-    game_data = _client_for(request.user).game_detail(id)
+    # Async view: resolve the user via auser() to avoid a synchronous DB
+    # access (request.user is lazy and would raise SynchronousOnlyOperation).
+    user = await request.auser()
+    game_data = _client_for(user).game_detail(id)
     if not game_data:
         return render(
             request,
