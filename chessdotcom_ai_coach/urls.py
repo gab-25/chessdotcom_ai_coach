@@ -7,6 +7,7 @@ from . import views
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("", views.home, name="home"),
+    path("games", views.game_list, name="game_list"),
     path(
         "login",
         LoginView.as_view(template_name="login.html"),

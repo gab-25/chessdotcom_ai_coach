@@ -27,7 +27,11 @@
     <h2 class="section__title">
       <i class="fa-solid fa-clock-rotate-left"></i> Current games
     </h2>
-    {% include "partials/game_list.html" %}
+    <div hx-get="{% url 'game_list' %}"
+         hx-trigger="every 5s"
+         hx-swap="innerHTML">
+      {% include "partials/game_list.html" %}
+    </div>
   </section>
 </div>
 {% endblock %}

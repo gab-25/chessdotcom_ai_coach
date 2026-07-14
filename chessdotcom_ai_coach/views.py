@@ -23,6 +23,16 @@ def home(request):
 
 
 @login_required
+def game_list(request):
+    """HTMX endpoint: returns the current-games fragment for polling."""
+    try:
+        games = _client_for(request.user).my_current_games()
+    except Exception:
+        games = []  # degrada silenziosamente: il polling non deve rompere la pagina
+    return render(request, "partials/game_list.html", {"games": games})
+
+
+@login_required
 def game_detail(request, id):
     """Game detail page: renders the board and the AI-coach panel."""
     try:
