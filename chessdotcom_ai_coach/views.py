@@ -17,9 +17,9 @@ def home(request):
     try:
         games = _client_for(request.user).my_current_games()
     except Exception as exc:
-        return render(request, "chessdotcom_ai_coach/error.html", {"message": str(exc)}, status=500)
+        return render(request, "error.html", {"message": str(exc)}, status=500)
 
-    return render(request, "chessdotcom_ai_coach/home.html", {"games": games})
+    return render(request, "home.html", {"games": games})
 
 
 @login_required
@@ -28,12 +28,12 @@ def game_detail(request, id):
     try:
         game_data = _client_for(request.user).game_detail(id)
     except Exception as exc:
-        return render(request, "chessdotcom_ai_coach/error.html", {"message": str(exc)}, status=500)
+        return render(request, "error.html", {"message": str(exc)}, status=500)
 
     if not game_data:
         return render(
             request,
-            "chessdotcom_ai_coach/game.html",
+            "game.html",
             {"id": id, "error": "Game not found or no longer active."},
         )
 
@@ -45,7 +45,7 @@ def game_detail(request, id):
 
     return render(
         request,
-        "chessdotcom_ai_coach/game.html",
+        "game.html",
         {
             "id": id,
             "game": game,
@@ -65,13 +65,13 @@ def coach_suggestion(request, id):
     if not game_data:
         return render(
             request,
-            "chessdotcom_ai_coach/_coach_suggestion.html",
+            "_coach_suggestion.html",
             {"analysis": "Game not found or no longer active."},
         )
 
     game = game_data["game"]
     analysis = get_best_move(game.get("fen", ""), game.get("pgn"))
-    return render(request, "chessdotcom_ai_coach/_coach_suggestion.html", {"analysis": analysis})
+    return render(request, "_coach_suggestion.html", {"analysis": analysis})
 
 
 def logout_view(request):
