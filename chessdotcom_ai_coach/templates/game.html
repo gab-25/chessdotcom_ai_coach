@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Game analysis · Chess Coach AI{% endblock %}
+{% block head_extra %}
+<!-- Alpine.js — used only on this page for the chessboard rendering -->
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+{% endblock %}
+{% block content %}
+<div id="game-detail-container">
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar__nav">
+      <a href="/" class="btn btn--icon" aria-label="Back to games">
+        <i class="fa-solid fa-arrow-left"></i>
+      </a>
+      <div>
+        <h2 class="toolbar__title">
+          <i class="fa-solid fa-magnifying-glass-chart"></i> Game analysis
+        </h2>
+        <p class="toolbar__sub">ID {{ id }}</p>
+      </div>
+    </div>
+
+    <div class="toolbar__meta">
+      {% if not error %}
+      <span class="badge">{{ game.time_class|capfirst }}</span>
+      <span class="badge badge--live">{{ game.turn }} to move</span>
+      {% endif %}
+      <button
+        class="btn btn--ghost btn--sm"
+        hx-get="{% url 'game_detail' id %}"
+        hx-target="#game-detail-container"
+        hx-select="#game-detail-container"
+        hx-swap="outerHTML"
+      >
+        <i class="fa-solid fa-rotate"></i>
+        <span>Refresh</span>
+      </button>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="alert alert--danger">
+    <i class="fa-solid fa-circle-exclamation"></i> {{ error }}
+  </div>
+  {% else %}
+  <div class="layout">
+    <!-- Board -->
+    <div class="board-panel">
+      <div class="board-panel__bar">
+        <div class="board-panel__player">
+          <span class="player__avatar player__avatar--b">B</span>{{ black_name }}
+        </div>
+        <span class="board-panel__tag">chess.com live</span>
+      </div>
+
+      <div class="board-frame">
+        <div
+          x-data="chessBoard({ position: '{{ fen }}', orientation: '{{ orientation }}' })"
+          class="chess-board"
+        >
+          <template x-for="(square, index) in squares" :key="index">
+            <div class="square">
+              <template x-if="square">
+                <img :src="square.src" class="piece-img" :alt="square.name" />
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="board-panel__bar">
+        <div class="board-panel__player">
+          <span class="player__avatar player__avatar--w">W</span>{{ white_name }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column: context + coach -->
+    <div class="stack">
+      <div class="card">
+        <div class="card__body">
+          <h3 class="card__title"><i class="fa-solid fa-circle-info"></i> Context</h3>
+          <div class="context-grid">
+            <div class="context-item">
+              <div class="context-item__label">Format</div>
+              <div class="context-item__value">{{ game.time_class|capfirst }}</div>
+            </div>
+            <div class="context-item">
+              <div class="context-item__label">Control</div>
+              <div class="context-item__value">{{ game.time_control }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Coach -->
+      <div class="coach">
+        <div class="coach__head">
+          <div class="coach__avatar"><i class="fa-solid fa-brain"></i></div>
+          <div>
+            <h3 class="coach__name">AI Coach</h3>
+            <span class="badge badge--gold">Grandmaster analysis</span>
+          </div>
+        </div>
+
+        <div class="coach__body">
+          <div class="coach__msg">
+            Hi <strong>{{ user.get_username }}</strong> — ask me to read this
+            position and I'll suggest the strongest continuation.
+          </div>
+          <div id="coach-result">
+            <div class="coach__placeholder">
+              <i class="fa-solid fa-chess" style="font-size: 1.8rem; opacity: 0.5"></i>
+              <p>No analysis yet. Request a suggestion below.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="coach__actions">
+          <button
+            class="btn btn--accent btn--block"
+            hx-get="{% url 'coach_suggestion' id %}"
+            hx-target="#coach-result"
+            hx-swap="innerHTML"
+            hx-disabled-elt="this"
+          >
+            <span class="coach__prompt-label">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> Request suggestion
+            </span>
+            <span class="htmx-indicator" style="align-items: center; gap: 10px">
+              <span class="spinner"></span> Analyzing…
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  /**
+   * Alpine.js component for Chess Board rendering
+   * This replaces the previous class-based implementation with a declarative approach.
+   */
+
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("chessBoard", (config) => ({
+      fen: config.position || "8/8/8/8/8/8/8/8",
+      orientation: config.orientation || "white",
+
+      /**
+       * Computed property to get the 64 squares of the board
+       * handles FEN parsing and orientation automatically.
+       */
+      get squares() {
+        const boardPart = this.fen.split(" ")[0];
+        const rows = boardPart.split("/");
+        const boardMatrix = [];
+
+        // Parse FEN string into an 8x8 matrix
+        rows.forEach((row) => {
+          const boardRow = [];
+          for (let char of row) {
+            if (isNaN(char)) {
+              boardRow.push(char);
+            } else {
+              const emptyCount = parseInt(char);
+              for (let i = 0; i < emptyCount; i++) {
+                boardRow.push(null);
+              }
+            }
+          }
+          boardMatrix.push(boardRow);
+        });
+
+        const flatSquares = [];
+        const isWhite = this.orientation === "white";
+
+        // Row/Column mapping based on orientation
+        // White view: Top row is rank 8 (index 0), Bottom is rank 1 (index 7)
+        // Black view: Top row is rank 1 (index 7), Bottom is rank 8 (index 0)
+        const rowRange = isWhite
+          ? [0, 1, 2, 3, 4, 5, 6, 7]
+          : [7, 6, 5, 4, 3, 2, 1, 0];
+        const colRange = isWhite
+          ? [0, 1, 2, 3, 4, 5, 6, 7]
+          : [7, 6, 5, 4, 3, 2, 1, 0];
+
+        rowRange.forEach((r) => {
+          colRange.forEach((c) => {
+            const piece = boardMatrix[r][c];
+            if (piece) {
+              const color = piece === piece.toUpperCase() ? "w" : "b";
+              const type = piece.toLowerCase();
+              flatSquares.push({
+                name: piece,
+                src: `{% static 'img/' %}${color}${type}.png`,
+              });
+            } else {
+              flatSquares.push(null);
+            }
+          });
+        });
+
+        return flatSquares;
+      },
+    }));
+  });
+</script>
+{% endblock %}

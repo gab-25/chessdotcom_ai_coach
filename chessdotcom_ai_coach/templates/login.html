@@ -1,59 +1,55 @@
-{% extends "index.html" %} {% block content %}
-<div class="flex justify-center items-center min-h-[60vh]">
-  <div class="card w-full max-w-md bg-base-100 shadow-xl">
-    <div class="card-body">
-      <h2 class="card-title text-2xl font-bold text-center justify-center mb-6">
-        <i class="fa-solid fa-right-to-bracket text-success mr-2"></i>
-        Login
-      </h2>
+{% extends "base.html" %}
+{% block title %}Sign in · Chess Coach AI{% endblock %}
+{% block content %}
+<div class="auth">
+  <div class="auth-card">
+    <h2 class="auth-card__title">Sign in</h2>
+    <p class="auth-card__sub">Enter the room and review your games.</p>
 
-      {% if error %}
-      <div class="alert alert-error mb-4">
-        <i class="fa-solid fa-circle-exclamation"></i>
-        <span>{{ error }}</span>
-      </div>
-      {% endif %}
-
-      <form action="/login" method="POST" class="space-y-4">
-        <div class="form-control">
-          <label class="label">
-            <span class="label-text">Username</span>
-          </label>
-          <div class="input input-bordered flex w-full items-center gap-2">
-            <i class="fa-solid fa-user text-base-content/50"></i>
-            <input
-              type="text"
-              name="username"
-              class="grow"
-              placeholder="Username"
-              required
-            />
-          </div>
-        </div>
-
-        <div class="form-control">
-          <label class="label">
-            <span class="label-text">Password</span>
-          </label>
-          <div class="input input-bordered flex w-full items-center gap-2">
-            <i class="fa-solid fa-lock text-base-content/50"></i>
-            <input
-              type="password"
-              name="password"
-              class="grow"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-        </div>
-
-        <div class="form-control mt-6">
-          <button type="submit" class="btn btn-success btn-block mb-8">
-            Login
-          </button>
-        </div>
-      </form>
+    {% if form.errors %}
+    <div class="alert alert--danger" style="margin-bottom: 20px">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <span>Invalid username or password.</span>
     </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'login' %}">
+      {% csrf_token %}
+      <div class="field">
+        <label class="field__label" for="id_username">Username</label>
+        <div class="input">
+          <i class="fa-solid fa-user"></i>
+          <input
+            type="text"
+            name="username"
+            id="id_username"
+            placeholder="Username"
+            autocomplete="username"
+            required
+            autofocus
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field__label" for="id_password">Password</label>
+        <div class="input">
+          <i class="fa-solid fa-lock"></i>
+          <input
+            type="password"
+            name="password"
+            id="id_password"
+            placeholder="••••••••"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn--accent btn--block" style="margin-top: 24px">
+        <i class="fa-solid fa-right-to-bracket"></i> Sign in
+      </button>
+    </form>
   </div>
 </div>
 {% endblock %}

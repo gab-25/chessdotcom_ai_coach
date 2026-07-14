@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Your games · Chess Coach AI{% endblock %}
+{% block content %}
+<div class="stack">
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero__content">
+      <p class="hero__eyebrow">The analysis room</p>
+      <h1 class="hero__title">Welcome back, <em>{{ user.get_username }}</em></h1>
+      <p class="hero__text">
+        Pick one of your live Chess.com games and let the AI coach read the
+        position with you — threats, plans, and the move it would play.
+      </p>
+    </div>
+    <div class="stat">
+      <i class="fa-solid fa-chess-knight stat__icon"></i>
+      <div>
+        <div class="stat__label">Connection</div>
+        <div class="stat__value">Live</div>
+        <div class="stat__desc">chess.com · v{{ version }}</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Games -->
+  <section>
+    <h2 class="section__title">
+      <i class="fa-solid fa-clock-rotate-left"></i> Current games
+    </h2>
+    {% include "partials/game_list.html" %}
+  </section>
+</div>
+{% endblock %}

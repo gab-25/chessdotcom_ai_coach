@@ -1,0 +1,47 @@
+{% load static django_htmx %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}Chess Coach AI{% endblock %}</title>
+
+    <!-- HTMX (vendored by django-htmx) -->
+    {% htmx_script %}
+
+    <!-- Fonts & icons (self-hosted in the theme app) -->
+    <link rel="stylesheet" href="{% static 'css/fonts.css' %}" />
+    <link rel="stylesheet" href="{% static 'fontawesome/css/all.min.css' %}" />
+
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
+
+    {% block head_extra %}{% endblock %}
+  </head>
+  <body hx-headers='{"x-csrftoken": "{{ csrf_token }}"}'>
+    <div class="site">
+      <header class="navbar">
+        <a href="/" class="navbar__brand">
+          <img src="{% static 'img/logo.png' %}" alt="Chess Coach AI logo" class="navbar__logo" />
+          <span class="navbar__title">Chess Coach <em>AI</em></span>
+        </a>
+        <div class="navbar__actions">
+          {% if user.is_authenticated %}
+          <span class="user-chip">
+            <i class="fa-solid fa-user"></i>{{ user.get_username }}
+          </span>
+          <a href="{% url 'logout' %}" class="btn btn--danger btn--sm">
+            <i class="fa-solid fa-right-from-bracket"></i> Logout
+          </a>
+          {% endif %}
+        </div>
+      </header>
+
+      <main>{% block content %}{% endblock %}</main>
+
+      <footer class="footer">
+        <div class="checker-strip" style="max-width: 160px; margin: 0 auto 16px"></div>
+        &copy; 2026 Chess Coach AI · Analysis powered by Ollama · v{{ version }}
+      </footer>
+    </div>
+  </body>
+</html>
