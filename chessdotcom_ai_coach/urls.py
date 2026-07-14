@@ -1,7 +1,18 @@
 from django.contrib import admin
-from django.urls import include, path
+from django.contrib.auth.views import LoginView
+from django.urls import path
+
+from . import views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", include("coach.urls")),
+    path("", views.home, name="home"),
+    path(
+        "login",
+        LoginView.as_view(template_name="chessdotcom_ai_coach/login.html"),
+        name="login",
+    ),
+    path("logout", views.logout_view, name="logout"),
+    path("game/<str:id>", views.game_detail, name="game_detail"),
+    path("game/<str:id>/coach", views.coach_suggestion, name="coach_suggestion"),
 ]

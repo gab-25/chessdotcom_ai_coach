@@ -8,8 +8,8 @@ grandmaster coach.
 
 - **Django 5** — ORM, templates, admin, session auth (custom `User` model)
 - **PostgreSQL** — via `psycopg2`
-- **Ollama** — the AI coach (`coach/services/coach.py`)
-- **Chess.com API** — via `chess-com` (`coach/services/chess_client.py`)
+- **Ollama** — the AI coach (`chessdotcom_ai_coach/services/coach.py`)
+- **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
 - **HTMX + Alpine.js** — board rendering and on-demand coach analysis
 - Custom hand-written CSS theme (no Tailwind) in `static/css/styles.css`
 

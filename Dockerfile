@@ -11,7 +11,6 @@ RUN pip install --no-cache-dir .
 
 COPY manage.py entrypoint.sh ./
 COPY chessdotcom_ai_coach ./chessdotcom_ai_coach
-COPY coach ./coach
 COPY static ./static
 
 RUN chmod +x entrypoint.sh

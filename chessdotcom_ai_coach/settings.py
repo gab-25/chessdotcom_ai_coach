@@ -32,7 +32,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "coach",
+    "chessdotcom_ai_coach.apps.ChessdotcomAiCoach",
 ]
 
 MIDDLEWARE = [
@@ -57,7 +57,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
-                "coach.context_processors.app_version",
+                "chessdotcom_ai_coach.context_processors.app_version",
             ],
         },
     },
@@ -79,7 +79,7 @@ DATABASES = {
 }
 
 # --- Auth ------------------------------------------------------------------
-AUTH_USER_MODEL = "coach.User"
+AUTH_USER_MODEL = "chessdotcom_ai_coach.User"
 LOGIN_URL = "/login"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/login"
