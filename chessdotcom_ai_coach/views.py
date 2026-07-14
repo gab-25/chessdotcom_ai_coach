@@ -65,13 +65,13 @@ def coach_suggestion(request, id):
     if not game_data:
         return render(
             request,
-            "_coach_suggestion.html",
+            "partials/coach_suggestion.html",
             {"analysis": "Game not found or no longer active."},
         )
 
     game = game_data["game"]
     analysis = get_best_move(game.get("fen", ""), game.get("pgn"))
-    return render(request, "_coach_suggestion.html", {"analysis": analysis})
+    return render(request, "partials/coach_suggestion.html", {"analysis": analysis})
 
 
 def logout_view(request):
