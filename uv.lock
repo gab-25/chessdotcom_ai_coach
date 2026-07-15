@@ -222,7 +222,7 @@ wheels = [
 [[package]]
 name = "chessdotcom-ai-coach"
 version = "1.0.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "chess" },
     { name = "chess-com" },

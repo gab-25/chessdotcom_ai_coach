@@ -3,25 +3,20 @@ name = "chessdotcom-ai-coach"
 version = "1.0.0"
 description = ""
 authors = [
-    {name = "gab-25",email = "gabrielesorci.25@gmail.com"}
+    { name = "gab-25", email = "gabrielesorci.25@gmail.com" }
 ]
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "chess-com (>=3.13.0,<4.0.0)",
-    "django (>=5.1,<6.0)",
-    "gunicorn (>=23.0.0,<24.0.0)",
-    "python-dotenv (>=1.2.2,<2.0.0)",
-    "psycopg2-binary (>=2.9.11,<3.0.0)",
-    "ollama (>=0.6.1,<0.7.0)",
+    "chess-com>=3.13.0,<4.0.0",
+    "django>=5.1,<6.0",
+    "gunicorn>=23.0.0,<24.0.0",
+    "python-dotenv>=1.2.2,<2.0.0",
+    "psycopg2-binary>=2.9.11,<3.0.0",
+    "ollama>=0.6.1,<0.7.0",
     "django-htmx>=1.28.0",
     "chess>=1.11.2",
 ]
-
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
 
 [dependency-groups]
 dev = [
@@ -29,6 +24,9 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-django>=4.12.0",
 ]
+
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "chessdotcom_ai_coach.settings"
