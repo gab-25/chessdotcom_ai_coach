@@ -1,40 +1,68 @@
 {% extends "base.html" %}
-{% block title %}Sign in · Chess Coach AI{% endblock %}
+{% block title %}Sign in · Chessdotcom AI Coach{% endblock %}
+
+{% comment %} Login is a full-screen split panel — no app header. {% endcomment %}
+{% block header %}{% endblock %}
+
 {% block content %}
-<div class="auth">
-  <div class="auth-card">
-    <h2 class="auth-card__title">Sign in</h2>
-    <p class="auth-card__sub">Enter the room and review your games.</p>
+<div class="login">
+  <div class="login__card">
+    <!-- Marketing aside -->
+    <div class="login__aside">
+      <a href="{% url 'login' %}" class="brand login__brand">
+        <span class="brand__mark" style="width:34px;height:34px;font-size:22px">&#9818;</span>
+        <span>
+          <span class="brand__name">Chessdotcom</span><br />
+          <span class="brand__sub" style="font-size:10px">AI&nbsp;COACH</span>
+        </span>
+      </a>
 
-    {% if form.errors %}
-    <div class="alert alert--danger" style="margin-bottom: 20px">
-      <i class="fa-solid fa-circle-exclamation"></i>
-      <span>Invalid username or password.</span>
+      <div>
+        <p class="login__eyebrow">Live chess intelligence</p>
+        <h1 class="login__title">Read the board.<br />Find the move.</h1>
+        <p class="login__text">
+          Stream your in-progress Chess.com games and get engine-grade
+          suggestions — explained in plain language, move by move.
+        </p>
+      </div>
+
+      <div class="login__stats">
+        <span><b>1200+</b> games/day</span>
+        <span><b>&lt;1s</b> analysis</span>
+      </div>
     </div>
-    {% endif %}
 
-    <form method="post" action="{% url 'login' %}">
-      {% csrf_token %}
-      <div class="field">
-        <label class="field__label" for="id_username">Username</label>
-        <div class="input">
-          <i class="fa-solid fa-user"></i>
+    <!-- Form -->
+    <div class="login__form">
+      <h2 class="login__form-title">Sign in</h2>
+      <p class="login__form-sub">Enter your credentials to continue.</p>
+
+      {% if form.errors %}
+      <div class="alert alert--danger" style="margin-bottom:22px">
+        <i class="fa-solid fa-circle-exclamation"></i>
+        <span>Invalid username or password.</span>
+      </div>
+      {% endif %}
+
+      <form method="post" action="{% url 'login' %}">
+        {% csrf_token %}
+        <label class="field__label" for="id_username">USERNAME</label>
+        <div class="input" style="margin-bottom:16px">
+          <span class="input__icon">&#9823;</span>
           <input
             type="text"
             name="username"
             id="id_username"
-            placeholder="Username"
+            placeholder="e.g. knight_ender"
             autocomplete="username"
             required
             autofocus
           />
         </div>
-      </div>
 
-      <div class="field">
-        <label class="field__label" for="id_password">Password</label>
-        <div class="input">
-          <i class="fa-solid fa-lock"></i>
+        <label class="field__label" for="id_password">PASSWORD</label>
+        <div class="input" style="margin-bottom:24px">
+          <span class="input__icon"><i class="fa-solid fa-lock"></i></span>
           <input
             type="password"
             name="password"
@@ -44,12 +72,12 @@
             required
           />
         </div>
-      </div>
 
-      <button type="submit" class="btn btn--accent btn--block" style="margin-top: 24px">
-        <i class="fa-solid fa-right-to-bracket"></i> Sign in
-      </button>
-    </form>
+        <button type="submit" class="btn btn--accent btn--block">
+          Login <span style="font-size:16px">&rarr;</span>
+        </button>
+      </form>
+    </div>
   </div>
 </div>
 {% endblock %}

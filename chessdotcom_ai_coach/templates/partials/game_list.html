@@ -1,4 +1,5 @@
-<div class="game-grid">
+{% load static %}
+<div class="games-grid">
   {% if not games %}
   <div class="empty">
     <i class="fa-solid fa-circle-info"></i>
@@ -9,51 +10,42 @@
   </div>
   {% else %}
   {% for game in games %}
-  <article class="game-card{% if game.is_my_turn %} game-card--live{% endif %}">
-    <div class="game-card__head">
-      <div class="game-card__tags">
-        <span class="badge">{{ game.time_class }}</span>
-        <span class="badge badge--mono">{{ game.time_control }}</span>
+  <a href="{% url 'game_detail' game.game_id %}" class="gm-card">
+    <div class="gm-card__head">
+      <span class="badge">{{ game.time_class|capfirst }}</span>
+      <span class="gm-card__live">
+        <span class="badge badge--live"><span class="badge__dot"></span></span>
+        LIVE{% if game.move_no %} · move {{ game.move_no }}{% endif %}
+      </span>
+    </div>
+
+    <!-- Black -->
+    <div class="gm-card__player">
+      <span class="gm-card__avatar gm-card__avatar--b"></span>
+      <span class="gm-card__id">
+        <span class="gm-card__name">{{ game.black.username }}</span>
+        <span class="gm-card__meta">{{ game.black.rating }}</span>
+      </span>
+      {% if game.turn == 'black' %}<span class="gm-card__turn">to move</span>{% endif %}
+    </div>
+
+    <!-- Board -->
+    <div class="gm-card__board">
+      <div class="gm-card__board-frame">
+        {% include "partials/board.html" with cells=game.cells board_class="board--mini" %}
       </div>
-      {% if game.is_my_turn %}
-      <span class="badge badge--live"><i class="fa-solid fa-play"></i> Your turn</span>
-      {% endif %}
     </div>
 
-    <div class="player">
-      <div class="player__id">
-        <span class="player__avatar player__avatar--w">W</span>
-        <div>
-          <div class="player__name">{{ game.white.username }}</div>
-          <div class="player__rating">{{ game.white.rating }}</div>
-        </div>
-      </div>
-      {% if game.turn == 'white' %}
-      <span class="badge badge--gold">Moving</span>
-      {% endif %}
+    <!-- White -->
+    <div class="gm-card__player gm-card__player--white">
+      <span class="gm-card__avatar gm-card__avatar--w"></span>
+      <span class="gm-card__id">
+        <span class="gm-card__name">{{ game.white.username }}</span>
+        <span class="gm-card__meta">{{ game.white.rating }}</span>
+      </span>
+      {% if game.turn == 'white' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>
-
-    <div class="vs">vs</div>
-
-    <div class="player">
-      <div class="player__id">
-        <span class="player__avatar player__avatar--b">B</span>
-        <div>
-          <div class="player__name">{{ game.black.username }}</div>
-          <div class="player__rating">{{ game.black.rating }}</div>
-        </div>
-      </div>
-      {% if game.turn == 'black' %}
-      <span class="badge badge--gold">Moving</span>
-      {% endif %}
-    </div>
-
-    <div class="game-card__foot">
-      <a href="{% url 'game_detail' game.game_id %}" class="btn btn--accent btn--sm btn--block">
-        <i class="fa-solid fa-chess-board"></i> View board
-      </a>
-    </div>
-  </article>
+  </a>
   {% endfor %}
   {% endif %}
 </div>

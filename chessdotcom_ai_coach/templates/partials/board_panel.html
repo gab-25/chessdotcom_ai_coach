@@ -1,0 +1,50 @@
+{% comment %}
+  Left column of the game detail: meta row, player bars, eval bar + board,
+  last-move footer. Expects: game, black_name, black_rating, white_name,
+  white_rating, cells, eval_fill, last_move, move_no, turn_label, id.
+{% endcomment %}
+<div>
+  <div class="detail-meta">
+    <span class="badge">{{ game.time_class|capfirst }}</span>
+    <span class="detail-meta__text">
+      {% if move_no %}Move {{ move_no }} · {% endif %}{{ turn_label }} to play
+    </span>
+  </div>
+
+  <!-- Black -->
+  <div class="pbar pbar--top">
+    <span class="pbar__avatar pbar__avatar--b"></span>
+    <span class="pbar__id">
+      <span class="pbar__name">{{ black_name }}</span>
+      <span class="pbar__meta">{{ black_rating|default:"—" }}</span>
+    </span>
+  </div>
+
+  <!-- Eval bar + board -->
+  <div class="board-stage">
+    <div class="evalbar">
+      <div class="evalbar__fill" style="height:{{ eval_fill|default:50 }}%"></div>
+      <div class="evalbar__mid"></div>
+    </div>
+    <div class="board-stage__board">
+      {% include "partials/board.html" with cells=cells board_class="board--lg" %}
+    </div>
+  </div>
+
+  <!-- White -->
+  <div class="pbar pbar--bottom">
+    <span class="pbar__avatar pbar__avatar--w"></span>
+    <span class="pbar__id">
+      <span class="pbar__name">{{ white_name }}</span>
+      <span class="pbar__meta">{{ white_rating|default:"—" }}</span>
+    </span>
+  </div>
+
+  <!-- Last move + refresh -->
+  <div class="movebar">
+    <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
+    <div class="movebar__nav">
+      <a href="{% url 'game_detail' id %}" title="Reload position" style="color:inherit"><span>&#8635;</span></a>
+    </div>
+  </div>
+</div>

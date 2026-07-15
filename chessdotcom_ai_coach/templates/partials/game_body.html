@@ -1,0 +1,9 @@
+{% comment %}
+  Two-column game-detail body. Rendered initially by game.html (no analysis)
+  and re-rendered by the coach_suggestion view (with analysis + board highlight
+  + eval fill) to swap #game-body in one shot.
+{% endcomment %}
+<div class="game-layout">
+  {% include "partials/board_panel.html" %}
+  {% include "partials/coach_panel.html" %}
+</div>

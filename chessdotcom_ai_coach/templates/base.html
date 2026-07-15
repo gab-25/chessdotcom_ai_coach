@@ -4,7 +4,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{% block title %}Chess Coach AI{% endblock %}</title>
+    <title>{% block title %}Chessdotcom AI Coach{% endblock %}</title>
 
     <!-- HTMX (vendored by django-htmx) -->
     {% htmx_script %}
@@ -12,36 +12,40 @@
     <!-- Fonts & icons (self-hosted in the theme app) -->
     <link rel="stylesheet" href="{% static 'css/fonts.css' %}" />
     <link rel="stylesheet" href="{% static 'fontawesome/css/all.min.css' %}" />
-
     <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
 
     {% block head_extra %}{% endblock %}
   </head>
   <body hx-headers='{"x-csrftoken": "{{ csrf_token }}"}'>
-    <div class="site">
-      <header class="navbar">
-        <a href="/" class="navbar__brand">
-          <img src="{% static 'img/logo.png' %}" alt="Chess Coach AI logo" class="navbar__logo" />
-          <span class="navbar__title">Chess Coach <em>AI</em></span>
+    {% block header %}
+    <header class="app-header">
+      <div class="app-header__inner">
+        <a href="{% url 'home' %}" class="brand">
+          <span class="brand__mark">&#9818;</span>
+          <span>
+            <span class="brand__name">Chessdotcom</span><br />
+            <span class="brand__sub">AI&nbsp;COACH</span>
+          </span>
         </a>
-        <div class="navbar__actions">
+
+        {% block header_left %}{% endblock %}
+
+        <div class="app-header__right">
+          {% block header_status %}{% endblock %}
           {% if user.is_authenticated %}
           <span class="user-chip">
-            <i class="fa-solid fa-user"></i>{{ user.get_username }}
+            <span class="user-chip__avatar">{{ user.get_username|slice:":1"|upper }}</span>
+            <span class="user-chip__name">{{ user.get_username }}</span>
           </span>
-          <a href="{% url 'logout' %}" class="btn btn--danger btn--sm">
-            <i class="fa-solid fa-right-from-bracket"></i> Logout
+          <a href="{% url 'logout' %}" class="logout" aria-label="Log out">
+            <i class="fa-solid fa-right-from-bracket"></i>
           </a>
           {% endif %}
         </div>
-      </header>
+      </div>
+    </header>
+    {% endblock %}
 
-      <main>{% block content %}{% endblock %}</main>
-
-      <footer class="footer">
-        <div class="checker-strip" style="max-width: 160px; margin: 0 auto 16px"></div>
-        &copy; 2026 Chess Coach AI · Analysis powered by Ollama · v{{ version }}
-      </footer>
-    </div>
+    {% block content %}{% endblock %}
   </body>
 </html>
