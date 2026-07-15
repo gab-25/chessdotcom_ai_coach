@@ -1,0 +1,12 @@
+{% comment %}
+  Glyph chessboard. Expects:
+    cells       — 64 dicts {glyph, light, highlight, white} from board.fen_to_cells
+    board_class — modifier class, e.g. "board--mini" or "board--lg"
+{% endcomment %}
+<div class="board {{ board_class|default:'' }}">
+  {% for c in cells %}
+  <div class="board__sq {% if c.light %}board__sq--light{% else %}board__sq--dark{% endif %}{% if c.highlight %} board__sq--hl{% endif %}">
+    {% if c.glyph %}<span class="board__pc {% if c.white %}board__pc--w{% else %}board__pc--b{% endif %}">{{ c.glyph }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>

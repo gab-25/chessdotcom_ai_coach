@@ -46,7 +46,12 @@ class TestHome:
         response = auth_client.get("/")
 
         assert response.status_code == 200
-        assert list(response.context["games"]) == [_sample_game()]
+        games = list(response.context["games"])
+        assert len(games) == 1
+        assert games[0]["game_id"] == "944768131"
+        # The view enriches each game with the glyph board + move number.
+        assert len(games[0]["cells"]) == 64
+        assert games[0]["move_no"] == 1
 
     def test_renders_error_page_on_failure(self, mock_client, auth_client):
         mock_client.return_value.my_current_games.side_effect = Exception("boom")
@@ -141,12 +146,20 @@ class TestCoachSuggestion:
             "white_name": "MyUser",
             "black_name": "Opponent",
         }
-        mock_coach.return_value = "Play e4, a strong central move."
+        mock_coach.return_value = {
+            "eval_text": "The position is balanced (+0.20).",
+            "eval_cp": 0.2,
+            "best_move_san": "e4",
+            "best_move_uci": "e2e4",
+            "analysis": "Play e4, a strong central move.",
+        }
 
         response = await async_client.get("/game/944768131/coach")
 
         assert response.status_code == 200
         assert b"Play e4, a strong central move." in response.content
+        # Recommended move is surfaced in the coach card.
+        assert b"e4" in response.content
 
     async def test_handles_missing_game(
         self, mock_client, mock_coach, async_client, user

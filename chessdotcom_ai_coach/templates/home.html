@@ -1,37 +1,31 @@
 {% extends "base.html" %}
-{% block title %}Your games · Chess Coach AI{% endblock %}
+{% block title %}Live games · Chessdotcom AI Coach{% endblock %}
+
+{% block header_status %}
+<div class="status-pill">
+  <span class="status-pill__dot"></span>AUTO-REFRESH
+</div>
+{% endblock %}
+
 {% block content %}
-<div class="stack">
-  <!-- Hero -->
-  <section class="hero">
-    <div class="hero__content">
-      <p class="hero__eyebrow">The analysis room</p>
-      <h1 class="hero__title">Welcome back, <em>{{ user.get_username }}</em></h1>
-      <p class="hero__text">
-        Pick one of your live Chess.com games and let the AI coach read the
-        position with you — threats, plans, and the move it would play.
+<div class="page">
+  <div class="home__head">
+    <div>
+      <h1 class="home__title">Live games</h1>
+      <p class="home__sub">
+        {{ games|length }} game{{ games|length|pluralize }} in progress from players you follow.
       </p>
     </div>
-    <div class="stat">
-      <i class="fa-solid fa-chess-knight stat__icon"></i>
-      <div>
-        <div class="stat__label">Connection</div>
-        <div class="stat__value">Live</div>
-        <div class="stat__desc">chess.com · v{{ version }}</div>
-      </div>
+    <div class="home__filters">
+      <span class="filter-chip">Sort: Rating &#9662;</span>
+      <span class="filter-chip">All time controls &#9662;</span>
     </div>
-  </section>
+  </div>
 
-  <!-- Games -->
-  <section>
-    <h2 class="section__title">
-      <i class="fa-solid fa-clock-rotate-left"></i> Current games
-    </h2>
-    <div hx-get="{% url 'game_list' %}"
-         hx-trigger="every 5s"
-         hx-swap="innerHTML">
-      {% include "partials/game_list.html" %}
-    </div>
-  </section>
+  <div hx-get="{% url 'game_list' %}"
+       hx-trigger="every 5s"
+       hx-swap="innerHTML">
+    {% include "partials/game_list.html" %}
+  </div>
 </div>
 {% endblock %}

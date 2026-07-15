@@ -1,0 +1,61 @@
+{% comment %}
+  Right column: the AI coach card. Two states driven by `analysis`:
+    - unset  → placeholder + "Request suggestion" button
+    - set    → recommended move + eval + prose + "Re-analyze" button
+  Expects: id, analysis, best_move_san, eval_text.
+{% endcomment %}
+<div class="game-col">
+  <div class="coach">
+    <div class="coach__head">
+      <span class="coach__head-icon">&#9818;</span>
+      <h3 class="coach__title">Coach suggestion</h3>
+      <span class="coach__tag">AI&nbsp;COACH</span>
+    </div>
+
+    <div class="coach__body">
+      {% if not analysis %}
+      <!-- Idle -->
+      <div class="coach__placeholder">
+        <i class="fa-solid fa-chess coach__placeholder-icon"></i>
+        <p style="margin:0">No analysis yet. Request a suggestion below.</p>
+      </div>
+      {% else %}
+      <!-- Analyzed -->
+      {% if best_move_san %}
+      <div class="coach__rec">
+        <div>
+          <div class="coach__rec-label">Recommended</div>
+          <div class="coach__move">{{ best_move_san }}</div>
+        </div>
+        {% if eval_text %}
+        <div style="padding-bottom:6px">
+          <div class="coach__eval">{{ eval_text }}</div>
+        </div>
+        {% endif %}
+        <span class="coach__badge">BEST MOVE</span>
+      </div>
+      {% elif eval_text %}
+      <div class="coach__eval" style="margin-bottom:6px">{{ eval_text }}</div>
+      {% endif %}
+
+      <p class="coach__summary">{{ analysis }}</p>
+      {% endif %}
+    </div>
+
+    <div class="coach__actions">
+      <button
+        class="btn btn--accent btn--block {% if analysis %}coach__reanalyze{% endif %}"
+        hx-get="{% url 'coach_suggestion' id %}"
+        hx-target="#game-body"
+        hx-swap="innerHTML"
+        hx-disabled-elt="this"
+      >
+        <span class="coach__prompt-label">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+          {% if analysis %}Re-analyze{% else %}Request suggestion{% endif %}
+        </span>
+        <span class="htmx-indicator"><span class="spinner"></span> Analyzing…</span>
+      </button>
+    </div>
+  </div>
+</div>

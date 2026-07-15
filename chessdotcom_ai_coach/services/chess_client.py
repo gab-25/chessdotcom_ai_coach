@@ -83,10 +83,12 @@ class Client:
         if not game_detail:
             return None
 
-        # Process PGN for player names
+        # Process PGN for player names and ratings
         pgn = game_detail.get("pgn", "")
         white_match = re.search(r'\[White "(.*?)"\]', pgn)
         black_match = re.search(r'\[Black "(.*?)"\]', pgn)
+        white_elo_match = re.search(r'\[WhiteElo "(.*?)"\]', pgn)
+        black_elo_match = re.search(r'\[BlackElo "(.*?)"\]', pgn)
 
         white_name = white_match.group(1) if white_match else "White"
         black_name = black_match.group(1) if black_match else "Black"
@@ -95,4 +97,6 @@ class Client:
             "game": game_detail,
             "white_name": white_name,
             "black_name": black_name,
+            "white_rating": white_elo_match.group(1) if white_elo_match else None,
+            "black_rating": black_elo_match.group(1) if black_elo_match else None,
         }

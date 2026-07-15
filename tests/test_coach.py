@@ -48,59 +48,66 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
 
 
 class TestEvaluationText:
-    """eval_text branches are surfaced through the LC0 fallback string."""
+    """eval_text branches, now surfaced as a structured field."""
 
     async def test_mate_for_white(self):
         with _engine(PovScore(Mate(3), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "Decisive advantage for White: Mate in 3 moves." in result
+        assert result["eval_text"] == "Decisive advantage for White: Mate in 3 moves."
+        assert result["eval_cp"] == 10.0
 
     async def test_mate_for_black(self):
         with _engine(PovScore(Mate(-3), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "Decisive advantage for Black: Mate in 3 moves." in result
+        assert result["eval_text"] == "Decisive advantage for Black: Mate in 3 moves."
+        assert result["eval_cp"] == -10.0
 
     async def test_white_clearly_better(self):
         with _engine(PovScore(Cp(100), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "White is clearly better (+1.00)." in result
+        assert result["eval_text"] == "White is clearly better (+1.00)."
+        assert result["eval_cp"] == 1.0
 
     async def test_black_clearly_better(self):
         with _engine(PovScore(Cp(-100), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "Black is clearly better (-1.00)." in result
+        assert result["eval_text"] == "Black is clearly better (-1.00)."
 
     async def test_balanced_position(self):
         with _engine(PovScore(Cp(0), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "The position is balanced (+0.00)." in result
+        assert result["eval_text"] == "The position is balanced (+0.00)."
 
     async def test_score_unavailable(self):
         with _engine(None, llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "Analysis unavailable." in result
+        assert result["eval_text"] == "Analysis unavailable."
+        assert result["eval_cp"] is None
 
 
 class TestBestMoveAndLLM:
     async def test_returns_llm_content_on_success(self):
         with _engine(PovScore(Cp(30), chess.WHITE), llm_content="Play e4, it's great!"):
             result = await coach.get_best_move(START_FEN)
-        assert result == "Play e4, it's great!"
+        assert result["analysis"] == "Play e4, it's great!"
+        assert result["best_move_san"] == "e4"
+        assert result["best_move_uci"] == "e2e4"
 
     async def test_fallback_mentions_lc0_and_san_when_llm_fails(self):
         with _engine(PovScore(Cp(30), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "LC0" in result
-        assert "e4" in result  # SAN of the suggested move
+        assert "LC0" in result["analysis"]
+        assert result["best_move_san"] == "e4"  # SAN of the suggested move
 
     async def test_no_best_move_identified(self):
         with _engine(PovScore(Cp(30), chess.WHITE), move=None):
             result = await coach.get_best_move(START_FEN)
-        assert "No clear best move identified." in result
+        assert "No clear best move identified." in result["analysis"]
+        assert result["best_move_san"] is None
 
 
 class TestErrorHandling:
     async def test_invalid_fen_returns_error_string(self):
         with _engine(PovScore(Cp(0), chess.WHITE)):
             result = await coach.get_best_move("not-a-valid-fen")
-        assert result.startswith("Error during LC0 analysis:")
+        assert result["analysis"].startswith("Error during LC0 analysis:")

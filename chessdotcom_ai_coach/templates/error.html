@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Something went wrong · Chess Coach AI{% endblock %}
+{% block title %}Something went wrong · Chessdotcom AI Coach{% endblock %}
 {% block content %}
-<div class="auth">
-  <div class="card" style="max-width: 520px; width: 100%">
-    <div class="card__body">
-      <h3 class="card__title"><i class="fa-solid fa-triangle-exclamation"></i> Something went wrong</h3>
-      <p style="color: var(--ink-dim); margin: 0 0 20px">
-        We couldn't reach Chess.com just now.
-      </p>
-      <div class="alert alert--danger" style="margin-bottom: 20px">{{ message }}</div>
-      <a href="/" class="btn btn--ghost"><i class="fa-solid fa-arrow-left"></i> Back to games</a>
-    </div>
+<div class="error-wrap">
+  <div class="error-card">
+    <h3><i class="fa-solid fa-triangle-exclamation" style="color:var(--brass)"></i> Something went wrong</h3>
+    <p style="color:var(--ink-dim); margin:0 0 20px; line-height:1.55">
+      We couldn't reach Chess.com just now.
+    </p>
+    <div class="alert alert--danger" style="margin-bottom:22px">{{ message }}</div>
+    <a href="{% url 'home' %}" class="btn btn--ghost btn--sm">
+      <i class="fa-solid fa-arrow-left"></i> Back to games
+    </a>
   </div>
 </div>
 {% endblock %}
