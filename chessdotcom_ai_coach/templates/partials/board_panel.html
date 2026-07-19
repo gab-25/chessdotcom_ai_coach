@@ -40,11 +40,8 @@
     </span>
   </div>
 
-  <!-- Last move + refresh -->
+  <!-- Last move -->
   <div class="movebar">
     <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
-    <div class="movebar__nav">
-      <a href="{% url 'game_detail' id %}" title="Reload position" style="color:inherit"><span>&#8635;</span></a>
-    </div>
   </div>
 </div>
