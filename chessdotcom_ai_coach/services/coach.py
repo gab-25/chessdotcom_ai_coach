@@ -185,6 +185,7 @@ Instructions:
 2. Explain why {best_move_san} is the best move in strategic or tactical terms.
 3. Provide a short piece of advice for the continuation of the game.
 4. Respond in a professional, encouraging, and educational manner in English.
+5. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
 """
 
         try:
@@ -196,7 +197,7 @@ Instructions:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert chess coach analyzing games in real-time.",
+                        "content": "You are an expert chess coach analyzing games in real-time. Never end your reply with a question or a call to respond; the user has no way to answer back.",
                     },
                     {"role": "user", "content": prompt},
                 ],
