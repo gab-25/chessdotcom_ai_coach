@@ -16,8 +16,8 @@ import tempfile
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("CHESS_ENGINE_HOST", "127.0.0.1")
 os.environ.setdefault("CHESS_ENGINE_PORT", "9999")
-os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
-os.environ.setdefault("OLLAMA_MODEL", "llama3:8b")
+os.environ.setdefault("OLLAMA_HOST", "localhost")
+os.environ.setdefault("OLLAMA_PORT", "11434")
 
 import pytest
 

@@ -11,8 +11,11 @@ CHESS_ENGINE_HOST = os.getenv("CHESS_ENGINE_HOST")
 CHESS_ENGINE_PORT = int(os.getenv("CHESS_ENGINE_PORT"))  # pyright: ignore[reportArgumentType]
 
 # LLM Configuration (Local Llama 3 via Ollama)
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
+# The model is fixed here on purpose: it is not user- or env-selectable.
+OLLAMA_MODEL = "llama3:8b"
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+OLLAMA_PORT = os.getenv("OLLAMA_PORT")
+OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 
 
 class _TcpUciTransport(asyncio.Protocol):
@@ -191,7 +194,7 @@ Instructions:
         try:
             # llama3:8b on CPU can take ~80s to produce a full analysis, so allow
             # a generous timeout; on failure we fall back to the LC0-only text.
-            client = ollama.AsyncClient(host=OLLAMA_HOST, timeout=150.0)
+            client = ollama.AsyncClient(host=OLLAMA_URL, timeout=150.0)
             response = await client.chat(  # pyright: ignore[reportCallIssue]
                 model=OLLAMA_MODEL,  # pyright: ignore[reportArgumentType]
                 messages=[

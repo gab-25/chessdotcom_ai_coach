@@ -108,4 +108,4 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Integrations ----------------------------------------------------------
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:8b")
+OLLAMA_PORT = os.getenv("OLLAMA_PORT")

@@ -24,8 +24,9 @@ docker compose up --build
 
 The `entrypoint.sh` runs `migrate` and `collectstatic` on start, then serves
 with Gunicorn on http://localhost:8000. In Compose the `POSTGRES_HOST` and
-`OLLAMA_HOST` are overridden to reach the `postgres` and `ollama` services;
-everything else comes from `.env`. Create a user via the admin (see below).
+`OLLAMA_HOST`/`OLLAMA_PORT` are overridden to reach the `postgres` and `ollama`
+services; everything else comes from `.env`. Create a user via the admin (see
+below).
 
 ## Run locally
 
@@ -39,8 +40,7 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `DEBUG` | `true`/`false` (default `true`) |
 | `ALLOWED_HOSTS` | comma-separated hosts (default `*`) |
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
-| `OLLAMA_HOST` | Ollama base URL, e.g. `http://localhost:11434` |
-| `OLLAMA_MODEL` | model name (default `llama3:8b`) |
+| `OLLAMA_HOST` / `OLLAMA_PORT` | Ollama host and port (e.g. `localhost`/`11434`) |
 
 ```bash
 uv sync
@@ -53,7 +53,7 @@ Then open http://localhost:8000, sign in, and set your **Chess.com username**
 on the user via the admin at http://localhost:8000/admin/ (field
 `chessdotcom_username`; it falls back to the login username if left blank).
 
-The AI coach requires the Ollama service with the configured model pulled, e.g.:
+The AI coach requires the Ollama service with the `llama3:8b` model pulled:
 
 ```bash
 docker compose exec ollama ollama pull llama3:8b
