@@ -46,8 +46,20 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
 
 Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
-image (see the `Dockerfile`); for local runs install it (e.g.
-`apt install stockfish` / `brew install stockfish`) or set `STOCKFISH_PATH`.
+image (see the `Dockerfile`). For local runs, download the same official
+`sf_18` build the container uses so behaviour matches:
+
+```bash
+# avx2 works on any x86-64 CPU since ~2013; if you hit "Illegal instruction"
+# (older CPU / VM), swap avx2 for sse41-popcnt.
+curl -fL https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64-avx2.tar | tar -x
+sudo mv stockfish/stockfish-ubuntu-x86-64-avx2 /usr/local/bin/stockfish
+sudo chmod +x /usr/local/bin/stockfish
+stockfish --version   # -> Stockfish ... sf_18
+```
+
+This lands on `PATH` as `stockfish`, which the default `STOCKFISH_PATH` resolves.
+To keep the binary elsewhere instead, point `STOCKFISH_PATH` at its absolute path.
 
 ```bash
 uv sync
