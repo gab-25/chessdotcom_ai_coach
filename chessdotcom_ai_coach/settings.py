@@ -16,6 +16,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("SECRET_KEY", "a-very-secret-key")
 DEBUG = os.getenv("DEBUG", "true").lower() in ("1", "true", "yes")
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
+# Trusted origins for Django's CSRF check (comma-separated, scheme included).
+# Needed when running behind a reverse proxy that terminates TLS (e.g. Traefik).
+CSRF_TRUSTED_ORIGINS = [o for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
+# The proxy terminates TLS and forwards plain HTTP; trust its forwarded-proto
+# header so Django knows the original request was HTTPS.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # App version, read once from pyproject.toml (replaces FastAPI's app.state.version).
 try:
