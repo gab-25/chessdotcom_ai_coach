@@ -79,8 +79,8 @@ Then open http://localhost:8000, sign in, and set your **Chess.com username**
 on the user via the admin at http://localhost:8000/admin/ (field
 `chessdotcom_username`; it falls back to the login username if left blank).
 
-The AI coach requires the Ollama service with the `llama3:8b` model pulled:
+The AI coach requires the Ollama service with the `llama3.2:3b` model pulled:
 
 ```bash
-docker compose exec ollama ollama pull llama3:8b
+docker compose exec ollama ollama pull llama3.2:3b
 ```

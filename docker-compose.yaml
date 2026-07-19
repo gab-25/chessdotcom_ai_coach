@@ -34,6 +34,10 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    environment:
+      # Unload the model from RAM ~30s after the last request so it does not sit
+      # resident while idle (mirrors the Kubernetes deployment).
+      - OLLAMA_KEEP_ALIVE=30s
     ports:
       - "11434:11434"
     volumes:

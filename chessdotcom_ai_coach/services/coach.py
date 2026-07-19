@@ -10,9 +10,11 @@ import ollama
 # points at the binary (see the Dockerfile). Defaults to "stockfish" on PATH.
 STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 
-# LLM Configuration (Local Llama 3 via Ollama)
+# LLM Configuration (Local Llama 3.2 via Ollama)
 # The model is fixed here on purpose: it is not user- or env-selectable.
-OLLAMA_MODEL = "llama3:8b"
+# A 3B model is used to keep RAM usage low enough for an 8GB single-node cluster
+# (~2GB loaded vs ~5-6GB for the 8B build).
+OLLAMA_MODEL = "llama3.2:3b"
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT")
 OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
@@ -137,8 +139,8 @@ Instructions:
 """
 
         try:
-            # llama3:8b on CPU can take ~80s to produce a full analysis, so allow
-            # a generous timeout; on failure we fall back to the engine-only text.
+            # llama3.2:3b on CPU can take ~20-30s to produce a full analysis, so
+            # allow a generous timeout; on failure we fall back to engine-only text.
             client = ollama.AsyncClient(host=OLLAMA_URL, timeout=150.0)
             response = await client.chat(  # pyright: ignore[reportCallIssue]
                 model=OLLAMA_MODEL,  # pyright: ignore[reportArgumentType]
