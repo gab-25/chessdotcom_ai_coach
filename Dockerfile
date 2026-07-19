@@ -9,10 +9,14 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 # avx2 is a good default for modern x86-64 CPUs. On older CPUs/VMs that raise
 # "Illegal instruction", rebuild with SF_VARIANT=stockfish-ubuntu-x86-64-sse41-popcnt.
 ARG SF_VARIANT=stockfish-ubuntu-x86-64-avx2
-RUN curl -fL "https://github.com/official-stockfish/Stockfish/releases/download/sf_18/${SF_VARIANT}.tar" -o sf.tar \
-    && tar -xf sf.tar \
-    && mv "stockfish/${SF_VARIANT}" /stockfish \
-    && chmod +x /stockfish
+# Extract into a temp dir: the archive unpacks a "stockfish/" folder, which would
+# otherwise collide with the "/stockfish" destination (cwd is "/" in this stage).
+RUN curl -fL "https://github.com/official-stockfish/Stockfish/releases/download/sf_18/${SF_VARIANT}.tar" -o /tmp/sf.tar \
+    && mkdir -p /tmp/sf \
+    && tar -xf /tmp/sf.tar -C /tmp/sf \
+    && mv "/tmp/sf/stockfish/${SF_VARIANT}" /stockfish \
+    && chmod +x /stockfish \
+    && rm -rf /tmp/sf /tmp/sf.tar
 
 # Stage 2: The Django application image.
 FROM python:3.13-slim
