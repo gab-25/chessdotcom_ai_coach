@@ -6,6 +6,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Chessdotcom AI Coach{% endblock %}</title>
 
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="{% static 'img/favicon.svg' %}" />
+    <link rel="icon" type="image/png" href="{% static 'img/logo.png' %}" />
+    <link rel="apple-touch-icon" href="{% static 'img/logo.png' %}" />
+
     <!-- HTMX (vendored by django-htmx) -->
     {% htmx_script %}
 
