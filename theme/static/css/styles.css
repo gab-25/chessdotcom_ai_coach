@@ -349,8 +349,12 @@ input {
   box-shadow: inset 0 0 0 1.3cqw rgba(183, 142, 84, 0.92);
 }
 .board__pc {
-  font-size: 10cqw;
+  font-size: 11.5cqw;
   line-height: 1;
+  /* Unicode chess glyphs carry extra metric space below the baseline, so the
+     ink sits high in the line box; nudge it down to optically centre the piece. */
+  display: block;
+  transform: translateY(12%);
   font-family: "Segoe UI Symbol", "Noto Sans Symbols2", "Arial Unicode MS", serif;
 }
 .board__pc--w {
@@ -579,6 +583,11 @@ input {
   position: relative;
   flex: none;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+/* Board flipped for a black-perspective view: flip the bar too so White's
+   fill grows from White's (now top) side. */
+.evalbar--flipped {
+  transform: scaleY(-1);
 }
 .evalbar__fill {
   position: absolute;
