@@ -1,7 +1,7 @@
 """Unit tests for the AI coach service.
 
-Both external dependencies are mocked: the LC0 UCI engine (reached via
-``asyncio`` connection) and the Ollama LLM client. Real ``python-chess``
+Both external dependencies are mocked: the Stockfish UCI engine (launched via
+``chess.engine.popen_uci``) and the Ollama LLM client. Real ``python-chess``
 score objects drive the evaluation-text branches.
 """
 
@@ -20,21 +20,19 @@ E2E4 = chess.Move.from_uci("e2e4")  # legal in the start position -> SAN "e4"
 
 @contextmanager
 def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False):
-    """Patch the engine connection and Ollama client for one call.
+    """Patch the engine subprocess and Ollama client for one call.
 
     ``score`` is placed in ``result.info["score"]``; ``move`` becomes
     ``result.move``. If ``llm_raises`` the Ollama chat call raises, forcing
-    the LC0 fallback branch.
+    the Stockfish fallback branch.
     """
     engine = MagicMock()
-    engine.initialize = AsyncMock()
     engine.play = AsyncMock(return_value=SimpleNamespace(move=move, info={"score": score}))
     engine.quit = AsyncMock()
 
-    # The code builds a real UciProtocol and drives it over a socket opened by
-    # create_connection; both are stubbed here so no network I/O happens.
-    loop = MagicMock()
-    loop.create_connection = AsyncMock(return_value=(MagicMock(), MagicMock()))
+    # The code launches Stockfish via popen_uci, which returns (transport,
+    # engine); stubbed here so no real subprocess is spawned.
+    popen_uci = AsyncMock(return_value=(MagicMock(), engine))
 
     ollama_client = MagicMock()
     if llm_raises:
@@ -44,9 +42,9 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
             return_value=SimpleNamespace(message=SimpleNamespace(content=llm_content))
         )
 
-    with patch.object(coach.asyncio, "get_running_loop", return_value=loop), patch.object(
-        coach.chess.engine, "UciProtocol", return_value=engine
-    ), patch.object(coach.ollama, "AsyncClient", return_value=ollama_client):
+    with patch.object(coach.chess.engine, "popen_uci", popen_uci), patch.object(
+        coach.ollama, "AsyncClient", return_value=ollama_client
+    ):
         yield
 
 
@@ -96,10 +94,10 @@ class TestBestMoveAndLLM:
         assert result["best_move_san"] == "e4"
         assert result["best_move_uci"] == "e2e4"
 
-    async def test_fallback_mentions_lc0_and_san_when_llm_fails(self):
+    async def test_fallback_mentions_stockfish_and_san_when_llm_fails(self):
         with _engine(PovScore(Cp(30), chess.WHITE), llm_raises=True):
             result = await coach.get_best_move(START_FEN)
-        assert "LC0" in result["analysis"]
+        assert "Stockfish" in result["analysis"]
         assert result["best_move_san"] == "e4"  # SAN of the suggested move
 
     async def test_no_best_move_identified(self):
@@ -113,4 +111,4 @@ class TestErrorHandling:
     async def test_invalid_fen_returns_error_string(self):
         with _engine(PovScore(Cp(0), chess.WHITE)):
             result = await coach.get_best_move("not-a-valid-fen")
-        assert result["analysis"].startswith("Error during LC0 analysis:")
+        assert result["analysis"].startswith("Error during Stockfish analysis:")

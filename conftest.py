@@ -2,7 +2,7 @@
 Global pytest configuration.
 
 Keeps the test suite self-contained: it must run without a live PostgreSQL,
-Ollama or LC0 engine. We (1) provide safe defaults for the environment
+Ollama or Stockfish engine. We (1) provide safe defaults for the environment
 variables that modules read at import time, and (2) swap the database for a
 file-backed SQLite so no PostgreSQL server is needed.
 """
@@ -10,12 +10,8 @@ file-backed SQLite so no PostgreSQL server is needed.
 import os
 import tempfile
 
-# Defaults for env vars read at import time. In particular
-# chessdotcom_ai_coach/services/coach.py does int(os.getenv("CHESS_ENGINE_PORT"))
-# at module level, so a missing value would blow up on import.
+# Defaults for env vars read at import time.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
-os.environ.setdefault("CHESS_ENGINE_HOST", "127.0.0.1")
-os.environ.setdefault("CHESS_ENGINE_PORT", "9999")
 os.environ.setdefault("OLLAMA_HOST", "localhost")
 os.environ.setdefault("OLLAMA_PORT", "11434")
 
