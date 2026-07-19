@@ -1,0 +1,29 @@
+{% comment %}
+  Analysis history: one entry per analysed position (at most one per move —
+  re-analysing a position overwrites its entry). Expects `history`, a list of
+  CoachSuggestion, ordered by move number.
+{% endcomment %}
+<div class="coach__history">
+  <div class="coach__history-head">
+    <i class="fa-solid fa-clock-rotate-left"></i>
+    Analysis history
+    <span class="coach__history-count">{{ history|length }}</span>
+  </div>
+  <ul class="coach-hist">
+    {% for s in history %}
+    <li class="coach-hist__item">
+      <div class="coach-hist__top">
+        <span class="coach-hist__move">Move {{ s.move_no|default:"—" }}</span>
+        {% if s.best_move_san %}
+        <span class="coach-hist__best">{{ s.best_move_san }}</span>
+        {% endif %}
+        <span class="coach-hist__time">{{ s.updated_at|date:"d M · H:i" }}</span>
+      </div>
+      {% if s.eval_text %}
+      <div class="coach-hist__eval">{{ s.eval_text }}</div>
+      {% endif %}
+      <p class="coach-hist__text">{{ s.analysis|truncatechars:180 }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+</div>

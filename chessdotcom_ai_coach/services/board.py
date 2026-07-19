@@ -9,8 +9,12 @@ game views.
 
 from __future__ import annotations
 
+import io
 import re
 from typing import Dict, List, Optional
+
+import chess
+import chess.pgn
 
 # Unicode glyphs, keyed by lowercase piece letter. Colour is conveyed by the
 # `white` flag on each cell (styled via CSS), not by separate glyphs.
@@ -136,3 +140,67 @@ def last_move_from_pgn(pgn: Optional[str]) -> Optional[str]:
             # After a white move, the next SAN (same number) is black's.
             pending_black = True
     return last_san_labeled if last_san else None
+
+
+def moves_from_pgn(pgn: Optional[str]) -> List[Dict]:
+    """Expand a PGN into the played move list, one entry per half-move (ply).
+
+    Each entry is ``{move_no, color, san, uci, fen_before}`` where ``fen_before`` is
+    the position with the side-to-move about to play — the same position the coach
+    analyses, which is what lets a suggestion be tied back to its move. Returns an
+    empty list when the PGN is missing or unparseable.
+    """
+    if not pgn:
+        return []
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn))
+    except Exception:
+        return []
+    if game is None:
+        return []
+
+    board = game.board()
+    moves: List[Dict] = []
+    for move in game.mainline_moves():
+        color = "white" if board.turn == chess.WHITE else "black"
+        move_no = board.fullmove_number
+        fen_before = board.fen()
+        try:
+            san = board.san(move)
+        except Exception:
+            break  # malformed movetext — stop at the last valid ply
+        moves.append(
+            {
+                "move_no": move_no,
+                "color": color,
+                "san": san,
+                "uci": move.uci(),
+                "fen_before": fen_before,
+            }
+        )
+        board.push(move)
+    return moves
+
+
+def annotate_moves(moves: List[Dict], suggestions) -> List[Dict]:
+    """Tag each move with the coach analysis requested at that position, if any.
+
+    Joins on ``(move_no, color)`` — a unique key for a ply within a game — derived
+    from each suggestion's stored FEN. This is robust to FEN-formatting differences
+    (en-passant/halfmove clock) between Chess.com and python-chess. Mutates and
+    returns ``moves``, adding ``suggestion`` (object or ``None``), ``analyzed`` and
+    ``followed`` (the coach's best move equals the move actually played).
+    """
+    by_key: Dict[tuple, object] = {}
+    for s in suggestions:
+        fen = getattr(s, "fen", None)
+        move_no = getattr(s, "move_no", None) or fullmove_number(fen)
+        by_key[(move_no, active_color(fen))] = s
+
+    for m in moves:
+        s = by_key.get((m["move_no"], m["color"]))
+        best = getattr(s, "best_move_san", None) if s is not None else None
+        m["suggestion"] = s
+        m["analyzed"] = s is not None
+        m["followed"] = bool(best and best == m["san"])
+    return moves
