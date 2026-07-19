@@ -8,23 +8,13 @@ services:
       - POSTGRES_HOST=postgres
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
-      - CHESS_ENGINE_HOST=chess-engine
-      - CHESS_ENGINE_PORT=3333
     ports:
       - "8000:8000"
     depends_on:
-      chess-engine:
-        condition: service_started
       postgres:
         condition: service_healthy
       ollama:
         condition: service_started
-
-  chess-engine:
-    build:
-      context: chess_engine
-    ports:
-      - "3333:3333"
 
   postgres:
     image: postgres:18-alpine

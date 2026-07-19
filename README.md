@@ -8,7 +8,9 @@ grandmaster coach.
 
 - **Django 5** — ORM, templates, admin, session auth (custom `User` model)
 - **PostgreSQL** — via `psycopg2-binary`
-- **Ollama** — the AI coach (`chessdotcom_ai_coach/services/coach.py`)
+- **Ollama** — the AI coach prose (`chessdotcom_ai_coach/services/coach.py`)
+- **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
+  `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
 - **HTMX** — on-demand game loading and coach analysis, vendored via `django-htmx`
 - **Alpine.js** — board rendering (loaded from CDN, only on the game page)
@@ -41,6 +43,30 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `ALLOWED_HOSTS` | comma-separated hosts (default `*`) |
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
 | `OLLAMA_HOST` / `OLLAMA_PORT` | Ollama host and port (e.g. `localhost`/`11434`) |
+| `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
+
+Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
+image (see the `Dockerfile`). For local runs, download the same official
+`sf_18` build the container uses — into the repo root — so behaviour matches:
+
+```bash
+# Run from the repo root. avx2 works on any x86-64 CPU since ~2013; if you hit
+# "Illegal instruction" (older CPU / VM), swap avx2 for sse41-popcnt.
+curl -fL https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64-avx2.tar \
+  | tar -x --strip-components=1 -C . stockfish/stockfish-ubuntu-x86-64-avx2
+mv stockfish-ubuntu-x86-64-avx2 stockfish
+chmod +x stockfish
+./stockfish --version   # -> Stockfish ... sf_18
+```
+
+Then point `STOCKFISH_PATH` at it in your `.env` (the leading `./` makes it a
+path rather than a `PATH` lookup):
+
+```
+STOCKFISH_PATH=./stockfish
+```
+
+The `stockfish` binary in the repo root is git-ignored, so it is never committed.
 
 ```bash
 uv sync

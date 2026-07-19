@@ -1,14 +1,14 @@
 import os
-import asyncio
 from typing import Optional, TypedDict
 
 import chess
 import chess.engine
 import ollama
 
-# LC0 Engine Configuration (Remote service)
-CHESS_ENGINE_HOST = os.getenv("CHESS_ENGINE_HOST")
-CHESS_ENGINE_PORT = int(os.getenv("CHESS_ENGINE_PORT"))  # pyright: ignore[reportArgumentType]
+# Stockfish Engine Configuration.
+# The engine runs as a local subprocess inside this container; STOCKFISH_PATH
+# points at the binary (see the Dockerfile). Defaults to "stockfish" on PATH.
+STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 
 # LLM Configuration (Local Llama 3 via Ollama)
 # The model is fixed here on purpose: it is not user- or env-selectable.
@@ -18,51 +18,6 @@ OLLAMA_PORT = os.getenv("OLLAMA_PORT")
 OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 
 
-class _TcpUciTransport(asyncio.Protocol):
-    """Bridge a plain TCP socket to python-chess's subprocess-oriented ``UciProtocol``.
-
-    ``UciProtocol`` is an :class:`asyncio.SubprocessProtocol`: it writes commands to
-    the engine's "stdin" through ``transport.get_pipe_transport(0).write()`` and expects
-    the engine's output to arrive via ``Protocol.pipe_data_received(fd=1, ...)``. A raw
-    socket transport exposes neither, so this adapter sits between the two — presenting
-    the ``get_pipe_transport``/``write``/``get_returncode`` surface the engine needs,
-    while forwarding incoming socket bytes to the engine as if they were stdout (fd 1).
-    """
-
-    def __init__(self, engine: "chess.engine.Protocol") -> None:
-        self.engine = engine
-        self._transport: Optional[asyncio.Transport] = None
-        self._returncode: Optional[int] = None
-
-    # --- asyncio.Protocol callbacks (socket side) ---
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        self._transport = transport  # pyright: ignore[reportAttributeAccessIssue]
-        # Hand ourselves to the engine as its "subprocess transport".
-        self.engine.connection_made(self)  # pyright: ignore[reportArgumentType]
-
-    def data_received(self, data: bytes) -> None:
-        # Engine output is the equivalent of subprocess stdout (fd 1).
-        self.engine.pipe_data_received(1, data)
-
-    def connection_lost(self, exc: Optional[Exception]) -> None:
-        self._returncode = 0
-        self.engine.connection_lost(exc)
-
-    # --- SubprocessTransport surface expected by UciProtocol ---
-    def get_pipe_transport(self, fd: int) -> "asyncio.WriteTransport":
-        return self  # pyright: ignore[reportReturnType]
-
-    def write(self, data: bytes) -> None:
-        assert self._transport is not None
-        self._transport.write(data)
-
-    def get_returncode(self) -> Optional[int]:
-        return self._returncode
-
-    def get_pid(self) -> int:
-        return id(self)
-
-
 class Suggestion(TypedDict):
     """Structured coach output consumed by the game-detail templates."""
 
@@ -70,7 +25,7 @@ class Suggestion(TypedDict):
     eval_cp: Optional[float]  # centipawns (White POV), for the eval bar; None if N/A
     best_move_san: Optional[str]  # recommended move in SAN, e.g. "Nf5"
     best_move_uci: Optional[str]  # recommended move in UCI, e.g. "d4f5" (board highlight)
-    analysis: str  # coach prose (LLM, or the LC0 fallback text)
+    analysis: str  # coach prose (LLM, or the Stockfish fallback text)
 
 
 def _suggestion(
@@ -91,7 +46,7 @@ def _suggestion(
 
 async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
     """
-    Uses the LC0 engine to act as an AI Chess Coach.
+    Uses the Stockfish engine to act as an AI Chess Coach.
     Returns a structured analysis of the position and a suggested move.
 
     Args:
@@ -104,34 +59,24 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
     """
 
     try:
-        # Connect to the remote LC0 engine service via network.
-        # UciProtocol is subprocess-oriented, so we drive it over the TCP socket
-        # through _TcpUciTransport instead of handing it to create_connection
-        # directly.
-        loop = asyncio.get_running_loop()
-        engine = chess.engine.UciProtocol()
-        await loop.create_connection(
-            lambda: _TcpUciTransport(engine), CHESS_ENGINE_HOST, CHESS_ENGINE_PORT  # pyright: ignore[reportArgumentType]
-        )
+        # Launch Stockfish as a local subprocess. popen_uci spawns the process
+        # and runs the UCI handshake for us, returning the driver protocol.
+        _transport, engine = await chess.engine.popen_uci(STOCKFISH_PATH)
 
-        # create_connection only opens the socket; unlike popen_uci it does not
-        # run the UCI handshake, so we must initialize the protocol manually
-        # (send "uci" / await "uciok") before issuing any command.
-        await engine.initialize()
+        try:
+            board = chess.Board(fen)
 
-        board = chess.Board(fen)
-
-        # Analyze to find the best move (2-second limit).
-        # play() returns no analysis info by default, so request the score
-        # explicitly; result.info then carries the evaluation used below.
-        result = await engine.play(
-            board, chess.engine.Limit(time=2.0), info=chess.engine.INFO_SCORE
-        )
-        best_move = result.move
-        info = result.info
-
-        # Properly close the engine
-        await engine.quit()
+            # Analyze to find the best move (2-second limit).
+            # play() returns no analysis info by default, so request the score
+            # explicitly; result.info then carries the evaluation used below.
+            result = await engine.play(
+                board, chess.engine.Limit(time=2.0), info=chess.engine.INFO_SCORE
+            )
+            best_move = result.move
+            info = result.info
+        finally:
+            # Always terminate the engine subprocess, even on error.
+            await engine.quit()
 
         score = info.get("score")
         eval_cp: float | None = None
@@ -180,7 +125,7 @@ You are a Grandmaster AI Chess Coach. Analyze the following position and suggest
 Context:
 - FEN: {fen}
 - PGN (History): {pgn if pgn else "N/A"}
-- LC0 Evaluation: {eval_text}
+- Engine Evaluation: {eval_text}
 - Suggested Best Move: {best_move_san}
 
 Instructions:
@@ -193,7 +138,7 @@ Instructions:
 
         try:
             # llama3:8b on CPU can take ~80s to produce a full analysis, so allow
-            # a generous timeout; on failure we fall back to the LC0-only text.
+            # a generous timeout; on failure we fall back to the engine-only text.
             client = ollama.AsyncClient(host=OLLAMA_URL, timeout=150.0)
             response = await client.chat(  # pyright: ignore[reportCallIssue]
                 model=OLLAMA_MODEL,  # pyright: ignore[reportArgumentType]
@@ -222,11 +167,11 @@ Instructions:
 
         # Fallback response if LLM is disabled or fails
         fallback = f"""
-Here is the analysis from your Grandmaster AI Coach (based on LC0):
+Here is the analysis from your Grandmaster AI Coach (based on Stockfish):
 
 1. Evaluation: {eval_text}
 2. Best Move: {best_move_san}
-3. Note: The advanced LLM analysis service is currently unavailable, but LC0 recommends this move to maintain positional advantage.
+3. Note: The advanced LLM analysis service is currently unavailable, but Stockfish recommends this move to maintain positional advantage.
 """.strip()
         return _suggestion(
             eval_text=eval_text,
@@ -240,5 +185,5 @@ Here is the analysis from your Grandmaster AI Coach (based on LC0):
         # Error handling (e.g. binary not found, permission denied, UCI error)
         return _suggestion(
             eval_text="Analysis unavailable.",
-            analysis=f"Error during LC0 analysis: {str(e)}",
+            analysis=f"Error during Stockfish analysis: {str(e)}",
         )
