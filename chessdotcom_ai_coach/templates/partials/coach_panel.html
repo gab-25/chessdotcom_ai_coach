@@ -49,11 +49,18 @@
         hx-get="{% url 'coach_suggestion' id %}"
         hx-target="#game-body"
         hx-swap="innerHTML"
+        hx-sync="#game-body:replace"
         hx-disabled-elt="this"
+        {% if not is_user_turn %}disabled{% endif %}
       >
         <span class="coach__prompt-label">
+          {% if not is_user_turn %}
+          <i class="fa-solid fa-hourglass-half"></i>
+          Opponent to move
+          {% else %}
           <i class="fa-solid fa-wand-magic-sparkles"></i>
           {% if analysis %}Re-analyze{% else %}Request suggestion{% endif %}
+          {% endif %}
         </span>
         <span class="htmx-indicator"><span class="spinner"></span> Analyzing…</span>
       </button>

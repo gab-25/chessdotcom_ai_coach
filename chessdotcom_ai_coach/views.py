@@ -1,5 +1,6 @@
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse
 from django.shortcuts import redirect, render
 
 from .models import CoachSuggestion
@@ -58,6 +59,34 @@ def _uci_to_squares(uci):
     return []
 
 
+def _suggestion_for_fen(history, fen):
+    """Return ``(suggestion, highlight)`` for the stored analysis of ``fen``.
+
+    Lets the detail render (and the poll) keep the coach panel populated for the
+    position on the board until a new move changes the FEN. ``(None, None)`` when
+    no analysis exists for the current position.
+    """
+    for row in history:
+        if row.fen == fen:
+            suggestion = {
+                "eval_cp": row.eval_cp,
+                "eval_text": row.eval_text,
+                "best_move_san": row.best_move_san,
+                "best_move_uci": row.best_move_uci,
+                "analysis": row.analysis,
+            }
+            return suggestion, _uci_to_squares(row.best_move_uci)
+    return None, None
+
+
+def _is_user_turn(game_data, username):
+    """True when the side to move is the side the user plays."""
+    orientation = (
+        "white" if game_data["white_name"].lower() == username.lower() else "black"
+    )
+    return board_utils.active_color(game_data["game"].get("fen")) == orientation
+
+
 def _eval_fill(eval_cp):
     """Map a White-POV centipawn eval to the eval bar's white fill percentage."""
     if eval_cp is None:
@@ -93,6 +122,9 @@ def _build_detail_context(
     moves = board_utils.moves_from_pgn(pgn)
     board_utils.annotate_moves(moves, history)
 
+    active = board_utils.active_color(fen)
+    is_user_turn = active == orientation
+
     return {
         "id": id,
         "game": game,
@@ -107,7 +139,8 @@ def _build_detail_context(
             fen, highlight=highlight, flipped=(orientation == "black")
         ),
         "move_no": board_utils.fullmove_number(fen),
-        "turn_label": board_utils.active_color(fen).capitalize(),
+        "turn_label": active.capitalize(),
+        "is_user_turn": is_user_turn,
         "last_move": board_utils.last_move_from_pgn(pgn),
         "analysis": analysis,
         "eval_fill": _eval_fill(suggestion["eval_cp"]) if suggestion else 50,
@@ -168,24 +201,47 @@ def game_detail(request, id):
     try:
         game_data, error = _fetch_detail(request.user, id)
     except Exception as exc:
+        if request.htmx:
+            # Transient fetch failure during a poll: skip this cycle, keep polling.
+            return HttpResponse(status=204)
         return render(request, "error.html", {"message": str(exc)}, status=500)
 
     can_analyze = True
     if error:
         stored = game_store.stored_game(request.user, id)
         if stored is None:
+            if request.htmx:
+                return HttpResponse(status=286)  # nothing to poll for: stop the poll
             return render(request, "game.html", {"id": id, "error": error})
         game_data = _game_data_from_stored(stored)
         can_analyze = False  # past game: history is read-only
 
+    fen = game_data["game"].get("fen")
+
+    # HTMX poll (hidden poller inside #game-body) bookkeeping:
+    if request.htmx:
+        if not can_analyze:
+            # Game is no longer live -> HTTP 286 tells HTMX to stop polling.
+            return HttpResponse(status=286)
+        if request.GET.get("since") == fen:
+            # Position unchanged -> no swap, leave the DOM (and analysis) untouched.
+            return HttpResponse(status=204)
+
     history = list(CoachSuggestion.objects.filter(user=request.user, game_id=id))
+    suggestion, highlight = _suggestion_for_fen(history, fen)
     context = _build_detail_context(
         game_data,
         request.user.chess_username,
         id,
+        highlight=highlight,
+        analysis=suggestion["analysis"] if suggestion else None,
+        suggestion=suggestion,
         history=history,
         can_analyze=can_analyze,
     )
+    if request.htmx:
+        # Position changed since the client's `since` -> swap the fresh body.
+        return render(request, "partials/game_body.html", context)
     return render(request, "game.html", context)
 
 
@@ -208,6 +264,26 @@ async def coach_suggestion(request, id):
 
     game = game_data["game"]
     fen = game.get("fen", "")
+
+    if not _is_user_turn(game_data, user.chess_username):
+        # The button was stale (opponent moved before the poll refreshed): skip the
+        # analysis and re-render the body, which now shows the button disabled.
+        history = [
+            s async for s in CoachSuggestion.objects.filter(user=user, game_id=id)
+        ]
+        stored, highlight = _suggestion_for_fen(history, fen)
+        context = _build_detail_context(
+            game_data,
+            user.chess_username,
+            id,
+            highlight=highlight,
+            analysis=stored["analysis"] if stored else None,
+            suggestion=stored,
+            history=history,
+            can_analyze=True,
+        )
+        return render(request, "partials/game_body.html", context)
+
     suggestion = await get_best_move(fen, game.get("pgn"))
     highlight = _uci_to_squares(suggestion["best_move_uci"])
 

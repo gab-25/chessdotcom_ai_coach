@@ -11,18 +11,17 @@
     </span>
   </div>
 
-  <!-- Black -->
-  <div class="pbar pbar--top">
-    <span class="pbar__avatar pbar__avatar--b"></span>
-    <span class="pbar__id">
-      <span class="pbar__name">{{ black_name }}</span>
-      <span class="pbar__meta">{{ black_rating|default:"—" }}</span>
-    </span>
-  </div>
+  <!-- Top bar: the player whose pieces sit at the top of the (oriented) board -->
+  {% if orientation == "black" %}
+    {% include "partials/pbar.html" with pos="top" color="w" name=white_name rating=white_rating %}
+  {% else %}
+    {% include "partials/pbar.html" with pos="top" color="b" name=black_name rating=black_rating %}
+  {% endif %}
 
   <!-- Eval bar + board -->
   <div class="board-stage">
-    <div class="evalbar">
+    {% comment %} Flip the eval bar with the board so White's fill stays on White's side. {% endcomment %}
+    <div class="evalbar{% if orientation == "black" %} evalbar--flipped{% endif %}">
       <div class="evalbar__fill" style="height:{{ eval_fill|default:50 }}%"></div>
       <div class="evalbar__mid"></div>
     </div>
@@ -31,20 +30,15 @@
     </div>
   </div>
 
-  <!-- White -->
-  <div class="pbar pbar--bottom">
-    <span class="pbar__avatar pbar__avatar--w"></span>
-    <span class="pbar__id">
-      <span class="pbar__name">{{ white_name }}</span>
-      <span class="pbar__meta">{{ white_rating|default:"—" }}</span>
-    </span>
-  </div>
+  <!-- Bottom bar: the player whose pieces sit at the bottom of the (oriented) board -->
+  {% if orientation == "black" %}
+    {% include "partials/pbar.html" with pos="bottom" color="b" name=black_name rating=black_rating %}
+  {% else %}
+    {% include "partials/pbar.html" with pos="bottom" color="w" name=white_name rating=white_rating %}
+  {% endif %}
 
-  <!-- Last move + refresh -->
+  <!-- Last move -->
   <div class="movebar">
     <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
-    <div class="movebar__nav">
-      <a href="{% url 'game_detail' id %}" title="Reload position" style="color:inherit"><span>&#8635;</span></a>
-    </div>
   </div>
 </div>
