@@ -6,6 +6,10 @@ FROM debian:bookworm-slim AS engine
 
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
+# Extract into a dedicated dir: the tarball unpacks a "stockfish/" folder, which
+# would collide with the /stockfish target if we worked from the root.
+WORKDIR /build
+
 # avx2 is a good default for modern x86-64 CPUs. On older CPUs/VMs that raise
 # "Illegal instruction", rebuild with SF_VARIANT=stockfish-ubuntu-x86-64-sse41-popcnt.
 ARG SF_VARIANT=stockfish-ubuntu-x86-64-avx2
