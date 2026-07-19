@@ -972,6 +972,180 @@ input {
   }
 }
 
+/* ===================== Coach history (timeline) ===================== */
+.coach__history {
+  border-top: 1px solid var(--line);
+  padding: 18px 22px 22px;
+}
+.coach__history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 12px;
+}
+.coach__history-count {
+  margin-left: auto;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  border-radius: 20px;
+  padding: 2px 9px;
+  font-weight: 600;
+}
+.coach-hist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.coach-hist__item {
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.coach-hist__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.coach-hist__move {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.coach-hist__best {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--ink);
+}
+.coach-hist__time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.coach-hist__eval {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--green-dark);
+  margin-bottom: 4px;
+}
+.coach-hist__text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin: 0;
+}
+
+/* ===================== Moves list ===================== */
+.moves {
+  margin-top: 24px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.moves__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.moves__list {
+  list-style: none;
+  margin: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+.moves__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+.moves__item--analyzed {
+  background: var(--green-soft);
+}
+.moves__no {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+  min-width: 32px;
+}
+.moves__san {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--ink);
+}
+.moves__badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brass);
+  background: rgba(183, 142, 84, 0.14);
+  padding: 3px 8px;
+  border-radius: 20px;
+}
+.moves__badge--followed {
+  color: var(--green-dark);
+  background: var(--green-soft);
+}
+
+/* ===================== Past games ===================== */
+.past-games {
+  margin-top: 36px;
+}
+.past-games__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 16px;
+}
+.gm-card--past {
+  opacity: 0.9;
+}
+.gm-card__ended {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+}
+
 /* ===================== Responsive ===================== */
 @media (max-width: 860px) {
   .game-layout {

@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from asgiref.sync import sync_to_async
 
+from chessdotcom_ai_coach.models import CoachSuggestion, Game
+
 
 @pytest.fixture
 def user(django_user_model):
@@ -88,6 +90,24 @@ class TestGameList:
         assert response.status_code == 200
         assert b"No active games" in response.content
 
+    def test_persists_current_games_on_poll(self, mock_client, auth_client, user):
+        mock_client.return_value.my_current_games.return_value = [_sample_game()]
+
+        auth_client.get("/games")
+
+        assert Game.objects.filter(user=user, game_id="944768131", is_active=True).exists()
+
+    def test_renders_past_games_section(self, mock_client, auth_client, user):
+        mock_client.return_value.my_current_games.return_value = []
+        Game.objects.create(
+            user=user, game_id="old1", black_name="PastFoe", is_active=False
+        )
+
+        response = auth_client.get("/games")
+
+        assert b"Past games" in response.content
+        assert b"PastFoe" in response.content
+
 
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.views.Client")
@@ -129,6 +149,31 @@ class TestGameDetail:
         response = auth_client.get("/game/944768131")
 
         assert response.status_code == 500
+
+    def test_falls_back_to_stored_game_when_not_current(
+        self, mock_client, auth_client, user
+    ):
+        # Game is no longer current on Chess.com...
+        mock_client.return_value.game_detail.return_value = None
+        # ...but we have a persisted snapshot.
+        Game.objects.create(
+            user=user,
+            game_id="944768131",
+            white_name="MyUser",
+            black_name="Opponent",
+            pgn='[Event "T"]\n\n1. e4 e5 *',
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            is_active=False,
+        )
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.status_code == 200
+        # Past game: read-only, no re-analysis, but the moves are shown.
+        assert response.context["can_analyze"] is False
+        assert b"e4" in response.content
+        assert b"Re-analyze" not in response.content
+        assert b"Request suggestion" not in response.content
 
 
 @pytest.mark.django_db(transaction=True)
@@ -172,6 +217,65 @@ class TestCoachSuggestion:
         assert response.status_code == 200
         assert b"Game not found" in response.content
         mock_coach.assert_not_called()
+        assert await sync_to_async(CoachSuggestion.objects.count)() == 0
+
+    async def test_reanalyze_same_position_overwrites(
+        self, mock_client, mock_coach, async_client, user
+    ):
+        await sync_to_async(async_client.force_login)(user)
+        mock_client.return_value.game_detail.return_value = {
+            "game": _sample_game(),
+            "white_name": "MyUser",
+            "black_name": "Opponent",
+        }
+        mock_coach.return_value = {
+            "eval_text": "The position is balanced (+0.20).",
+            "eval_cp": 0.2,
+            "best_move_san": "e4",
+            "best_move_uci": "e2e4",
+            "analysis": "Play e4.",
+        }
+
+        await async_client.get("/game/944768131/coach")
+        await async_client.get("/game/944768131/coach")  # same FEN → overwrite
+
+        count = await sync_to_async(
+            CoachSuggestion.objects.filter(user=user, game_id="944768131").count
+        )()
+        assert count == 1
+
+    async def test_new_position_creates_new_row(
+        self, mock_client, mock_coach, async_client, user
+    ):
+        await sync_to_async(async_client.force_login)(user)
+        first = {
+            "game": _sample_game(),
+            "white_name": "MyUser",
+            "black_name": "Opponent",
+        }
+        advanced = _sample_game()
+        advanced["fen"] = "rnbqkbnr/pppp1ppp/8/4p3/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 2"
+        second = {
+            "game": advanced,
+            "white_name": "MyUser",
+            "black_name": "Opponent",
+        }
+        mock_client.return_value.game_detail.side_effect = [first, second]
+        mock_coach.return_value = {
+            "eval_text": "The position is balanced (+0.20).",
+            "eval_cp": 0.2,
+            "best_move_san": "e4",
+            "best_move_uci": "e2e4",
+            "analysis": "Play e4.",
+        }
+
+        await async_client.get("/game/944768131/coach")
+        await async_client.get("/game/944768131/coach")  # different FEN → new row
+
+        count = await sync_to_async(
+            CoachSuggestion.objects.filter(user=user, game_id="944768131").count
+        )()
+        assert count == 2
 
 
 @pytest.mark.django_db

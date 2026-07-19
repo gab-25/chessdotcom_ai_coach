@@ -42,6 +42,7 @@
       {% endif %}
     </div>
 
+    {% if can_analyze %}
     <div class="coach__actions">
       <button
         class="btn btn--accent btn--block {% if analysis %}coach__reanalyze{% endif %}"
@@ -57,5 +58,10 @@
         <span class="htmx-indicator"><span class="spinner"></span> Analyzing…</span>
       </button>
     </div>
+    {% endif %}
+
+    {% if history %}
+    {% include "partials/coach_history.html" %}
+    {% endif %}
   </div>
 </div>

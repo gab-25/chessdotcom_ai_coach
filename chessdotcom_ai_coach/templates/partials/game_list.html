@@ -49,3 +49,44 @@
   {% endfor %}
   {% endif %}
 </div>
+
+{% if past_games %}
+<div class="past-games">
+  <h2 class="past-games__title"><i class="fa-solid fa-clock-rotate-left"></i> Past games</h2>
+  <div class="games-grid">
+    {% for game in past_games %}
+    <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
+      <div class="gm-card__head">
+        <span class="badge">{{ game.time_class|capfirst }}</span>
+        <span class="gm-card__ended">ENDED{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
+      </div>
+
+      <!-- Black -->
+      <div class="gm-card__player">
+        <span class="gm-card__avatar gm-card__avatar--b"></span>
+        <span class="gm-card__id">
+          <span class="gm-card__name">{{ game.black_name }}</span>
+          <span class="gm-card__meta">{{ game.black_rating|default:"—" }}</span>
+        </span>
+      </div>
+
+      <!-- Board -->
+      <div class="gm-card__board">
+        <div class="gm-card__board-frame">
+          {% include "partials/board.html" with cells=game.cells board_class="board--mini" %}
+        </div>
+      </div>
+
+      <!-- White -->
+      <div class="gm-card__player gm-card__player--white">
+        <span class="gm-card__avatar gm-card__avatar--w"></span>
+        <span class="gm-card__id">
+          <span class="gm-card__name">{{ game.white_name }}</span>
+          <span class="gm-card__meta">{{ game.white_rating|default:"—" }}</span>
+        </span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
