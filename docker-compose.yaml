@@ -17,7 +17,7 @@ services:
       postgres:
         condition: service_healthy
       ollama:
-        condition: service_healthy
+        condition: service_started
 
   chess-engine:
     build:
@@ -42,20 +42,11 @@ services:
       start_period: 5s
 
   ollama:
-    build:
-      context: ollama
-    env_file:
-      - .env
+    image: ollama/ollama:latest
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep -q \"$${OLLAMA_MODEL:-llama3:8b}\""]
-      interval: 10s
-      timeout: 5s
-      retries: 60
-      start_period: 10s
 
 volumes:
   postgres-data:
