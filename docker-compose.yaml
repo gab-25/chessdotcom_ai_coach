@@ -12,9 +12,12 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - chess-engine
-      - postgres
-      - ollama
+      chess-engine:
+        condition: service_started
+      postgres:
+        condition: service_started
+      ollama:
+        condition: service_healthy
 
   chess-engine:
     build:
@@ -33,11 +36,20 @@ services:
       - postgres-data:/var/lib/postgresql
 
   ollama:
-    image: ollama/ollama:latest
+    build:
+      context: ollama
+    env_file:
+      - .env
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q \"$${OLLAMA_MODEL:-llama3:8b}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
 
 volumes:
   postgres-data:
