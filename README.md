@@ -47,19 +47,26 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 
 Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
 image (see the `Dockerfile`). For local runs, download the same official
-`sf_18` build the container uses so behaviour matches:
+`sf_18` build the container uses — into the repo root — so behaviour matches:
 
 ```bash
-# avx2 works on any x86-64 CPU since ~2013; if you hit "Illegal instruction"
-# (older CPU / VM), swap avx2 for sse41-popcnt.
-curl -fL https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64-avx2.tar | tar -x
-sudo mv stockfish/stockfish-ubuntu-x86-64-avx2 /usr/local/bin/stockfish
-sudo chmod +x /usr/local/bin/stockfish
-stockfish --version   # -> Stockfish ... sf_18
+# Run from the repo root. avx2 works on any x86-64 CPU since ~2013; if you hit
+# "Illegal instruction" (older CPU / VM), swap avx2 for sse41-popcnt.
+curl -fL https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64-avx2.tar \
+  | tar -x --strip-components=1 -C . stockfish/stockfish-ubuntu-x86-64-avx2
+mv stockfish-ubuntu-x86-64-avx2 stockfish
+chmod +x stockfish
+./stockfish --version   # -> Stockfish ... sf_18
 ```
 
-This lands on `PATH` as `stockfish`, which the default `STOCKFISH_PATH` resolves.
-To keep the binary elsewhere instead, point `STOCKFISH_PATH` at its absolute path.
+Then point `STOCKFISH_PATH` at it in your `.env` (the leading `./` makes it a
+path rather than a `PATH` lookup):
+
+```
+STOCKFISH_PATH=./stockfish
+```
+
+The `stockfish` binary in the repo root is git-ignored, so it is never committed.
 
 ```bash
 uv sync

@@ -210,3 +210,6 @@ database.db
 
 # Django collected static
 staticfiles/
+
+# Local Stockfish engine binary (downloaded for local dev, see README)
+/stockfish
