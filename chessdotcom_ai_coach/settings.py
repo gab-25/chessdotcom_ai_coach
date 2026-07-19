@@ -45,6 +45,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves static files directly from gunicorn (Django's dev server
+    # only serves them under runserver). Must sit right after SecurityMiddleware.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -109,6 +112,20 @@ USE_TZ = True
 # --- Static files ----------------------------------------------------------
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Let WhiteNoise compress static files. We use the non-manifest backend because
+# the bundled Font Awesome all.min.css references webfonts (fa-brands-400,
+# fa-regular-400, fa-solid-900.ttf, ...) that aren't shipped; the manifest
+# backend parses those url() refs and would fail collectstatic on the missing
+# files.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
