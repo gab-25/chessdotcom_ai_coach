@@ -27,11 +27,14 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
     the LC0 fallback branch.
     """
     engine = MagicMock()
+    engine.initialize = AsyncMock()
     engine.play = AsyncMock(return_value=SimpleNamespace(move=move, info={"score": score}))
     engine.quit = AsyncMock()
 
+    # The code builds a real UciProtocol and drives it over a socket opened by
+    # create_connection; both are stubbed here so no network I/O happens.
     loop = MagicMock()
-    loop.create_connection = AsyncMock(return_value=(MagicMock(), engine))
+    loop.create_connection = AsyncMock(return_value=(MagicMock(), MagicMock()))
 
     ollama_client = MagicMock()
     if llm_raises:
@@ -42,8 +45,8 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
         )
 
     with patch.object(coach.asyncio, "get_running_loop", return_value=loop), patch.object(
-        coach.ollama, "AsyncClient", return_value=ollama_client
-    ):
+        coach.chess.engine, "UciProtocol", return_value=engine
+    ), patch.object(coach.ollama, "AsyncClient", return_value=ollama_client):
         yield
 
 

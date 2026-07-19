@@ -15,6 +15,51 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 
 
+class _TcpUciTransport(asyncio.Protocol):
+    """Bridge a plain TCP socket to python-chess's subprocess-oriented ``UciProtocol``.
+
+    ``UciProtocol`` is an :class:`asyncio.SubprocessProtocol`: it writes commands to
+    the engine's "stdin" through ``transport.get_pipe_transport(0).write()`` and expects
+    the engine's output to arrive via ``Protocol.pipe_data_received(fd=1, ...)``. A raw
+    socket transport exposes neither, so this adapter sits between the two — presenting
+    the ``get_pipe_transport``/``write``/``get_returncode`` surface the engine needs,
+    while forwarding incoming socket bytes to the engine as if they were stdout (fd 1).
+    """
+
+    def __init__(self, engine: "chess.engine.Protocol") -> None:
+        self.engine = engine
+        self._transport: Optional[asyncio.Transport] = None
+        self._returncode: Optional[int] = None
+
+    # --- asyncio.Protocol callbacks (socket side) ---
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self._transport = transport  # pyright: ignore[reportAttributeAccessIssue]
+        # Hand ourselves to the engine as its "subprocess transport".
+        self.engine.connection_made(self)  # pyright: ignore[reportArgumentType]
+
+    def data_received(self, data: bytes) -> None:
+        # Engine output is the equivalent of subprocess stdout (fd 1).
+        self.engine.pipe_data_received(1, data)
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        self._returncode = 0
+        self.engine.connection_lost(exc)
+
+    # --- SubprocessTransport surface expected by UciProtocol ---
+    def get_pipe_transport(self, fd: int) -> "asyncio.WriteTransport":
+        return self  # pyright: ignore[reportReturnType]
+
+    def write(self, data: bytes) -> None:
+        assert self._transport is not None
+        self._transport.write(data)
+
+    def get_returncode(self) -> Optional[int]:
+        return self._returncode
+
+    def get_pid(self) -> int:
+        return id(self)
+
+
 class Suggestion(TypedDict):
     """Structured coach output consumed by the game-detail templates."""
 
@@ -56,15 +101,29 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
     """
 
     try:
-        # Connect to the remote LC0 engine service via network
+        # Connect to the remote LC0 engine service via network.
+        # UciProtocol is subprocess-oriented, so we drive it over the TCP socket
+        # through _TcpUciTransport instead of handing it to create_connection
+        # directly.
         loop = asyncio.get_running_loop()
-        transport, engine = await loop.create_connection(chess.engine.UciProtocol, CHESS_ENGINE_HOST, CHESS_ENGINE_PORT)  # pyright: ignore[reportArgumentType]
+        engine = chess.engine.UciProtocol()
+        await loop.create_connection(
+            lambda: _TcpUciTransport(engine), CHESS_ENGINE_HOST, CHESS_ENGINE_PORT  # pyright: ignore[reportArgumentType]
+        )
+
+        # create_connection only opens the socket; unlike popen_uci it does not
+        # run the UCI handshake, so we must initialize the protocol manually
+        # (send "uci" / await "uciok") before issuing any command.
+        await engine.initialize()
 
         board = chess.Board(fen)
 
-        # Analyze to find the best move (2-second limit)
-        # PlayResult contains the .info attribute with analysis data (score, depth, etc.)
-        result = await engine.play(board, chess.engine.Limit(time=2.0))
+        # Analyze to find the best move (2-second limit).
+        # play() returns no analysis info by default, so request the score
+        # explicitly; result.info then carries the evaluation used below.
+        result = await engine.play(
+            board, chess.engine.Limit(time=2.0), info=chess.engine.INFO_SCORE
+        )
         best_move = result.move
         info = result.info
 
@@ -129,7 +188,9 @@ Instructions:
 """
 
         try:
-            client = ollama.AsyncClient(host=OLLAMA_HOST, timeout=30.0)
+            # llama3:8b on CPU can take ~80s to produce a full analysis, so allow
+            # a generous timeout; on failure we fall back to the LC0-only text.
+            client = ollama.AsyncClient(host=OLLAMA_HOST, timeout=150.0)
             response = await client.chat(  # pyright: ignore[reportCallIssue]
                 model=OLLAMA_MODEL,  # pyright: ignore[reportArgumentType]
                 messages=[
