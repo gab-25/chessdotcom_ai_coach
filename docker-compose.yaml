@@ -17,22 +17,45 @@ services:
         condition: service_started
 
   worker:
-    # Background worker: auto-starts coach analysis for active games. Reuses the
-    # app image (ships Stockfish + the Chess.com/Ollama clients) but runs the
-    # scheduler loop instead of gunicorn.
+    # Celery worker: executes auto-analysis tasks.
     build: .
-    command: python manage.py analyze_active_games
+    command: celery -A chessdotcom_ai_coach worker --loglevel=info
     env_file:
       - .env
     environment:
       - POSTGRES_HOST=postgres
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
+      - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       ollama:
         condition: service_started
+      redis:
+        condition: service_started
+
+  beat:
+    # Celery Beat: schedules periodic auto-analysis tasks.
+    build: .
+    command: celery -A chessdotcom_ai_coach beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
 
   postgres:
     image: postgres:18-alpine

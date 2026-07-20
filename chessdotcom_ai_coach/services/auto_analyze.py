@@ -4,11 +4,11 @@ One "tick" of the background worker: scan the users who have active games,
 re-fetch their current games from Chess.com, and start the coach analysis for
 every position where it is the user's turn and no analysis exists yet.
 
-Kept as a plain, synchronous service (no Celery/queue — the project has none)
-so it is trivially testable and driven by the ``analyze_active_games``
-management command loop. The analysis itself (``get_best_move``) is async, so
-each call is run to completion via ``asyncio.run``; positions are processed
-sequentially to stay resource-aware (Stockfish + a local LLM on a small node).
+Kept as a plain, synchronous service so it is trivially testable and callable
+from either Celery tasks or management commands. The analysis itself
+(``get_best_move``) is async, so each call is run to completion via
+``asyncio.run``; positions are processed sequentially to stay resource-aware
+(Stockfish + a local LLM on a small node).
 """
 
 from __future__ import annotations

@@ -45,8 +45,9 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `OLLAMA_HOST` / `OLLAMA_PORT` | Ollama host and port (e.g. `localhost`/`11434`) |
 | `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
 | `AUTO_ANALYZE_ENABLED` | enable the auto-analysis worker (default `true`) |
-| `AUTO_ANALYZE_INTERVAL` | seconds between worker scan ticks (default `1.0`) |
+| `AUTO_ANALYZE_INTERVAL` | seconds between Celery Beat ticks (default `1.0`) |
 | `AUTO_ANALYZE_MAX_PER_TICK` | max analyses started per tick (default unlimited) |
+| `CELERY_BROKER_URL` | Celery broker URL (default `redis://redis:6379/0`) |
 
 Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
 image (see the `Dockerfile`). For local runs, download the same official
@@ -88,27 +89,25 @@ The AI coach requires the Ollama service with the `llama3.2:3b` model pulled:
 docker compose exec ollama ollama pull llama3.2:3b
 ```
 
-## Auto-analysis worker
+## Auto-analysis worker (Celery)
 
-`analyze_active_games` is a background worker that periodically scans every user
-with active games, re-fetches their current games from Chess.com, and
-automatically starts the coach analysis for each position where it is the user's
-turn and no analysis exists yet. It runs as the `worker` service in
-`docker-compose.yaml` (started automatically with `docker compose up`).
+Auto-analysis runs as a periodic Celery task. `beat` schedules the task every
+`AUTO_ANALYZE_INTERVAL` seconds and `worker` executes it. Each tick scans every
+user with active games, re-fetches current games from Chess.com, and
+automatically starts coach analysis for positions where it is the user's turn
+and no analysis exists yet.
 
 Analysis is started **at most once per position**: the `(user, game_id, fen)`
 uniqueness of `CoachSuggestion` guarantees no duplicate work, and the worker
 never overwrites an existing analysis — the manual "Re-analyze" button stays the
 only way to refresh a position.
 
-Each analysis blocks the loop for its full duration (~2s Stockfish plus ~20-30s
-local LLM inference), so `AUTO_ANALYZE_INTERVAL` is the minimum gap between ticks,
-not a guaranteed one-tick-per-second rate. Tune it (and `AUTO_ANALYZE_MAX_PER_TICK`)
-to stay within your node's resources.
+Each analysis blocks a worker slot for its full duration (~2s Stockfish plus
+~20-30s local LLM inference), so tune `AUTO_ANALYZE_INTERVAL` and
+`AUTO_ANALYZE_MAX_PER_TICK` to stay within your node's resources.
 
-Run it manually — a single pass, or the full loop:
+Run one tick manually:
 
 ```bash
-uv run python manage.py analyze_active_games --once
-uv run python manage.py analyze_active_games --interval 1 --max-per-tick 5
+uv run python manage.py analyze_active_games --max-per-tick 5
 ```

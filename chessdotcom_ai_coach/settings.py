@@ -133,15 +133,53 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT")
 
-# --- Auto-analyze worker ---------------------------------------------------
-# Defaults for the ``analyze_active_games`` management command (a background
-# worker that auto-starts coach analysis for active games). Overridable per run
-# via the command's --interval / --max-per-tick flags.
+# --- Celery / auto-analyze --------------------------------------------------
+def _read_positive_float_env(name: str, default: str) -> float:
+    raw = os.getenv(name, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a valid number, got {raw!r}.") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0, got {value}.")
+    return value
+
+
+def _read_non_negative_int_or_none_env(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}.") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}.")
+    return value
+
+
+# Celery broker/back-end (Redis by default in docker-compose).
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
+# Defaults for the periodic auto-analysis task.
 AUTO_ANALYZE_ENABLED = os.getenv("AUTO_ANALYZE_ENABLED", "true").lower() in (
     "1",
     "true",
     "yes",
 )
-AUTO_ANALYZE_INTERVAL = float(os.getenv("AUTO_ANALYZE_INTERVAL", "1.0"))
-_max_per_tick = os.getenv("AUTO_ANALYZE_MAX_PER_TICK")
-AUTO_ANALYZE_MAX_PER_TICK = int(_max_per_tick) if _max_per_tick else None
+AUTO_ANALYZE_INTERVAL = _read_positive_float_env("AUTO_ANALYZE_INTERVAL", "1.0")
+AUTO_ANALYZE_MAX_PER_TICK = _read_non_negative_int_or_none_env(
+    "AUTO_ANALYZE_MAX_PER_TICK"
+)
+
+if AUTO_ANALYZE_ENABLED:
+    CELERY_BEAT_SCHEDULE = {
+        "auto-analyze-active-games": {
+            "task": "chessdotcom_ai_coach.tasks.auto_analyze_active_games",
+            "schedule": AUTO_ANALYZE_INTERVAL,
+            "kwargs": {"max_per_tick": AUTO_ANALYZE_MAX_PER_TICK},
+        }
+    }
+else:
+    CELERY_BEAT_SCHEDULE = {}
