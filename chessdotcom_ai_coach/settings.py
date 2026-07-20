@@ -179,6 +179,9 @@ if AUTO_ANALYZE_ENABLED:
             "task": "chessdotcom_ai_coach.tasks.auto_analyze_active_games",
             "schedule": AUTO_ANALYZE_INTERVAL,
             "kwargs": {"max_per_tick": AUTO_ANALYZE_MAX_PER_TICK},
+            # Drop stale ticks that were not picked up within one interval so
+            # they do not pile up in the broker when the worker falls behind.
+            "options": {"expires": AUTO_ANALYZE_INTERVAL},
         }
     }
 else:

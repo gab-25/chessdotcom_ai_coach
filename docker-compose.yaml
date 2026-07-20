@@ -18,8 +18,11 @@ services:
 
   worker:
     # Celery worker: executes auto-analysis tasks.
+    # Concurrency is pinned to 1 because each tick is long-running
+    # (~2s Stockfish + ~20-30s LLM) and running concurrent ticks would
+    # overwhelm CPU/LLM/Stockfish and increase duplicate-work races.
     build: .
-    command: celery -A chessdotcom_ai_coach worker --loglevel=info
+    command: celery -A chessdotcom_ai_coach worker --loglevel=info --concurrency=1
     env_file:
       - .env
     environment:
