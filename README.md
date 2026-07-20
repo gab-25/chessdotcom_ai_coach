@@ -105,9 +105,3 @@ only way to refresh a position.
 Each analysis blocks a worker slot for its full duration (~2s Stockfish plus
 ~20-30s local LLM inference), so tune `AUTO_ANALYZE_INTERVAL` and
 `AUTO_ANALYZE_MAX_PER_TICK` to stay within your node's resources.
-
-Run one tick manually:
-
-```bash
-uv run python manage.py analyze_active_games --max-per-tick 5
-```
