@@ -16,6 +16,24 @@ services:
       ollama:
         condition: service_started
 
+  worker:
+    # Background worker: auto-starts coach analysis for active games. Reuses the
+    # app image (ships Stockfish + the Chess.com/Ollama clients) but runs the
+    # scheduler loop instead of gunicorn.
+    build: .
+    command: python manage.py analyze_active_games
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
   postgres:
     image: postgres:18-alpine
     environment:

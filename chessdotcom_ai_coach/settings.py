@@ -132,3 +132,16 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # --- Integrations ----------------------------------------------------------
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT")
+
+# --- Auto-analyze worker ---------------------------------------------------
+# Defaults for the ``analyze_active_games`` management command (a background
+# worker that auto-starts coach analysis for active games). Overridable per run
+# via the command's --interval / --max-per-tick flags.
+AUTO_ANALYZE_ENABLED = os.getenv("AUTO_ANALYZE_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+AUTO_ANALYZE_INTERVAL = float(os.getenv("AUTO_ANALYZE_INTERVAL", "1.0"))
+_max_per_tick = os.getenv("AUTO_ANALYZE_MAX_PER_TICK")
+AUTO_ANALYZE_MAX_PER_TICK = int(_max_per_tick) if _max_per_tick else None
