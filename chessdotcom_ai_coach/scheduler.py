@@ -93,13 +93,6 @@ def check_active_games_for_analysis() -> None:
 # Lazy import for Django's F() expression – resolved when the module is used.
 # ---------------------------------------------------------------------------
 
-def _lazy_import_f():
-    """Return Django's ``F`` expression class, importing it on first call."""
-    from django.db.models import F  # noqa: PLC0415
-    return F
-
-
-# Overwrite module-level placeholder once Django is available.
 class _LazyF:
     """Proxy that behaves like ``django.db.models.F`` after Django setup."""
 
