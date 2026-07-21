@@ -38,11 +38,17 @@ class Game(models.Model):
     pgn = models.TextField(blank=True)  # snapshot: the source of the move history
     fen = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)  # seen in the latest "current" fetch
+    analysis_enqueued_fen = models.CharField(max_length=100, blank=True, default="")
+    analysis_enqueued_at = models.DateTimeField(null=True, blank=True)
+    analysis_started_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["is_active", "analysis_enqueued_fen", "updated_at"]),
+        ]
         constraints = [
             models.UniqueConstraint(fields=["user", "game_id"], name="uniq_user_game")
         ]

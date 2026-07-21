@@ -15,6 +15,7 @@ grandmaster coach.
 - **HTMX** — on-demand game loading and coach analysis, vendored via `django-htmx`
 - **Alpine.js** — board rendering (loaded from CDN, only on the game page)
 - **Gunicorn** — WSGI server in the container
+- **Celery + Redis** — background scheduler/worker for automatic live-game analysis
 - Custom hand-written CSS theme (no Tailwind) in the `theme` app
   (`theme/static/css/styles.css`)
 
@@ -44,6 +45,11 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
 | `OLLAMA_HOST` / `OLLAMA_PORT` | Ollama host and port (e.g. `localhost`/`11434`) |
 | `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
+| `REDIS_URL` | Redis broker/backend used by Celery (`redis://localhost:6379/0`) |
+| `ANALYSIS_SCHEDULER_INTERVAL_SECONDS` | Celery Beat interval in seconds (default `1`) |
+| `ANALYSIS_SCHEDULER_BATCH_SIZE` | max active games enqueued per scheduler tick (default `10`) |
+| `ANALYSIS_MAX_CONCURRENCY` | worker process concurrency (default `2`) |
+| `ANALYSIS_TASK_TIMEOUT_SECONDS` | max time a queued analysis task stays valid (default `120`) |
 
 Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
 image (see the `Dockerfile`). For local runs, download the same official
@@ -83,4 +89,11 @@ The AI coach requires the Ollama service with the `llama3.2:3b` model pulled:
 
 ```bash
 docker compose exec ollama ollama pull llama3.2:3b
+```
+
+Background analysis for active games is started by Celery Beat every second; workers
+consume those analysis tasks. For a one-off manual scheduler tick:
+
+```bash
+python manage.py analyze_active_games
 ```

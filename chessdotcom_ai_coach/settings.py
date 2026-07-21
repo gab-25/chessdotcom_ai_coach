@@ -12,6 +12,13 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
 # --- Core ------------------------------------------------------------------
 SECRET_KEY = os.getenv("SECRET_KEY", "a-very-secret-key")
 DEBUG = os.getenv("DEBUG", "true").lower() in ("1", "true", "yes")
@@ -132,3 +139,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # --- Integrations ----------------------------------------------------------
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT")
+
+CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = _int_env("CELERY_PREFETCH_MULTIPLIER", 1)
