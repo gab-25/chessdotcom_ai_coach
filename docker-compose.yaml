@@ -39,23 +39,6 @@ services:
       redis:
         condition: service_healthy
 
-  # APScheduler: the single scheduler (no Celery Beat). Polls active games every
-  # 1s and enqueues analysis tasks. Runs as its own process so exactly one
-  # scheduler instance exists.
-  scheduler:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_HOST=postgres
-      - REDIS_URL=redis://redis:6379/0
-    command: python manage.py run_scheduler
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
   redis:
     image: redis:7-alpine
     ports:
