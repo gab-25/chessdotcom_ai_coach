@@ -132,3 +132,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # --- Integrations ----------------------------------------------------------
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT")
+
+# --- Celery ----------------------------------------------------------------
+# Redis is the broker and result backend. The scheduler (APScheduler) enqueues
+# `analyze_game_task`; a dedicated worker executes it out of the request path.
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_TASK_ALWAYS_EAGER = False

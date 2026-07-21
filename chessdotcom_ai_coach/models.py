@@ -67,7 +67,18 @@ class CoachSuggestion(models.Model):
     game_id = models.CharField(max_length=64)  # decoupled: no FK to Game required
     fen = models.CharField(max_length=100)  # analysed position = the move's join key
     move_no = models.PositiveIntegerField(null=True, blank=True)
-    eval_text = models.CharField(max_length=255)
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"  # enqueued, analysis in flight
+        DONE = "done", "Done"  # analysis computed and persisted
+
+    # The row doubles as the in-flight lock: the scheduler creates it PENDING (via
+    # get_or_create on the unique key) and only enqueues when it was just created,
+    # so a position under analysis is not re-enqueued on every 1s poll tick.
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    eval_text = models.CharField(max_length=255, blank=True)
     eval_cp = models.FloatField(null=True, blank=True)
     best_move_san = models.CharField(max_length=16, blank=True, null=True)
     best_move_uci = models.CharField(max_length=10, blank=True, null=True)

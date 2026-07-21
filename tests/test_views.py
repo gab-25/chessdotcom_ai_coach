@@ -4,7 +4,7 @@ The Chess.com ``Client`` and the async coach are mocked, so no network,
 engine or LLM is touched. A SQLite DB (see conftest) backs auth.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -177,13 +177,17 @@ class TestGameDetail:
 
 
 @pytest.mark.django_db(transaction=True)
-@patch("chessdotcom_ai_coach.views.get_best_move", new_callable=AsyncMock)
+@patch("chessdotcom_ai_coach.views.analyze_game_task")
 @patch("chessdotcom_ai_coach.views.Client")
 class TestCoachSuggestion:
-    """coach_suggestion is async, so it is driven through the ASGI async_client."""
+    """coach_suggestion is async, so it is driven through the ASGI async_client.
 
-    async def test_returns_analysis_fragment(
-        self, mock_client, mock_coach, async_client, user
+    Analysis now runs in the background: the view enqueues a Celery task (mocked
+    here) and renders the stored/queued state instead of computing inline.
+    """
+
+    async def test_enqueues_task_and_shows_pending(
+        self, mock_client, mock_task, async_client, user
     ):
         await sync_to_async(async_client.force_login)(user)
         mock_client.return_value.game_detail.return_value = {
@@ -191,23 +195,50 @@ class TestCoachSuggestion:
             "white_name": "MyUser",
             "black_name": "Opponent",
         }
-        mock_coach.return_value = {
-            "eval_text": "The position is balanced (+0.20).",
-            "eval_cp": 0.2,
-            "best_move_san": "e4",
-            "best_move_uci": "e2e4",
-            "analysis": "Play e4, a strong central move.",
+
+        response = await async_client.get("/game/944768131/coach")
+
+        assert response.status_code == 200
+        assert b"Analyzing in background" in response.content
+        # A pending row is created and exactly one task is enqueued.
+        mock_task.delay.assert_called_once()
+        row = await sync_to_async(
+            CoachSuggestion.objects.get
+        )(user=user, game_id="944768131")
+        assert row.status == CoachSuggestion.Status.PENDING
+
+    async def test_shows_completed_analysis_without_reenqueuing(
+        self, mock_client, mock_task, async_client, user
+    ):
+        await sync_to_async(async_client.force_login)(user)
+        sample = _sample_game()
+        mock_client.return_value.game_detail.return_value = {
+            "game": sample,
+            "white_name": "MyUser",
+            "black_name": "Opponent",
         }
+        # A finished analysis already exists for the current position.
+        await sync_to_async(CoachSuggestion.objects.create)(
+            user=user,
+            game_id="944768131",
+            fen=sample["fen"],
+            status=CoachSuggestion.Status.DONE,
+            eval_text="The position is balanced (+0.20).",
+            eval_cp=0.2,
+            best_move_san="e4",
+            best_move_uci="e2e4",
+            analysis="Play e4, a strong central move.",
+        )
 
         response = await async_client.get("/game/944768131/coach")
 
         assert response.status_code == 200
         assert b"Play e4, a strong central move." in response.content
-        # Recommended move is surfaced in the coach card.
         assert b"e4" in response.content
+        mock_task.delay.assert_not_called()  # already done: no re-enqueue
 
     async def test_handles_missing_game(
-        self, mock_client, mock_coach, async_client, user
+        self, mock_client, mock_task, async_client, user
     ):
         await sync_to_async(async_client.force_login)(user)
         mock_client.return_value.game_detail.return_value = None
@@ -216,11 +247,11 @@ class TestCoachSuggestion:
 
         assert response.status_code == 200
         assert b"Game not found" in response.content
-        mock_coach.assert_not_called()
+        mock_task.delay.assert_not_called()
         assert await sync_to_async(CoachSuggestion.objects.count)() == 0
 
-    async def test_reanalyze_same_position_overwrites(
-        self, mock_client, mock_coach, async_client, user
+    async def test_same_position_does_not_reenqueue(
+        self, mock_client, mock_task, async_client, user
     ):
         await sync_to_async(async_client.force_login)(user)
         mock_client.return_value.game_detail.return_value = {
@@ -228,24 +259,18 @@ class TestCoachSuggestion:
             "white_name": "MyUser",
             "black_name": "Opponent",
         }
-        mock_coach.return_value = {
-            "eval_text": "The position is balanced (+0.20).",
-            "eval_cp": 0.2,
-            "best_move_san": "e4",
-            "best_move_uci": "e2e4",
-            "analysis": "Play e4.",
-        }
 
         await async_client.get("/game/944768131/coach")
-        await async_client.get("/game/944768131/coach")  # same FEN → overwrite
+        await async_client.get("/game/944768131/coach")  # same FEN → dedup
 
+        assert mock_task.delay.call_count == 1
         count = await sync_to_async(
             CoachSuggestion.objects.filter(user=user, game_id="944768131").count
         )()
         assert count == 1
 
-    async def test_new_position_creates_new_row(
-        self, mock_client, mock_coach, async_client, user
+    async def test_new_position_enqueues_again(
+        self, mock_client, mock_task, async_client, user
     ):
         await sync_to_async(async_client.force_login)(user)
         first = {
@@ -261,17 +286,11 @@ class TestCoachSuggestion:
             "black_name": "Opponent",
         }
         mock_client.return_value.game_detail.side_effect = [first, second]
-        mock_coach.return_value = {
-            "eval_text": "The position is balanced (+0.20).",
-            "eval_cp": 0.2,
-            "best_move_san": "e4",
-            "best_move_uci": "e2e4",
-            "analysis": "Play e4.",
-        }
 
         await async_client.get("/game/944768131/coach")
         await async_client.get("/game/944768131/coach")  # different FEN → new row
 
+        assert mock_task.delay.call_count == 2
         count = await sync_to_async(
             CoachSuggestion.objects.filter(user=user, game_id="944768131").count
         )()

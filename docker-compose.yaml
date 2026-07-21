@@ -8,6 +8,7 @@ services:
       - POSTGRES_HOST=postgres
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
+      - REDIS_URL=redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
@@ -15,6 +16,56 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+      redis:
+        condition: service_healthy
+
+  # Celery worker: executes analyze_game_task (Stockfish + LLM) out of the request
+  # path. Reuses the app image (Stockfish binary, Ollama access over the network).
+  celery-worker:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+      - REDIS_URL=redis://redis:6379/0
+    command: celery -A chessdotcom_ai_coach worker -l info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  # APScheduler: the single scheduler (no Celery Beat). Polls active games every
+  # 1s and enqueues analysis tasks. Runs as its own process so exactly one
+  # scheduler instance exists.
+  scheduler:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/0
+    command: python manage.py run_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   postgres:
     image: postgres:18-alpine

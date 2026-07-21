@@ -14,11 +14,19 @@
 
     <div class="coach__body">
       {% if not analysis %}
+      {% if analyzing %}
+      <!-- Queued/in-flight in the background pipeline -->
+      <div class="coach__placeholder">
+        <span class="spinner"></span>
+        <p style="margin:0">Analyzing in background… the suggestion will appear shortly.</p>
+      </div>
+      {% else %}
       <!-- Idle -->
       <div class="coach__placeholder">
         <i class="fa-solid fa-chess coach__placeholder-icon"></i>
         <p style="margin:0">No analysis yet. Request a suggestion below.</p>
       </div>
+      {% endif %}
       {% else %}
       <!-- Analyzed -->
       {% if best_move_san %}

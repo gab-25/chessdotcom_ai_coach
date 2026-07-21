@@ -1,6 +1,6 @@
 [project]
 name = "chessdotcom-ai-coach"
-version = "1.0.0"
+version = "1.1.0"
 description = ""
 authors = [
     { name = "gab-25", email = "gabrielesorci.25@gmail.com" }
@@ -17,6 +17,9 @@ dependencies = [
     "django-htmx>=1.28.0",
     "chess>=1.11.2",
     "whitenoise>=6.0,<7.0",
+    "celery>=5.4,<6.0",
+    "redis>=5.0,<6.0",
+    "apscheduler>=3.10,<4.0",
 ]
 
 [dependency-groups]
