@@ -1,3 +1,4 @@
+from asgiref.sync import sync_to_async
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
@@ -7,7 +8,7 @@ from .models import CoachSuggestion
 from .services import board as board_utils
 from .services import game_store
 from .services.chess_client import Client
-from .services.coach import get_best_move
+from .tasks import analyze_game_task
 
 
 def _client_for(user) -> Client:
@@ -74,6 +75,7 @@ def _suggestion_for_fen(history, fen):
                 "best_move_san": row.best_move_san,
                 "best_move_uci": row.best_move_uci,
                 "analysis": row.analysis,
+                "status": row.status,
             }
             return suggestion, _uci_to_squares(row.best_move_uci)
     return None, None
@@ -143,6 +145,11 @@ def _build_detail_context(
         "is_user_turn": is_user_turn,
         "last_move": board_utils.last_move_from_pgn(pgn),
         "analysis": analysis,
+        # The current position is queued/in-flight in the background pipeline: the
+        # coach panel shows an "Analyzing…" state until the poll picks up the result.
+        "analyzing": bool(
+            suggestion and suggestion.get("status") == CoachSuggestion.Status.PENDING
+        ),
         "eval_fill": _eval_fill(suggestion["eval_cp"]) if suggestion else 50,
         "best_move_san": suggestion["best_move_san"] if suggestion else None,
         "eval_text": suggestion["eval_text"] if suggestion else None,
@@ -247,10 +254,12 @@ def game_detail(request, id):
 
 @login_required
 async def coach_suggestion(request, id):
-    """HTMX endpoint: re-renders the game body with the coach's analysis.
+    """HTMX endpoint: queues background analysis and re-renders the game body.
 
-    Swapped into ``#game-body`` so the recommended move lights up on the board
-    and the eval bar fills in a single response.
+    Analysis no longer runs inline: when it's the user's turn this enqueues a
+    Celery task (deduped per position) and swaps ``#game-body`` with the stored
+    state — pending shows an "Analyzing…" card, and the existing poller reveals
+    the recommended move and eval once the worker finishes.
     """
     # Async view: resolve the user via auser() to avoid a synchronous DB
     # access (request.user is lazy and would raise SynchronousOnlyOperation).
@@ -265,54 +274,38 @@ async def coach_suggestion(request, id):
     game = game_data["game"]
     fen = game.get("fen", "")
 
-    if not _is_user_turn(game_data, user.chess_username):
-        # The button was stale (opponent moved before the poll refreshed): skip the
-        # analysis and re-render the body, which now shows the button disabled.
-        history = [
-            s async for s in CoachSuggestion.objects.filter(user=user, game_id=id)
-        ]
-        stored, highlight = _suggestion_for_fen(history, fen)
-        context = _build_detail_context(
-            game_data,
-            user.chess_username,
-            id,
-            highlight=highlight,
-            analysis=stored["analysis"] if stored else None,
-            suggestion=stored,
-            history=history,
-            can_analyze=True,
+    # When it's the user's turn, ensure the position is queued for background
+    # analysis (idempotent): a pending/done row already exists for a FEN that's
+    # queued or analysed, so we only enqueue a Celery task when we just created it.
+    # A stale button click (opponent already moved) simply enqueues nothing.
+    if _is_user_turn(game_data, user.chess_username):
+        _row, created = await CoachSuggestion.objects.aget_or_create(
+            user=user,
+            game_id=id,
+            fen=fen,
+            defaults={
+                "status": CoachSuggestion.Status.PENDING,
+                "move_no": board_utils.fullmove_number(fen),
+                "eval_text": "",
+                "analysis": "",
+            },
         )
-        return render(request, "partials/game_body.html", context)
+        if created:
+            await sync_to_async(analyze_game_task.delay)(
+                user.id, id, fen, game.get("pgn")
+            )
 
-    suggestion = await get_best_move(fen, game.get("pgn"))
-    highlight = _uci_to_squares(suggestion["best_move_uci"])
-
-    # One analysis per position: re-analysing the same FEN overwrites the row.
-    await CoachSuggestion.objects.aupdate_or_create(
-        user=user,
-        game_id=id,
-        fen=fen,
-        defaults={
-            "move_no": board_utils.fullmove_number(fen),
-            "eval_text": suggestion["eval_text"],
-            "eval_cp": suggestion["eval_cp"],
-            "best_move_san": suggestion["best_move_san"],
-            "best_move_uci": suggestion["best_move_uci"],
-            "analysis": suggestion["analysis"],
-        },
-    )
-    history = [
-        s
-        async for s in CoachSuggestion.objects.filter(user=user, game_id=id)
-    ]
-
+    # Re-render the body from stored state. The existing HTMX poller reveals the
+    # result once the worker finishes; the request no longer blocks on analysis.
+    history = [s async for s in CoachSuggestion.objects.filter(user=user, game_id=id)]
+    stored, highlight = _suggestion_for_fen(history, fen)
     context = _build_detail_context(
         game_data,
         user.chess_username,
         id,
         highlight=highlight,
-        analysis=suggestion["analysis"],
-        suggestion=suggestion,
+        analysis=stored["analysis"] if stored else None,
+        suggestion=stored,
         history=history,
         can_analyze=True,
     )
