@@ -8,6 +8,8 @@ services:
       - POSTGRES_HOST=postgres
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
@@ -15,6 +17,56 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    build: .
+    command: celery -A chessdotcom_ai_coach worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  scheduler:
+    build: .
+    command: python manage.py run_scheduler
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Tune scheduler behaviour via env vars (all optional):
+      # - SCHEDULER_INTERVAL=1        # seconds between ticks (default: 1)
+      # - SCHEDULER_BATCH_SIZE=50     # max games enqueued per tick (default: 50)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   postgres:
     image: postgres:18-alpine

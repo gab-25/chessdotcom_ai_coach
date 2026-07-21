@@ -132,3 +132,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # --- Integrations ----------------------------------------------------------
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT")
+
+# --- Celery ----------------------------------------------------------------
+# The broker and result-backend default to Redis running on localhost so the
+# app works out of the box with ``docker-compose up``.  Override via env vars
+# in production or in the compose file.
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "UTC"
+# Acknowledge tasks only after they complete (not when received) so a worker
+# crash does not silently drop an in-flight analysis.
+CELERY_TASK_ACKS_LATE = True
+# One task at a time per worker process to avoid overloading Stockfish/Ollama.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1

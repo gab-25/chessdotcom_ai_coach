@@ -38,6 +38,9 @@ class Game(models.Model):
     pgn = models.TextField(blank=True)  # snapshot: the source of the move history
     fen = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)  # seen in the latest "current" fetch
+    # Tracks which FEN has been enqueued for background analysis (scheduler idempotency).
+    # Reset to '' whenever the game is updated; set to the current FEN when enqueued.
+    analysis_enqueued_fen = models.CharField(max_length=100, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

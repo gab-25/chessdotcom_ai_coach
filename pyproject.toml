@@ -17,6 +17,8 @@ dependencies = [
     "django-htmx>=1.28.0",
     "chess>=1.11.2",
     "whitenoise>=6.0,<7.0",
+    "celery[redis]>=5.3,<6.0",
+    "apscheduler>=3.10,<4.0",
 ]
 
 [dependency-groups]
