@@ -22,12 +22,12 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _is_user_turn(game: Game) -> bool:
-    orientation = (
+    user_side = (
         "white"
         if (game.white_name or "").lower() == game.user.chess_username.lower()
         else "black"
     )
-    return board_utils.active_color(game.fen) == orientation
+    return board_utils.active_color(game.fen) == user_side
 
 
 def _eligible_games(batch_size: int):
