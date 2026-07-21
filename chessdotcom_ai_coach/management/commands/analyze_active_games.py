@@ -1,1 +1,0 @@
-from chessdotcom_ai_coach.tasks import analyze_game_position

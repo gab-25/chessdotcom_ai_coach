@@ -19,6 +19,7 @@ dependencies = [
     "whitenoise>=6.0,<7.0",
     "celery>=5.4.0,<6.0.0",
     "redis>=5.0.8,<6.0.0",
+    "apscheduler>=3.11.0,<4.0.0",
 ]
 
 [dependency-groups]

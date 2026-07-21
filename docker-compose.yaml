@@ -8,6 +8,12 @@ services:
       - POSTGRES_HOST=postgres
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
+      - REDIS_URL=redis://redis:6379/0
+      - ANALYSIS_SCHEDULER_ENABLED=true
+      # Set a 1s fallback in local compose to mirror live move-by-move responsiveness.
+      - ANALYSIS_SCHEDULER_INTERVAL_SECONDS=${ANALYSIS_SCHEDULER_INTERVAL_SECONDS:-1}
+      - ANALYSIS_SCHEDULER_BATCH_SIZE=${ANALYSIS_SCHEDULER_BATCH_SIZE:-10}
+      - ANALYSIS_TASK_TIMEOUT_SECONDS=${ANALYSIS_TASK_TIMEOUT_SECONDS:-120}
     ports:
       - "8000:8000"
     depends_on:
@@ -34,23 +40,6 @@ services:
       redis:
         condition: service_started
       ollama:
-        condition: service_started
-
-  celery-beat:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_HOST=postgres
-      - OLLAMA_HOST=ollama
-      - OLLAMA_PORT=11434
-      - REDIS_URL=redis://redis:6379/0
-      - ANALYSIS_SCHEDULER_INTERVAL_SECONDS=${ANALYSIS_SCHEDULER_INTERVAL_SECONDS:-1}
-      - ANALYSIS_SCHEDULER_BATCH_SIZE=${ANALYSIS_SCHEDULER_BATCH_SIZE:-10}
-      - ANALYSIS_TASK_TIMEOUT_SECONDS=${ANALYSIS_TASK_TIMEOUT_SECONDS:-120}
-    command: celery -A chessdotcom_ai_coach beat --loglevel=INFO
-    depends_on:
-      redis:
         condition: service_started
 
   redis:
