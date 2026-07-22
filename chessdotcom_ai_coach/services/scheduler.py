@@ -1,13 +1,19 @@
-"""Scheduler poll body: select games due for analysis and enqueue Celery tasks.
-
-Kept separate from the management command so it can be unit-tested without a
-running APScheduler. Reads only the local DB (no Chess.com API call), so a 1s
-poll is a single indexed query over active games.
+"""Scheduler tick body, split into its two steps so each is unit-testable
+without a running APScheduler: `sync_current_games` pulls each linked user's
+games from Chess.com into the local DB, and `enqueue_due_analyses` selects
+games due for analysis from that local DB and enqueues Celery tasks.
+`run_scheduler` calls them back-to-back on every tick.
 """
 
-from ..models import CoachSuggestion, Game
+import logging
+
+from ..models import CoachSuggestion, Game, User
 from ..tasks import analyze_game_task
 from . import board as board_utils
+from . import game_store
+from .chess_client import Client
+
+logger = logging.getLogger(__name__)
 
 
 def _user_color(game: Game) -> str | None:
@@ -24,6 +30,27 @@ def _is_user_turn(game: Game) -> bool:
     """True when the side to move in `game.fen` is the side the user plays."""
     color = _user_color(game)
     return color is not None and board_utils.active_color(game.fen) == color
+
+
+def sync_current_games() -> None:
+    """Refresh linked users' current games from Chess.com into the local DB.
+
+    This is the only path that keeps `Game` fresh now that the home page is a
+    plain DB read (see `views.home`/`views.game_list`) — without it, `Game`
+    rows would never advance and `enqueue_due_analyses` would keep checking a
+    stale FEN. Only users who explicitly linked a Chess.com account are
+    synced. A per-user failure (bad username, transient network error) is
+    logged and skipped so it doesn't block the rest of the batch.
+    """
+    users = User.objects.filter(is_active=True).exclude(
+        chessdotcom_username__isnull=True
+    ).exclude(chessdotcom_username="")
+    for user in users:
+        try:
+            games = Client(username=user.chess_username).my_current_games()
+            game_store.upsert_current_games(user, games)
+        except Exception:
+            logger.exception("Chess.com sync failed for user %s", user.chess_username)
 
 
 def enqueue_due_analyses() -> int:

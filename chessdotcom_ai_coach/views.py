@@ -17,19 +17,17 @@ def _client_for(user) -> Client:
 
 
 def _decorate_games(games):
-    """Attach the glyph-board cells and move number used by the game cards."""
-    for game in games:
-        fen = game.get("fen")
-        game["cells"] = board_utils.fen_to_cells(fen)
-        game["move_no"] = board_utils.fullmove_number(fen)
-    return games
+    """Attach board cells, move number and side-to-move to `Game` rows.
 
-
-def _decorate_past_games(games):
-    """Attach board cells + move number to persisted Game rows (history cards)."""
+    Used for both the current and past-games sections of the home page (both
+    now plain DB reads — see `home`/`game_list`). `turn` reproduces the
+    side-to-move the Chess.com API used to supply directly, derived from the
+    stored FEN, so the game card's "to move" tag keeps working.
+    """
     for game in games:
         game.cells = board_utils.fen_to_cells(game.fen)
         game.move_no = board_utils.fullmove_number(game.fen)
+        game.turn = board_utils.active_color(game.fen)
     return games
 
 
@@ -183,14 +181,13 @@ def _fetch_detail(user, id):
 
 @login_required
 def home(request):
-    """Home page: lists the user's current games plus the past-games history."""
-    try:
-        games = _decorate_games(_client_for(request.user).my_current_games())
-        game_store.upsert_current_games(request.user, games)
-    except Exception as exc:
-        return render(request, "error.html", {"message": str(exc)}, status=500)
+    """Home page: lists the user's current games plus the past-games history.
 
-    past = _decorate_past_games(game_store.past_games(request.user))
+    Plain DB read — the scheduler (`services.scheduler.sync_current_games`)
+    is the only path that pulls fresh data from Chess.com into `Game`.
+    """
+    games = _decorate_games(game_store.current_games(request.user))
+    past = _decorate_games(game_store.past_games(request.user))
     return render(request, "home.html", {"games": games, "past_games": past})
 
 
@@ -198,15 +195,11 @@ def home(request):
 def game_list(request):
     """HTMX endpoint: current games + past-games history fragment for polling.
 
-    Snapshots the current games on every poll so the history stays fresh even
-    without opening a game.
+    Plain DB read, same as `home` — the scheduler keeps `Game` fresh, so the
+    5s poll here never has to touch Chess.com itself.
     """
-    try:
-        games = _decorate_games(_client_for(request.user).my_current_games())
-        game_store.upsert_current_games(request.user, games)
-    except Exception:
-        games = []  # degrada silenziosamente: il polling non deve rompere la pagina
-    past = _decorate_past_games(game_store.past_games(request.user))
+    games = _decorate_games(game_store.current_games(request.user))
+    past = _decorate_games(game_store.past_games(request.user))
     return render(
         request, "partials/game_list.html", {"games": games, "past_games": past}
     )

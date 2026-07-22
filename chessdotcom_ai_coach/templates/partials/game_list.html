@@ -23,8 +23,8 @@
     <div class="gm-card__player">
       <span class="gm-card__avatar gm-card__avatar--b"></span>
       <span class="gm-card__id">
-        <span class="gm-card__name">{{ game.black.username }}</span>
-        <span class="gm-card__meta">{{ game.black.rating }}</span>
+        <span class="gm-card__name">{{ game.black_name }}</span>
+        <span class="gm-card__meta">{{ game.black_rating|default:"—" }}</span>
       </span>
       {% if game.turn == 'black' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>
@@ -40,8 +40,8 @@
     <div class="gm-card__player gm-card__player--white">
       <span class="gm-card__avatar gm-card__avatar--w"></span>
       <span class="gm-card__id">
-        <span class="gm-card__name">{{ game.white.username }}</span>
-        <span class="gm-card__meta">{{ game.white.rating }}</span>
+        <span class="gm-card__name">{{ game.white_name }}</span>
+        <span class="gm-card__meta">{{ game.white_rating|default:"—" }}</span>
       </span>
       {% if game.turn == 'white' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>

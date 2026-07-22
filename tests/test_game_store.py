@@ -58,6 +58,13 @@ class TestUpsertCurrentGames:
 
 @pytest.mark.django_db
 class TestQueries:
+    def test_current_games_returns_only_active(self, user):
+        Game.objects.create(user=user, game_id="active", is_active=True)
+        Game.objects.create(user=user, game_id="past", is_active=False)
+
+        current = game_store.current_games(user)
+        assert [g.game_id for g in current] == ["active"]
+
     def test_past_games_returns_only_inactive(self, user):
         Game.objects.create(user=user, game_id="active", is_active=True)
         Game.objects.create(user=user, game_id="past", is_active=False)
