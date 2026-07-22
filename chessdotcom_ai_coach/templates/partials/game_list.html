@@ -10,9 +10,14 @@
   </div>
   {% else %}
   {% for game in games %}
-  <a href="{% url 'game_detail' game.game_id %}" class="gm-card">
+  <a href="{% url 'game_detail' game.game_id %}" class="gm-card{% if game.is_user_turn %} gm-card--your-turn{% endif %}">
     <div class="gm-card__head">
-      <span class="badge">{{ game.time_class|capfirst }}</span>
+      <span class="gm-card__head-left">
+        <span class="badge">{{ game.time_class|capfirst }}</span>
+        {% if game.is_user_turn %}
+        <span class="badge badge--turn"><i class="fa-solid fa-bell"></i>Your turn</span>
+        {% endif %}
+      </span>
       <span class="gm-card__live">
         <span class="badge badge--live"><span class="badge__dot"></span></span>
         LIVE{% if game.move_no %} · move {{ game.move_no }}{% endif %}

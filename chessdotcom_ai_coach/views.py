@@ -16,18 +16,22 @@ def _client_for(user) -> Client:
     return Client(username=user.chess_username)
 
 
-def _decorate_games(games):
-    """Attach board cells, move number and side-to-move to `Game` rows.
+def _decorate_games(games, username):
+    """Attach board cells, move number, side-to-move and turn ownership to `Game` rows.
 
     Used for both the current and past-games sections of the home page (both
     now plain DB reads — see `home`/`game_list`). `turn` reproduces the
     side-to-move the Chess.com API used to supply directly, derived from the
-    stored FEN, so the game card's "to move" tag keeps working.
+    stored FEN, so the game card's "to move" tag keeps working. `is_user_turn`
+    mirrors `_is_user_turn` so the list can highlight games awaiting the
+    logged-in user's move.
     """
     for game in games:
         game.cells = board_utils.fen_to_cells(game.fen)
         game.move_no = board_utils.fullmove_number(game.fen)
         game.turn = board_utils.active_color(game.fen)
+        orientation = "white" if game.white_name.lower() == username.lower() else "black"
+        game.is_user_turn = game.turn == orientation
     return games
 
 
@@ -186,8 +190,9 @@ def home(request):
     Plain DB read — the scheduler (`services.scheduler.sync_current_games`)
     is the only path that pulls fresh data from Chess.com into `Game`.
     """
-    games = _decorate_games(game_store.current_games(request.user))
-    past = _decorate_games(game_store.past_games(request.user))
+    username = request.user.chess_username
+    games = _decorate_games(game_store.current_games(request.user), username)
+    past = _decorate_games(game_store.past_games(request.user), username)
     return render(request, "home.html", {"games": games, "past_games": past})
 
 
@@ -198,8 +203,9 @@ def game_list(request):
     Plain DB read, same as `home` — the scheduler keeps `Game` fresh, so the
     5s poll here never has to touch Chess.com itself.
     """
-    games = _decorate_games(game_store.current_games(request.user))
-    past = _decorate_games(game_store.past_games(request.user))
+    username = request.user.chess_username
+    games = _decorate_games(game_store.current_games(request.user), username)
+    past = _decorate_games(game_store.past_games(request.user), username)
     return render(
         request, "partials/game_list.html", {"games": games, "past_games": past}
     )
