@@ -1,6 +1,6 @@
 services:
 
-  chessdotcom-ai-coach:
+  web:
     build: .
     env_file:
       - .env
