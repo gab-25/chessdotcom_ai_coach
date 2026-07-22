@@ -986,6 +986,12 @@ input {
   display: none;
 }
 .spinner {
+  /* inline-block so width/height apply even outside a flex parent (e.g. the
+     button label), otherwise an inline span collapses to a thin bar. */
+  display: inline-block;
+  vertical-align: middle;
+  box-sizing: border-box;
+  flex-shrink: 0;
   width: 15px;
   height: 15px;
   border-radius: 50%;

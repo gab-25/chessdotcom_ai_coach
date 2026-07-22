@@ -175,6 +175,64 @@ class TestGameDetail:
         assert b"Re-analyze" not in response.content
         assert b"Request suggestion" not in response.content
 
+    def test_poll_swaps_in_completed_analysis(self, mock_client, auth_client, user):
+        # Regression: the poll cursor tracks (FEN + analysis state), so a
+        # PENDING→DONE transition on the *same* position swaps in the result
+        # instead of leaving the button stuck on "Analyzing…".
+        sample = _sample_game()
+        mock_client.return_value.game_detail.return_value = {
+            "game": sample,
+            "white_name": "MyUser",
+            "black_name": "Opponent",
+        }
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="944768131",
+            fen=sample["fen"],
+            status=CoachSuggestion.Status.DONE,
+            eval_text="Balanced (+0.20).",
+            eval_cp=0.2,
+            best_move_san="e4",
+            best_move_uci="e2e4",
+            analysis="Play e4.",
+        )
+
+        # The poller still reflects the stale PENDING token for this position.
+        response = auth_client.get(
+            "/game/944768131",
+            {"since": f"{sample['fen']}|pending"},
+            HTTP_HX_REQUEST="true",
+        )
+
+        assert response.status_code == 200
+        assert b"Play e4." in response.content
+
+    def test_poll_noop_when_analysis_state_unchanged(
+        self, mock_client, auth_client, user
+    ):
+        sample = _sample_game()
+        mock_client.return_value.game_detail.return_value = {
+            "game": sample,
+            "white_name": "MyUser",
+            "black_name": "Opponent",
+        }
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="944768131",
+            fen=sample["fen"],
+            status=CoachSuggestion.Status.DONE,
+            analysis="Play e4.",
+        )
+
+        # Poller already reflects the current (DONE) token -> no swap.
+        response = auth_client.get(
+            "/game/944768131",
+            {"since": f"{sample['fen']}|done"},
+            HTTP_HX_REQUEST="true",
+        )
+
+        assert response.status_code == 204
+
 
 @pytest.mark.django_db(transaction=True)
 @patch("chessdotcom_ai_coach.views.analyze_game_task")
@@ -200,6 +258,8 @@ class TestCoachSuggestion:
 
         assert response.status_code == 200
         assert b"Analyzing in background" in response.content
+        # The button is blocked while analysis runs in the background.
+        assert b"disabled" in response.content
         # A pending row is created and exactly one task is enqueued.
         mock_task.delay.assert_called_once()
         row = await sync_to_async(
@@ -207,7 +267,7 @@ class TestCoachSuggestion:
         )(user=user, game_id="944768131")
         assert row.status == CoachSuggestion.Status.PENDING
 
-    async def test_shows_completed_analysis_without_reenqueuing(
+    async def test_reanalyze_reenqueues_finished_position(
         self, mock_client, mock_task, async_client, user
     ):
         await sync_to_async(async_client.force_login)(user)
@@ -232,10 +292,19 @@ class TestCoachSuggestion:
 
         response = await async_client.get("/game/944768131/coach")
 
+        # Re-analyze re-enqueues the task and resets the row to PENDING, clearing
+        # the stale result so the panel shows the "Analyzing…" state again.
         assert response.status_code == 200
-        assert b"Play e4, a strong central move." in response.content
-        assert b"e4" in response.content
-        mock_task.delay.assert_not_called()  # already done: no re-enqueue
+        assert b"Analyzing in background" in response.content
+        assert b"Play e4, a strong central move." not in response.content
+        assert b"disabled" in response.content  # button blocked during re-analysis
+        mock_task.delay.assert_called_once()
+        row = await sync_to_async(
+            CoachSuggestion.objects.get
+        )(user=user, game_id="944768131")
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.analysis == ""
+        assert row.best_move_san is None
 
     async def test_handles_missing_game(
         self, mock_client, mock_task, async_client, user

@@ -7,10 +7,12 @@
 {% comment %}
   Hidden poller: refreshes #game-body while the game is live. Kept OUTSIDE the
   coach button's subtree so its `htmx-request` class doesn't light up the coach
-  "Analyzing…" indicator. Re-rendered on every swap so `since` tracks the FEN.
-  The server returns 204 (unchanged) / 286 (game over) to skip work and stop.
+  "Analyzing…" indicator. Re-rendered on every swap so `since` tracks the poll
+  token (FEN + analysis state), letting a PENDING→DONE transition swap in the
+  result even though the FEN is unchanged. The server returns 204 (unchanged) /
+  286 (game over) to skip work and stop.
 {% endcomment %}
-<div hx-get="{% url 'game_detail' id %}?since={{ fen|urlencode }}"
+<div hx-get="{% url 'game_detail' id %}?since={{ poll_token|urlencode }}"
      hx-trigger="every 5s"
      hx-target="#game-body"
      hx-swap="innerHTML"

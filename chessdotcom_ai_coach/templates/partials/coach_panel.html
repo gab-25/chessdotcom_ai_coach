@@ -59,12 +59,15 @@
         hx-swap="innerHTML"
         hx-sync="#game-body:replace"
         hx-disabled-elt="this"
-        {% if not is_user_turn %}disabled{% endif %}
+        {% if not is_user_turn or analyzing %}disabled{% endif %}
       >
         <span class="coach__prompt-label">
           {% if not is_user_turn %}
           <i class="fa-solid fa-hourglass-half"></i>
           Opponent to move
+          {% elif analyzing %}
+          <span class="spinner"></span>
+          Analyzing…
           {% else %}
           <i class="fa-solid fa-wand-magic-sparkles"></i>
           {% if analysis %}Re-analyze{% else %}Request suggestion{% endif %}

@@ -12,7 +12,14 @@ grandmaster coach.
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
-- **HTMX** — on-demand game loading and coach analysis, vendored via `django-htmx`
+- **Celery + Redis** — game analysis runs out-of-band: the view enqueues a Celery
+  task (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend;
+  a hidden HTMX poller reveals the result once the worker finishes
+- **APScheduler** — background scheduler (`manage.py run_scheduler`) that polls
+  active games every second and auto-enqueues analysis when it's the user's turn
+  (`chessdotcom_ai_coach/services/scheduler.py`); runs once inside the web container
+- **HTMX** — on-demand game loading and polling for the async coach result,
+  vendored via `django-htmx`
 - **Alpine.js** — board rendering (loaded from CDN, only on the game page)
 - **Gunicorn** — WSGI server in the container
 - Custom hand-written CSS theme (no Tailwind) in the `theme` app
@@ -24,9 +31,11 @@ grandmaster coach.
 docker compose up --build
 ```
 
-The `entrypoint.sh` runs `migrate` and `collectstatic` on start, then serves
-with Gunicorn on http://localhost:8000. In Compose the `POSTGRES_HOST` and
-`OLLAMA_HOST`/`OLLAMA_PORT` are overridden to reach the `postgres` and `ollama`
+Compose starts the whole stack: `web` (Gunicorn + the APScheduler process,
+started by `entrypoint.sh` after `migrate`/`collectstatic`), a `worker` running
+the Celery worker, plus `redis`, `postgres` and `ollama`. The app is served on
+http://localhost:8000. In Compose the `POSTGRES_HOST`, `OLLAMA_HOST`/`OLLAMA_PORT`
+and `REDIS_URL` are overridden to reach the `postgres`, `ollama` and `redis`
 services; everything else comes from `.env`. Create a user via the admin (see
 below).
 
@@ -43,6 +52,7 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `ALLOWED_HOSTS` | comma-separated hosts (default `*`) |
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
 | `OLLAMA_HOST` / `OLLAMA_PORT` | Ollama host and port (e.g. `localhost`/`11434`) |
+| `REDIS_URL` | Celery broker + result backend (default `redis://redis:6379/0`; use `redis://localhost:6379/0` locally) |
 | `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
 
 Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
@@ -73,6 +83,16 @@ uv sync
 uv run python manage.py migrate
 uv run python manage.py createsuperuser
 uv run python manage.py runserver
+```
+
+Analysis runs asynchronously, so it needs **Redis** plus a **Celery worker** and
+the **scheduler** running alongside `runserver` — otherwise a requested analysis
+stays stuck on "Analyzing…" forever. Start Redis (the `redis` service in
+`docker-compose.yaml` works, or `redis-server` locally), then in two more shells:
+
+```bash
+uv run celery -A chessdotcom_ai_coach worker -l info   # the analysis worker
+uv run python manage.py run_scheduler                  # the APScheduler process
 ```
 
 Then open http://localhost:8000, sign in, and set your **Chess.com username**
