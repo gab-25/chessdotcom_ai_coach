@@ -56,6 +56,11 @@ def upsert_current_games(user, games: List[dict]) -> None:
     )
 
 
+def current_games(user) -> List[Game]:
+    """Active games for the user (for the home page's live-games section)."""
+    return list(Game.objects.filter(user=user, is_active=True))
+
+
 def past_games(user) -> List[Game]:
     """Games that are no longer current, newest first (for the home history)."""
     return list(Game.objects.filter(user=user, is_active=False))

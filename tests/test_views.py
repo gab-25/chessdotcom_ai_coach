@@ -40,30 +40,36 @@ def _sample_game():
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.views.Client")
 class TestHome:
-    def test_lists_games(self, mock_client, auth_client):
-        mock_client.return_value.my_current_games.return_value = [_sample_game()]
+    def test_lists_games(self, auth_client, user):
+        Game.objects.create(
+            user=user,
+            game_id="944768131",
+            white_name="MyUser",
+            black_name="Opponent",
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            is_active=True,
+        )
 
         response = auth_client.get("/")
 
         assert response.status_code == 200
         games = list(response.context["games"])
         assert len(games) == 1
-        assert games[0]["game_id"] == "944768131"
+        assert games[0].game_id == "944768131"
         # The view enriches each game with the glyph board + move number.
-        assert len(games[0]["cells"]) == 64
-        assert games[0]["move_no"] == 1
+        assert len(games[0].cells) == 64
+        assert games[0].move_no == 1
 
-    def test_renders_error_page_on_failure(self, mock_client, auth_client):
-        mock_client.return_value.my_current_games.side_effect = Exception("boom")
+    def test_does_not_call_chess_com(self, auth_client):
+        # Home is a plain DB read now — the scheduler owns Chess.com syncing.
+        with patch("chessdotcom_ai_coach.views.Client") as mock_client:
+            response = auth_client.get("/")
 
-        response = auth_client.get("/")
+        assert response.status_code == 200
+        mock_client.assert_not_called()
 
-        assert response.status_code == 500
-        assert b"Something went wrong" in response.content
-
-    def test_requires_login(self, mock_client, client):
+    def test_requires_login(self, client):
         response = client.get("/")
 
         assert response.status_code == 302
@@ -71,34 +77,29 @@ class TestHome:
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.views.Client")
 class TestGameList:
-    def test_returns_fragment_with_games(self, mock_client, auth_client):
-        mock_client.return_value.my_current_games.return_value = [_sample_game()]
+    def test_returns_fragment_with_games(self, auth_client, user):
+        Game.objects.create(
+            user=user,
+            game_id="944768131",
+            white_name="MyUser",
+            black_name="Opponent",
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            is_active=True,
+        )
 
         response = auth_client.get("/games")
 
         assert response.status_code == 200
         assert b"Opponent" in response.content
 
-    def test_degrades_silently_to_empty_on_error(self, mock_client, auth_client):
-        mock_client.return_value.my_current_games.side_effect = Exception("boom")
-
-        response = auth_client.get("/games")
-
-        # Polling must not break the page: 200 + empty state, no 500.
-        assert response.status_code == 200
-        assert b"No active games" in response.content
-
-    def test_persists_current_games_on_poll(self, mock_client, auth_client, user):
-        mock_client.return_value.my_current_games.return_value = [_sample_game()]
-
+    def test_does_not_write_to_the_db(self, auth_client, user):
+        # No upsert happens here anymore — that's the scheduler's job now.
         auth_client.get("/games")
 
-        assert Game.objects.filter(user=user, game_id="944768131", is_active=True).exists()
+        assert not Game.objects.filter(user=user).exists()
 
-    def test_renders_past_games_section(self, mock_client, auth_client, user):
-        mock_client.return_value.my_current_games.return_value = []
+    def test_renders_past_games_section(self, auth_client, user):
         Game.objects.create(
             user=user, game_id="old1", black_name="PastFoe", is_active=False
         )

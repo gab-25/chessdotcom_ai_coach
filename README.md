@@ -15,11 +15,14 @@ grandmaster coach.
 - **Celery + Redis** — game analysis runs out-of-band: the view enqueues a Celery
   task (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend;
   a hidden HTMX poller reveals the result once the worker finishes
-- **APScheduler** — background scheduler (`manage.py run_scheduler`) that polls
-  active games every second and auto-enqueues analysis when it's the user's turn
-  (`chessdotcom_ai_coach/services/scheduler.py`); runs once inside the web container
-- **HTMX** — on-demand game loading and polling for the async coach result,
-  vendored via `django-htmx`
+- **APScheduler** — background scheduler (`manage.py run_scheduler`) that, every
+  5 seconds, syncs each linked user's current games from Chess.com into the
+  local DB and then auto-enqueues analysis when it's the user's turn
+  (`chessdotcom_ai_coach/services/scheduler.py`); runs once inside the web
+  container. This is the only path that keeps game data fresh — the home page
+  (below) just reads what the scheduler already synced.
+- **HTMX** — on-demand game loading and polling for the game list (a plain DB
+  read — see above) and for the async coach result, vendored via `django-htmx`
 - **Alpine.js** — board rendering (loaded from CDN, only on the game page)
 - **Gunicorn** — WSGI server in the container
 - Custom hand-written CSS theme (no Tailwind) in the `theme` app

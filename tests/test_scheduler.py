@@ -1,15 +1,19 @@
-"""Unit tests for the scheduler poll body (`enqueue_due_analyses`).
+"""Unit tests for the scheduler tick body: `sync_current_games` (Chess.com ->
+DB) and `enqueue_due_analyses` (DB -> Celery).
 
-The Celery task is mocked, so no broker or worker is needed: we assert only which
-games get enqueued and that dedup prevents re-enqueuing a queued position.
+The Celery task and the Chess.com `Client` are mocked, so no broker, worker or
+network is needed.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from chessdotcom_ai_coach.models import CoachSuggestion, Game
-from chessdotcom_ai_coach.services.scheduler import enqueue_due_analyses
+from chessdotcom_ai_coach.services.scheduler import (
+    enqueue_due_analyses,
+    sync_current_games,
+)
 
 # White to move (FEN field 2 = "w") vs. black to move.
 WHITE_TO_MOVE = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -102,3 +106,84 @@ class TestEnqueueDueAnalyses:
 
         assert enqueued == 1
         mock_task.delay.assert_called_once()
+
+
+@pytest.mark.django_db
+@patch("chessdotcom_ai_coach.services.scheduler.game_store.upsert_current_games")
+@patch("chessdotcom_ai_coach.services.scheduler.Client")
+class TestSyncCurrentGames:
+    def test_syncs_user_with_linked_chess_username(
+        self, mock_client_cls, mock_upsert, django_user_model
+    ):
+        user = django_user_model.objects.create_user(
+            username="login_name",
+            password="pw12345!",
+            chessdotcom_username="ChessHandle",
+        )
+        mock_client_cls.return_value.my_current_games.return_value = ["game-dict"]
+
+        sync_current_games()
+
+        mock_client_cls.assert_called_once_with(username="ChessHandle")
+        mock_upsert.assert_called_once_with(user, ["game-dict"])
+
+    def test_skips_user_without_linked_username(
+        self, mock_client_cls, mock_upsert, django_user_model
+    ):
+        # No chessdotcom_username set: chess_username would fall back to the
+        # login username, but this user is intentionally not synced.
+        django_user_model.objects.create_user(username="login_name", password="pw12345!")
+
+        sync_current_games()
+
+        mock_client_cls.assert_not_called()
+        mock_upsert.assert_not_called()
+
+    def test_skips_user_with_blank_linked_username(
+        self, mock_client_cls, mock_upsert, django_user_model
+    ):
+        django_user_model.objects.create_user(
+            username="login_name", password="pw12345!", chessdotcom_username=""
+        )
+
+        sync_current_games()
+
+        mock_client_cls.assert_not_called()
+        mock_upsert.assert_not_called()
+
+    def test_skips_inactive_user(self, mock_client_cls, mock_upsert, django_user_model):
+        django_user_model.objects.create_user(
+            username="login_name",
+            password="pw12345!",
+            chessdotcom_username="ChessHandle",
+            is_active=False,
+        )
+
+        sync_current_games()
+
+        mock_client_cls.assert_not_called()
+        mock_upsert.assert_not_called()
+
+    def test_one_users_failure_does_not_block_the_rest(
+        self, mock_client_cls, mock_upsert, django_user_model
+    ):
+        django_user_model.objects.create_user(
+            username="bad_login", password="pw12345!", chessdotcom_username="Bad"
+        )
+        good_user = django_user_model.objects.create_user(
+            username="good_login", password="pw12345!", chessdotcom_username="Good"
+        )
+
+        def _client_for(username):
+            client = MagicMock()
+            if username == "Bad":
+                client.my_current_games.side_effect = Exception("boom")
+            else:
+                client.my_current_games.return_value = ["ok"]
+            return client
+
+        mock_client_cls.side_effect = _client_for
+
+        sync_current_games()  # must not raise
+
+        mock_upsert.assert_called_once_with(good_user, ["ok"])
