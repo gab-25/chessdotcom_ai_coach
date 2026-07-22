@@ -332,6 +332,13 @@ input {
   background: var(--live-red);
   animation: gm-pulse 1.6s infinite;
 }
+.badge--turn {
+  color: var(--chrome);
+  background: var(--brass);
+}
+.badge--turn i {
+  font-size: 9px;
+}
 
 /* ===================== Chessboard (glyph) ===================== */
 .board {
@@ -442,12 +449,24 @@ input {
   box-shadow: var(--shadow-lift);
   color: inherit;
 }
+.gm-card--your-turn {
+  border-color: var(--brass);
+  box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.35), var(--shadow-card);
+}
+.gm-card--your-turn:hover {
+  box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.45), var(--shadow-lift);
+}
 .gm-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line-soft);
+}
+.gm-card__head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .gm-card__live {
   display: inline-flex;
