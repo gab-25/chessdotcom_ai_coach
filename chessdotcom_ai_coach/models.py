@@ -38,6 +38,23 @@ class Game(models.Model):
     pgn = models.TextField(blank=True)  # snapshot: the source of the move history
     fen = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)  # seen in the latest "current" fetch
+
+    class Result(models.TextChoices):
+        WIN = "win", "Win"
+        LOSS = "loss", "Loss"
+        DRAW = "draw", "Draw"
+        UNKNOWN = "unknown", "Unknown"
+
+    # Outcome relative to this row's user. Snapshots taken while the game is still
+    # "current" carry a PGN with Result "*", so the result is not known from the
+    # snapshot itself — the scheduler backfills it from the Chess.com monthly
+    # archives once the game ends (see services.scheduler.backfill_results).
+    result = models.CharField(
+        max_length=8, choices=Result.choices, default=Result.UNKNOWN
+    )
+    result_detail = models.CharField(
+        max_length=32, blank=True
+    )  # how it ended: "checkmate", "resignation", "timeout", "agreement", …
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -46,6 +63,16 @@ class Game(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["user", "game_id"], name="uniq_user_game")
         ]
+
+    @property
+    def has_result(self) -> bool:
+        """True once the outcome has been resolved from the archives."""
+        return self.result != self.Result.UNKNOWN
+
+    @property
+    def result_label(self) -> str:
+        """Human label for the outcome ("Win"/"Loss"/"Draw"), "" when unknown."""
+        return self.get_result_display() if self.has_result else ""
 
     def __str__(self) -> str:
         return f"{self.white_name} vs {self.black_name} ({self.game_id})"

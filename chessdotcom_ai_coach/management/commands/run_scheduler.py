@@ -7,10 +7,12 @@ duplicates.
 
 Every tick (5s — matching the home page's own HTMX poll cadence, so nothing
 needs data fresher than that) first syncs each linked user's current games
-from Chess.com into the local DB (`sync_current_games`), then checks that DB
-for games due for analysis and enqueues them (`enqueue_due_analyses`). The two
-steps run in separate try/except blocks so a Chess.com outage doesn't stop the
-local enqueue check from still running against whatever `Game` rows exist.
+from Chess.com into the local DB (`sync_current_games`), then resolves the
+outcome of games that just ended from the Chess.com archives
+(`backfill_results`), then checks the DB for games due for analysis and enqueues
+them (`enqueue_due_analyses`). The steps run in separate try/except blocks so a
+Chess.com outage doesn't stop the local enqueue check from still running against
+whatever `Game` rows exist.
 """
 
 import logging
@@ -18,7 +20,11 @@ import logging
 from apscheduler.schedulers.blocking import BlockingScheduler
 from django.core.management.base import BaseCommand
 
-from ...services.scheduler import enqueue_due_analyses, sync_current_games
+from ...services.scheduler import (
+    backfill_results,
+    enqueue_due_analyses,
+    sync_current_games,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +32,10 @@ POLL_INTERVAL_SECONDS = 5
 
 
 class Command(BaseCommand):
-    help = "Every 5s, sync games from Chess.com and enqueue Celery analysis tasks."
+    help = (
+        "Every 5s, sync games from Chess.com, backfill finished-game results, "
+        "and enqueue Celery analysis tasks."
+    )
 
     def handle(self, *args, **options):
         scheduler = BlockingScheduler()
@@ -50,6 +59,12 @@ class Command(BaseCommand):
             sync_current_games()
         except Exception:  # a bad tick must not kill the scheduler
             logger.exception("Chess.com sync failed")
+        try:
+            # After the sync: games that just ended are now is_active=False, so
+            # resolve their outcome from the archives.
+            backfill_results()
+        except Exception:
+            logger.exception("Result backfill failed")
         try:
             enqueue_due_analyses()
         except Exception:

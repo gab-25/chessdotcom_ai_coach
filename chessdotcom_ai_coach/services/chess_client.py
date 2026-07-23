@@ -1,7 +1,33 @@
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from chessdotcom import ChessDotComClient
+
+# Chess.com per-side `result` strings that mean the game was drawn. Anything that
+# isn't one of these and isn't "win" is treated as a loss for that side.
+_DRAW_RESULTS = {
+    "stalemate",
+    "agreed",
+    "repetition",
+    "insufficient",
+    "50move",
+    "timevsinsufficient",
+}
+
+# Map Chess.com's raw per-side `result` codes to a short, human-friendly reason.
+_RESULT_DETAIL = {
+    "win": "",
+    "checkmated": "checkmate",
+    "resigned": "resignation",
+    "timeout": "timeout",
+    "abandoned": "abandonment",
+    "stalemate": "stalemate",
+    "agreed": "agreement",
+    "repetition": "repetition",
+    "insufficient": "insufficient material",
+    "50move": "50-move rule",
+    "timevsinsufficient": "timeout vs insufficient",
+}
 
 
 class Client:
@@ -100,3 +126,61 @@ class Client:
             "white_rating": white_elo_match.group(1) if white_elo_match else None,
             "black_rating": black_elo_match.group(1) if black_elo_match else None,
         }
+
+    def finished_game_results(
+        self, year: Optional[int] = None, month: Optional[int] = None
+    ) -> Dict[str, dict]:
+        """Outcomes of the user's finished games for one month, from the archives.
+
+        Chess.com drops a game from ``current_games`` the moment it ends, so the
+        snapshot we hold has a PGN with Result "*". The monthly-archive endpoint is
+        the reliable source for the final result: unlike current games (where
+        ``white``/``black`` are URL strings), each archived game carries
+        ``white``/``black`` as dicts with a ``result`` code.
+
+        Returns ``{game_id: {"result": "win"|"loss"|"draw", "detail": str}}`` keyed
+        by the Chess.com game id (last URL segment), covering only the games the
+        user played. Defaults to the current month when ``year``/``month`` are None.
+        """
+        response = self._chessdotcomclient.get_player_games_by_month(  # pyright: ignore[reportAttributeAccessIssue]
+            self.username, year, month
+        )
+        data = response.json
+        games = data.get("games", []) if isinstance(data, dict) else []
+
+        me = self.username.lower()
+        results: Dict[str, dict] = {}
+        for game in games:
+            white = game.get("white") or {}
+            black = game.get("black") or {}
+            if not isinstance(white, dict) or not isinstance(black, dict):
+                continue  # not the archive shape (defensive)
+
+            if str(white.get("username", "")).lower() == me:
+                mine, theirs = white, black
+            elif str(black.get("username", "")).lower() == me:
+                mine, theirs = black, white
+            else:
+                continue  # archive can include games under an alias we don't match
+
+            my_result = str(mine.get("result", ""))
+            if not my_result:
+                continue
+
+            if my_result == "win":
+                outcome = "win"
+                # The decisive reason lives on the losing side.
+                detail = _RESULT_DETAIL.get(str(theirs.get("result", "")), "")
+            elif my_result in _DRAW_RESULTS:
+                outcome = "draw"
+                detail = ""
+            else:
+                outcome = "loss"
+                detail = _RESULT_DETAIL.get(my_result, "")
+
+            game_url = game.get("url", "")
+            game_id = game_url.split("/")[-1] if game_url else ""
+            if game_id:
+                results[game_id] = {"result": outcome, "detail": detail}
+
+        return results

@@ -62,7 +62,12 @@
     {% for game in past_games %}
     <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
       <div class="gm-card__head">
-        <span class="badge">{{ game.time_class|capfirst }}</span>
+        <span class="gm-card__head-left">
+          <span class="badge">{{ game.time_class|capfirst }}</span>
+          {% if game.has_result %}
+          <span class="badge badge--{{ game.result }}">{{ game.result_label }}{% if game.result_detail %} · {{ game.result_detail }}{% endif %}</span>
+          {% endif %}
+        </span>
         <span class="gm-card__ended">ENDED{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
       </div>
 

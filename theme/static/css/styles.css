@@ -339,6 +339,19 @@ input {
 .badge--turn i {
   font-size: 9px;
 }
+/* Past-game outcome badges (win / loss / draw), relative to the user. */
+.badge--win {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.badge--loss {
+  color: var(--live-red);
+  background: rgba(208, 70, 59, 0.12);
+}
+.badge--draw {
+  color: var(--ink-dim);
+  background: rgba(154, 144, 132, 0.16);
+}
 
 /* ===================== Chessboard (glyph) ===================== */
 .board {
