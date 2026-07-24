@@ -1,17 +1,20 @@
 """Unit tests for the views.
 
-The Chess.com ``Client`` and the async coach are mocked, so no network,
-engine or LLM is touched. A SQLite DB (see conftest) backs auth.
+The detail page reads entirely from the stored ``Game`` snapshot (kept fresh by
+the scheduler) and ``CoachSuggestion`` rows — no Chess.com call — so these tests
+just seed the DB. The Celery task is mocked where analysis is enqueued.
 """
 
-import json
 from unittest.mock import patch
 
 import pytest
 
 from chessdotcom_ai_coach.models import CoachSuggestion, Game
+from chessdotcom_ai_coach.services import board as board_utils
 
 FEN_START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+# Position after 1. e4 e5 2. Nf3 Nc6 — White (the user) to move.
+FEN_LIVE = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
 PGN = '[Event "Test"]\n\n1. e4 e5 2. Nf3 Nc6 *'
 
 
@@ -28,43 +31,27 @@ def auth_client(client, user):
     return client
 
 
-def _sample_game(**overrides):
-    game = {
-        "fen": FEN_START,
-        "pgn": PGN,
-        "time_class": "rapid",
-        "url": "https://www.chess.com/game/live/944768131",
-    }
-    game.update(overrides)
-    return {
-        "game": game,
-        "white_name": "MyUser",
-        "black_name": "Opponent",
-        "white_rating": "1500",
-        "black_rating": "1600",
-    }
-
-
-def _review_data(response):
-    """Pull the JSON model the view embedded via ``json_script`` for the client."""
-    marker = b'<script id="gr-data" type="application/json">'
-    body = response.content
-    start = body.index(marker) + len(marker)
-    end = body.index(b"</script>", start)
-    return json.loads(body[start:end].decode())
+def _make_game(user, **overrides):
+    defaults = dict(
+        user=user,
+        game_id="944768131",
+        white_name="MyUser",
+        black_name="Opponent",
+        white_rating="1500",
+        black_rating="1600",
+        time_class="rapid",
+        pgn=PGN,
+        fen=FEN_LIVE,
+        is_active=True,
+    )
+    defaults.update(overrides)
+    return Game.objects.create(**defaults)
 
 
 @pytest.mark.django_db
 class TestHome:
     def test_lists_games(self, auth_client, user):
-        Game.objects.create(
-            user=user,
-            game_id="944768131",
-            white_name="MyUser",
-            black_name="Opponent",
-            fen=FEN_START,
-            is_active=True,
-        )
+        _make_game(user, fen=FEN_START)
 
         response = auth_client.get("/")
 
@@ -76,7 +63,7 @@ class TestHome:
         assert games[0].move_no == 1
 
     def test_does_not_call_chess_com(self, auth_client):
-        with patch("chessdotcom_ai_coach.views.Client") as mock_client:
+        with patch("chessdotcom_ai_coach.services.chess_client.Client") as mock_client:
             response = auth_client.get("/")
 
         assert response.status_code == 200
@@ -92,24 +79,12 @@ class TestHome:
 @pytest.mark.django_db
 class TestGameList:
     def test_returns_fragment_with_games(self, auth_client, user):
-        Game.objects.create(
-            user=user,
-            game_id="944768131",
-            white_name="MyUser",
-            black_name="Opponent",
-            fen=FEN_START,
-            is_active=True,
-        )
+        _make_game(user)
 
         response = auth_client.get("/games")
 
         assert response.status_code == 200
         assert b"Opponent" in response.content
-
-    def test_does_not_write_to_the_db(self, auth_client, user):
-        auth_client.get("/games")
-
-        assert not Game.objects.filter(user=user).exists()
 
     def test_renders_past_games_section(self, auth_client, user):
         Game.objects.create(
@@ -132,61 +107,60 @@ class TestGameList:
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.views.Client")
 class TestGameDetail:
     """The unified detail page: same UI for live and finished games."""
 
-    def test_live_game_renders_and_is_live(self, mock_client, auth_client):
-        mock_client.return_value.game_detail.return_value = _sample_game()
+    def test_live_game_renders_at_head(self, auth_client, user):
+        _make_game(user)  # active, user is White and to move
 
         response = auth_client.get("/game/944768131")
 
         assert response.status_code == 200
-        assert response.context["is_live"] is True
-        assert response.context["orientation"] == "white"
-        assert b'id="gr-board"' in response.content
-        data = _review_data(response)
-        assert data["meta"]["isLive"] is True
-        assert [p["san"] for p in data["plies"]] == ["e4", "e5", "Nf3", "Nc6"]
-        assert len(data["positions"]) == len(data["plies"]) + 1
+        assert b'id="gr-view"' in response.content
+        assert b"WATCHING LIVE" in response.content
+        assert response.context["sel"] == response.context["head"] == 4
+        # At the live head, your move, no suggestion yet → request button.
+        assert b"Request suggestion" in response.content
 
-    def test_orientation_black_when_user_is_black(self, mock_client, auth_client):
-        game = _sample_game()
-        game["white_name"], game["black_name"] = "Opponent", "MyUser"
-        mock_client.return_value.game_detail.return_value = game
+    def test_finished_game_starts_at_opening(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.status_code == 200
+        assert b"REVIEW" in response.content
+        assert response.context["sel"] == 0
+        assert b"Step through the moves" in response.content
+
+    def test_orientation_black_when_user_is_black(self, auth_client, user):
+        _make_game(user, white_name="Opponent", black_name="MyUser", is_active=False)
 
         response = auth_client.get("/game/944768131")
 
         assert response.context["orientation"] == "black"
-        assert _review_data(response)["meta"]["orientation"] == "black"
 
-    def test_finished_game_falls_back_to_stored(self, mock_client, auth_client, user):
-        # No longer current on Chess.com...
-        mock_client.return_value.game_detail.return_value = None
-        # ...but a snapshot exists — served as a finished (review) game.
-        Game.objects.create(
-            user=user,
-            game_id="944768131",
-            white_name="MyUser",
-            black_name="Opponent",
-            pgn=PGN,
-            fen=FEN_START,
-            is_active=False,
-        )
+    def test_not_found(self, auth_client):
+        response = auth_client.get("/game/nope")
 
-        response = auth_client.get("/game/944768131")
+        assert response.status_code == 404
+        assert b"Game not found" in response.content
+
+    def test_requires_login(self, client):
+        response = client.get("/game/944768131")
+
+        assert response.status_code == 302
+
+    def test_position_fragment_for_a_ply(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
 
         assert response.status_code == 200
-        assert response.context["is_live"] is False
-        data = _review_data(response)
-        assert data["meta"]["isLive"] is False
-        assert [p["san"] for p in data["plies"]] == ["e4", "e5", "Nf3", "Nc6"]
+        assert b'id="gr-view"' in response.content
+        assert b"Reviewing" in response.content
 
-    def test_embeds_completed_analysis(self, mock_client, auth_client, user):
-        from chessdotcom_ai_coach.services import board as board_utils
-
-        mock_client.return_value.game_detail.return_value = _sample_game()
-        # Coach analysed the move-2 (White) position and recommended the played move.
+    def test_embeds_completed_analysis(self, auth_client, user):
+        _make_game(user, is_active=False)
         move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
         CoachSuggestion.objects.create(
             user=user,
@@ -200,132 +174,85 @@ class TestGameDetail:
             analysis="Develop the knight.",
         )
 
-        response = auth_client.get("/game/944768131")
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
 
-        data = _review_data(response)
-        # Analysis is keyed by 1-based ply index; ply 3 is White's 2nd move.
-        assert data["analysis"]["3"]["recSan"] == "Nf3"
-        assert data["analysis"]["3"]["followed"] is True
-        assert data["analysis"]["3"]["recFrom"] == "g1"
+        assert b"BEST MOVE" in response.content
+        assert b"You played the best move" in response.content
 
-    def test_not_found(self, mock_client, auth_client):
-        mock_client.return_value.game_detail.return_value = None
+    def test_live_poll_204_when_no_new_move(self, auth_client, user):
+        _make_game(user)  # head == 4
 
-        response = auth_client.get("/game/nope")
+        response = auth_client.get(
+            "/game/944768131/live", {"sel": "4", "head": "4"}
+        )
 
-        assert response.status_code == 404
-        assert b"Game not found" in response.content
+        assert response.status_code == 204
 
-    def test_error_page_on_failure(self, mock_client, auth_client):
-        mock_client.return_value.game_detail.side_effect = Exception("boom")
+    def test_live_poll_swaps_when_new_move(self, auth_client, user):
+        _make_game(user)  # head == 4 now; client still thinks head == 3
 
-        response = auth_client.get("/game/944768131")
-
-        assert response.status_code == 500
-
-    def test_poll_returns_json(self, mock_client, auth_client):
-        mock_client.return_value.game_detail.return_value = _sample_game()
-
-        response = auth_client.get("/game/944768131", {"poll": "1"})
+        response = auth_client.get(
+            "/game/944768131/live", {"sel": "3", "head": "3"}
+        )
 
         assert response.status_code == 200
-        assert response["Content-Type"].startswith("application/json")
-        body = response.json()
-        assert body["meta"]["isLive"] is True
-        assert body["meta"]["liveHead"] == 4
-
-    def test_poll_transient_failure_skips(self, mock_client, auth_client):
-        mock_client.return_value.game_detail.side_effect = Exception("boom")
-
-        response = auth_client.get("/game/944768131", {"poll": "1"})
-
-        # Poll swallows a transient fetch failure so the client keeps polling.
-        assert response.status_code == 204
+        assert b'id="gr-view"' in response.content
 
 
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.views.analyze_game_task")
-@patch("chessdotcom_ai_coach.views.Client")
 class TestAnalyzePosition:
-    def test_post_enqueues_once_and_creates_pending(
-        self, mock_client, mock_task, auth_client, user
-    ):
-        mock_client.return_value.game_detail.return_value = _sample_game()
+    def test_post_enqueues_for_a_user_move(self, mock_task, auth_client, user):
+        _make_game(user, is_active=False)
 
-        response = auth_client.post(
-            "/game/944768131/analyze", {"fen": FEN_START}
-        )
+        # sel 3 is White's 2nd move (Nf3) — a user move.
+        response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
 
         assert response.status_code == 200
-        assert response.json()["status"] == "pending"
+        assert b"Analysing" in response.content
         mock_task.delay.assert_called_once()
-        row = CoachSuggestion.objects.get(user=user, game_id="944768131", fen=FEN_START)
+        move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
+        row = CoachSuggestion.objects.get(user=user, game_id="944768131", fen=move_fen)
         assert row.status == CoachSuggestion.Status.PENDING
 
-    def test_finished_game_does_not_call_chess_com(
-        self, mock_client, mock_task, auth_client, user
-    ):
-        # A finished snapshot is the source of truth: analysis must not hit
-        # Chess.com just to fetch the PGN.
-        Game.objects.create(
-            user=user,
-            game_id="944768131",
-            white_name="MyUser",
-            black_name="Opponent",
-            pgn=PGN,
-            fen=FEN_START,
-            is_active=False,
-        )
+    def test_post_is_noop_for_opponent_move(self, mock_task, auth_client, user):
+        _make_game(user, is_active=False)
 
-        response = auth_client.post("/game/944768131/analyze", {"fen": FEN_START})
+        # sel 2 is Black's move (e5) — the coach only analyses the user's moves.
+        response = auth_client.post("/game/944768131/analyze", {"sel": "2"})
 
         assert response.status_code == 200
-        mock_client.return_value.game_detail.assert_not_called()
-        # The task is still enqueued with the snapshot's PGN.
-        mock_task.delay.assert_called_once()
-        assert mock_task.delay.call_args.args[3] == PGN
+        mock_task.delay.assert_not_called()
+        assert CoachSuggestion.objects.count() == 0
 
-    def test_post_is_idempotent_while_pending(
-        self, mock_client, mock_task, auth_client, user
-    ):
-        mock_client.return_value.game_detail.return_value = _sample_game()
-
-        auth_client.post("/game/944768131/analyze", {"fen": FEN_START})
-        auth_client.post("/game/944768131/analyze", {"fen": FEN_START})
-
-        mock_task.delay.assert_called_once()
-        assert CoachSuggestion.objects.filter(fen=FEN_START).count() == 1
-
-    def test_get_reports_done_status(
-        self, mock_client, mock_task, auth_client, user
-    ):
+    def test_get_returns_the_done_card(self, mock_task, auth_client, user):
+        _make_game(user, is_active=False)
+        move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
         CoachSuggestion.objects.create(
             user=user,
             game_id="944768131",
-            fen=FEN_START,
+            fen=move_fen,
             status=CoachSuggestion.Status.DONE,
-            eval_text="+0.2",
-            eval_cp=0.2,
-            best_move_san="e4",
-            best_move_uci="e2e4",
-            analysis="Play e4.",
+            eval_text="+0.3",
+            eval_cp=0.3,
+            best_move_san="Nf3",
+            best_move_uci="g1f3",
+            analysis="Develop the knight.",
         )
 
-        response = auth_client.get("/game/944768131/analyze", {"fen": FEN_START})
+        response = auth_client.get("/game/944768131/analyze", {"sel": "3"})
 
-        body = response.json()
-        assert body["status"] == "done"
-        assert body["recSan"] == "e4"
-        assert body["recFrom"] == "e2"
-        assert body["prose"] == "Play e4."
+        assert b"BEST MOVE" in response.content
+        assert b"Develop the knight." in response.content
         mock_task.delay.assert_not_called()
 
-    def test_missing_fen_is_bad_request(
-        self, mock_client, mock_task, auth_client, user
-    ):
-        response = auth_client.post("/game/944768131/analyze", {})
+    def test_analysis_never_calls_chess_com(self, mock_task, auth_client, user):
+        _make_game(user, is_active=False)
 
-        assert response.status_code == 400
+        with patch("chessdotcom_ai_coach.services.chess_client.Client") as mock_client:
+            auth_client.post("/game/944768131/analyze", {"sel": "3"})
+
+        mock_client.assert_not_called()
 
 
 @pytest.mark.django_db

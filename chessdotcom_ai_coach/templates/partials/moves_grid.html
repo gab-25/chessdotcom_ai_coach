@@ -1,0 +1,23 @@
+{% comment %}
+  Played-move grid; click a move to review it. Each item is an htmx GET that swaps
+  the whole position view. Expects `moves` (from _position_context) and `id`.
+{% endcomment %}
+{% if moves %}
+<div class="moves gr-moves">
+  <div class="moves__head"><i class="fa-solid fa-list-ol"></i> Moves · click to review</div>
+  <ol class="gr-moves-grid">
+    {% for m in moves %}
+    <li class="gr-move{% if m.analyzed %} gr-move--analyzed{% endif %}{% if m.selected %} gr-move--sel{% endif %}"
+        hx-get="{% url 'game_position' id %}?sel={{ m.sel }}" hx-target="#gr-view" hx-swap="outerHTML">
+      <span class="gr-move__no">{{ m.no }}{% if m.color == 'white' %}.{% else %}…{% endif %}</span>
+      <span class="gr-move__san">{{ m.san }}</span>
+      {% if m.analyzed %}
+      <span class="gr-badge {% if m.followed %}gr-badge--followed{% else %}gr-badge--differed{% endif %}">{% if m.followed %}&#10003;{% else %}&#9670;{% endif %} {{ m.rec_san }}</span>
+      {% elif m.pending %}
+      <span class="gr-badge gr-badge--pending">…</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+{% endif %}
