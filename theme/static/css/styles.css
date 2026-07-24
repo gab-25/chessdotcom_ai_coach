@@ -1027,8 +1027,8 @@ input {
   width: 15px;
   height: 15px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
+  border: 2px solid rgba(183, 142, 84, 0.25);
+  border-top-color: #b78e54;
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin {

@@ -1,0 +1,5 @@
+{% comment %}
+  The eval-bar fill. Rendered inline by position.html and, on its own with an
+  out-of-band swap, by the coach-card self-poll (`oob`) so the bar tracks a
+  freshly-arrived analysis without a full #gr-view re-render.
+{% endcomment %}<div id="gr-evalfill"{% if oob %} hx-swap-oob="true"{% endif %} class="evalbar__fill" style="height:{{ eval_fill }}%"></div>

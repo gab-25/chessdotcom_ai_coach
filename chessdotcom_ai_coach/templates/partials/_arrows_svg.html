@@ -1,0 +1,15 @@
+{% comment %}
+  The board arrow overlay. Always rendered (even with no arrows) so its id is a
+  stable target: position.html renders it inline; the coach-card self-poll
+  renders it standalone with an out-of-band swap (`oob`), so a freshly-arrived
+  analysis draws its arrows — or an empty overlay clears stale ones — without a
+  full #gr-view re-render.
+{% endcomment %}<svg id="gr-arrows"{% if oob %} hx-swap-oob="true"{% endif %} class="gr-arrows" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="gr-ah-brass" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#b78e54"></path></marker>
+    <marker id="gr-ah-green" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#4a7a52"></path></marker>
+  </defs>
+  {% for a in arrows %}
+  <line x1="{{ a.x1 }}%" y1="{{ a.y1 }}%" x2="{{ a.x2 }}%" y2="{{ a.y2 }}%" stroke="{{ a.color }}" stroke-width="7" stroke-linecap="round" opacity="0.92" marker-end="{{ a.marker }}"></line>
+  {% endfor %}
+</svg>
