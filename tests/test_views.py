@@ -262,6 +262,29 @@ class TestAnalyzePosition:
         row = CoachSuggestion.objects.get(user=user, game_id="944768131", fen=FEN_START)
         assert row.status == CoachSuggestion.Status.PENDING
 
+    def test_finished_game_does_not_call_chess_com(
+        self, mock_client, mock_task, auth_client, user
+    ):
+        # A finished snapshot is the source of truth: analysis must not hit
+        # Chess.com just to fetch the PGN.
+        Game.objects.create(
+            user=user,
+            game_id="944768131",
+            white_name="MyUser",
+            black_name="Opponent",
+            pgn=PGN,
+            fen=FEN_START,
+            is_active=False,
+        )
+
+        response = auth_client.post("/game/944768131/analyze", {"fen": FEN_START})
+
+        assert response.status_code == 200
+        mock_client.return_value.game_detail.assert_not_called()
+        # The task is still enqueued with the snapshot's PGN.
+        mock_task.delay.assert_called_once()
+        assert mock_task.delay.call_args.args[3] == PGN
+
     def test_post_is_idempotent_while_pending(
         self, mock_client, mock_task, auth_client, user
     ):

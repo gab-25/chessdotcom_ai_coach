@@ -313,16 +313,22 @@ def analyze_position(request, id):
     ).first()
 
     if request.method == "POST":
-        pgn = None
-        try:
-            game_data, error = _fetch_detail(request.user, id)
-            if not error:
-                pgn = game_data["game"].get("pgn")
-        except Exception:
-            game_data = None
-        if pgn is None:
-            stored = game_store.stored_game(request.user, id)
-            pgn = stored.pgn if stored else None
+        stored = game_store.stored_game(request.user, id)
+        if stored is not None and not stored.is_active:
+            # Finished game: the snapshot is the source of truth — no Chess.com call.
+            pgn = stored.pgn
+        else:
+            # Live (or not yet snapshotted): fetch the fresh PGN, fall back to
+            # the snapshot on failure.
+            pgn = None
+            try:
+                game_data, error = _fetch_detail(request.user, id)
+                if not error:
+                    pgn = game_data["game"].get("pgn")
+            except Exception:
+                pass
+            if pgn is None and stored is not None:
+                pgn = stored.pgn
 
         if row is None:
             row = CoachSuggestion.objects.create(
