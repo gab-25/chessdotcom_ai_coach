@@ -159,6 +159,20 @@ class TestGameDetail:
         assert b'id="gr-view"' in response.content
         assert b"Reviewing" in response.content
 
+    def test_full_render_has_no_out_of_band_swaps(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        # The arrow overlay and eval bar are always present as stable OOB
+        # targets, but in a full #gr-view render they are inline — not
+        # out-of-band (that is only for the standalone coach-card self-poll).
+        assert 'id="gr-arrows"' in body
+        assert 'id="gr-evalfill"' in body
+        assert 'id="gr-arrows" hx-swap-oob' not in body
+        assert 'id="gr-evalfill" hx-swap-oob' not in body
+
     def test_embeds_completed_analysis(self, auth_client, user):
         _make_game(user, is_active=False)
         move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
@@ -245,6 +259,32 @@ class TestAnalyzePosition:
         assert b"BEST MOVE" in response.content
         assert b"Develop the knight." in response.content
         mock_task.delay.assert_not_called()
+
+    def test_get_syncs_board_out_of_band(self, mock_task, auth_client, user):
+        _make_game(user)  # live, White (user) to move at the head (sel == head == 4)
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="944768131",
+            fen=FEN_LIVE,
+            status=CoachSuggestion.Status.DONE,
+            eval_text="+0.4",
+            eval_cp=0.4,
+            best_move_san="Bb5",
+            best_move_uci="f1b5",
+            analysis="Pin the knight.",
+        )
+
+        response = auth_client.get("/game/944768131/analyze", {"sel": "4"})
+        body = response.content.decode()
+
+        # The card body updated…
+        assert "BEST MOVE" in body
+        # …and the board arrows + eval bar ride along out-of-band so the board
+        # updates without a full #gr-view re-render.
+        assert 'id="gr-arrows"' in body
+        assert 'id="gr-evalfill"' in body
+        assert 'hx-swap-oob="true"' in body
+        assert 'stroke="#b78e54"' in body  # brass recommended-move arrow
 
     def test_analysis_never_calls_chess_com(self, mock_task, auth_client, user):
         _make_game(user, is_active=False)

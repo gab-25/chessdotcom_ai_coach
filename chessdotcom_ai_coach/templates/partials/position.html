@@ -29,23 +29,13 @@
 
       <div class="board-stage">
         <div class="evalbar{% if flipped %} evalbar--flipped{% endif %}">
-          <div class="evalbar__fill" style="height:{{ eval_fill }}%"></div>
+          {% include "partials/_evalfill.html" %}
           <div class="evalbar__mid"></div>
         </div>
         <div class="board-stage__board">
           <div class="gr-board-wrap">
             {% include "partials/board.html" with cells=cells board_class="board--lg" %}
-            {% if arrows %}
-            <svg class="gr-arrows" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <marker id="gr-ah-brass" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#b78e54"></path></marker>
-                <marker id="gr-ah-green" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#4a7a52"></path></marker>
-              </defs>
-              {% for a in arrows %}
-              <line x1="{{ a.x1 }}%" y1="{{ a.y1 }}%" x2="{{ a.x2 }}%" y2="{{ a.y2 }}%" stroke="{{ a.color }}" stroke-width="7" stroke-linecap="round" opacity="0.92" marker-end="{{ a.marker }}"></line>
-              {% endfor %}
-            </svg>
-            {% endif %}
+            {% include "partials/_arrows_svg.html" %}
           </div>
         </div>
       </div>

@@ -359,6 +359,9 @@ def analyze_position(request, id):
                 analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
             context = _position_context(request.user, game, sel)
 
+    # Standalone card render: carry the eval bar and board arrows out-of-band so
+    # a freshly-arrived analysis updates the board without a full #gr-view swap.
+    context["oob"] = True
     return render(request, "partials/coach_card.html", context)
 
 
