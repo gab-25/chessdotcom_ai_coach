@@ -1,0 +1,98 @@
+{% comment %}
+  The move-by-move "position view" — the whole #gr-view swapped by navigation and
+  the live poll. Rendered from the stored snapshot (no Chess.com call). When it is
+  an htmx response it also keeps the header pill in sync via an out-of-band swap.
+{% endcomment %}
+{% if request.htmx %}
+<span id="gr-pill" hx-swap-oob="true" class="status-pill{% if is_live %} status-pill--watch{% endif %}">
+  <span class="status-pill__dot"></span>{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}
+</span>
+{% endif %}
+<div id="gr-view">
+  <div class="game-layout" id="gr-root">
+
+    <!-- LEFT: board column -->
+    <div>
+      <div class="detail-meta">
+        {% if time_class %}<span class="badge">{{ time_class|capfirst }}</span>{% endif %}
+        {% if result_label %}
+        <span class="badge badge--{{ result }}">{{ result_label }}{% if result_detail %} · {{ result_detail }}{% endif %}</span>
+        {% endif %}
+        <span class="detail-meta__text">{{ sel_text }}</span>
+      </div>
+
+      {% if orientation == "black" %}
+      <div class="pbar pbar--top"><span class="pbar__avatar pbar__avatar--w"></span><span class="pbar__id"><span class="pbar__name">{{ white_name }}</span><span class="pbar__meta">{{ white_rating|default:"—" }}</span></span></div>
+      {% else %}
+      <div class="pbar pbar--top"><span class="pbar__avatar pbar__avatar--b"></span><span class="pbar__id"><span class="pbar__name">{{ black_name }}</span><span class="pbar__meta">{{ black_rating|default:"—" }}</span></span></div>
+      {% endif %}
+
+      <div class="board-stage">
+        <div class="evalbar{% if flipped %} evalbar--flipped{% endif %}">
+          <div class="evalbar__fill" style="height:{{ eval_fill }}%"></div>
+          <div class="evalbar__mid"></div>
+        </div>
+        <div class="board-stage__board">
+          <div class="gr-board-wrap">
+            {% include "partials/board.html" with cells=cells board_class="board--lg" %}
+            {% if arrows %}
+            <svg class="gr-arrows" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <marker id="gr-ah-brass" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#b78e54"></path></marker>
+                <marker id="gr-ah-green" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="#4a7a52"></path></marker>
+              </defs>
+              {% for a in arrows %}
+              <line x1="{{ a.x1 }}%" y1="{{ a.y1 }}%" x2="{{ a.x2 }}%" y2="{{ a.y2 }}%" stroke="{{ a.color }}" stroke-width="7" stroke-linecap="round" opacity="0.92" marker-end="{{ a.marker }}"></line>
+              {% endfor %}
+            </svg>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      {% if orientation == "black" %}
+      <div class="pbar pbar--bottom"><span class="pbar__avatar pbar__avatar--b"></span><span class="pbar__id"><span class="pbar__name">{{ black_name }}</span><span class="pbar__meta">{{ black_rating|default:"—" }}</span></span><span class="pbar__you">YOU</span></div>
+      {% else %}
+      <div class="pbar pbar--bottom"><span class="pbar__avatar pbar__avatar--w"></span><span class="pbar__id"><span class="pbar__name">{{ white_name }}</span><span class="pbar__meta">{{ white_rating|default:"—" }}</span></span><span class="pbar__you">YOU</span></div>
+      {% endif %}
+
+      <div class="movebar">
+        <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
+        <div class="gr-navwrap">
+          {% if is_live and sel < head %}
+          <button type="button" class="gr-live-btn" title="Jump to the live position"
+                  hx-get="{% url 'game_position' id %}?sel={{ head }}" hx-target="#gr-view" hx-swap="outerHTML">
+            <span class="status-pill__dot"></span>{{ behind }} new · live
+          </button>
+          {% endif %}
+          <div class="gr-nav">
+            <button type="button" title="Start" hx-get="{% url 'game_position' id %}?sel=0" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='Home'] from:body">«</button>
+            <button type="button" title="Back (←)" hx-get="{% url 'game_position' id %}?sel={{ prev_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowLeft'] from:body">‹</button>
+            <button type="button" title="Forward (→)" hx-get="{% url 'game_position' id %}?sel={{ next_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowRight'] from:body">›</button>
+            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ head }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: coach column -->
+    <div class="game-col">
+      <div class="coach">
+        <div class="coach__head">
+          <span class="coach__head-icon">&#9818;</span>
+          <h3 class="coach__title">Coach suggestion</h3>
+          <span class="coach__tag">{{ move_label }}</span>
+        </div>
+        <div class="coach__body" id="gr-coach">{% include "partials/coach_card.html" %}</div>
+      </div>
+
+      {% include "partials/history_list.html" %}
+    </div>
+  </div>
+
+  {% include "partials/moves_grid.html" %}
+
+  {% if is_live %}
+  <div hx-get="{% url 'game_live' id %}?sel={{ sel }}&head={{ head }}" hx-trigger="every 5s" hx-target="#gr-view" hx-swap="outerHTML"></div>
+  {% endif %}
+</div>

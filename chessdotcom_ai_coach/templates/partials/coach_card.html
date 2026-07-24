@@ -1,0 +1,99 @@
+{% comment %}
+  The coach-card body (inside #gr-coach). Driven by `coach.mode`; also returned on
+  its own by the analyze endpoint, so the pending states self-poll via htmx until
+  the background analysis is done.
+{% endcomment %}
+{% if coach.mode == "start" %}
+<div class="coach__placeholder">
+  <span class="gr-glyph">&#9818;</span>
+  <p>Step through the moves to review the position and the coach's suggestion for each one.</p>
+</div>
+
+{% elif coach.mode == "opponent" %}
+<div class="gr-opp">
+  <div class="coach__rec-label">Opponent&rsquo;s move</div>
+  <div class="gr-bigmove">{{ coach.san }}</div>
+  <p class="coach__summary">The coach only analyses your moves. Step to your turn to see the suggestion.</p>
+</div>
+
+{% elif coach.mode == "unanalyzed" %}
+<div class="coach__placeholder">
+  <span class="gr-glyph gr-glyph--sm">&#9822;</span>
+  <p>No suggestion requested for <b>{{ coach.san }}</b>. You can ask the coach for one.</p>
+  <button type="button" class="btn btn--accent btn--sm"
+          hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
+    <i class="fa-solid fa-wand-magic-sparkles"></i> Request suggestion
+  </button>
+</div>
+
+{% elif coach.mode == "pending" %}
+<div hx-get="{% url 'analyze_position' id %}?sel={{ sel }}" hx-trigger="every 2s" hx-target="#gr-coach" hx-swap="innerHTML">
+  <div class="coach__placeholder">
+    <span class="spinner"></span>
+    <p>Analysing <b>{{ coach.san }}</b> in the background… the suggestion will appear shortly.</p>
+  </div>
+</div>
+
+{% elif coach.mode == "analyzed" %}
+<div>
+  <div class="coach__rec">
+    <div><div class="coach__rec-label">Recommended</div><div class="coach__move">{{ coach.rec_san }}</div></div>
+    {% if coach.rec_eval %}<div style="padding-bottom:6px"><div class="coach__eval">{{ coach.rec_eval }}</div></div>{% endif %}
+    <span class="coach__badge">BEST MOVE</span>
+  </div>
+  <div class="gr-compare">
+    <div class="gr-compare__cell">
+      <div class="gr-compare__label">You played</div>
+      <div class="gr-compare__val"><span class="gr-compare__san">{{ coach.played_san }}</span><span class="gr-compare__eval">{{ coach.played_eval|default:"—" }}</span></div>
+    </div>
+    <div class="gr-compare__cell gr-compare__cell--{% if coach.followed %}good{% else %}diff{% endif %}">
+      <div class="gr-compare__label">Coach</div>
+      <div class="gr-compare__val"><span class="gr-compare__san">{{ coach.rec_san }}</span><span class="gr-compare__eval gr-compare__eval--green">{{ coach.rec_eval }}</span></div>
+    </div>
+  </div>
+  <div class="gr-status gr-status--{% if coach.followed %}followed{% else %}differed{% endif %}">
+    <span>{% if coach.followed %}&#10003;{% else %}&#9670;{% endif %}</span>{% if coach.followed %}You played the best move{% else %}The coach preferred {{ coach.rec_san }}{% endif %}
+  </div>
+  {% if coach.prose %}<p class="coach__summary">{{ coach.prose }}</p>{% endif %}
+  <div class="gr-legend">
+    <span class="gr-legend__item"><span class="gr-legend__dot gr-legend__dot--brass"></span>Recommended</span>
+    {% if not coach.followed %}<span class="gr-legend__item"><span class="gr-legend__dot gr-legend__dot--green"></span>Played</span>{% endif %}
+  </div>
+</div>
+
+{% elif coach.mode == "live_waiting" %}
+<div class="coach__placeholder">
+  <i class="fa-solid fa-hourglass-half gr-glyph gr-glyph--sm"></i>
+  <p>Opponent to move. The coach will suggest your move once it's your turn.</p>
+</div>
+
+{% elif coach.mode == "live_request" %}
+<div class="coach__placeholder">
+  <span class="gr-glyph gr-glyph--sm">&#9822;</span>
+  <p>It's your move. Ask the coach what to play.</p>
+  <button type="button" class="btn btn--accent btn--block"
+          hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
+    <i class="fa-solid fa-wand-magic-sparkles"></i> Request suggestion
+  </button>
+</div>
+
+{% elif coach.mode == "live_pending" %}
+<div hx-get="{% url 'analyze_position' id %}?sel={{ sel }}" hx-trigger="every 2s" hx-target="#gr-coach" hx-swap="innerHTML">
+  <div class="coach__placeholder">
+    <span class="spinner"></span>
+    <p>Analysing the current position… the suggestion will appear shortly.</p>
+  </div>
+</div>
+
+{% elif coach.mode == "live_analyzed" %}
+<div>
+  <div class="coach__rec">
+    <div><div class="coach__rec-label">Recommended</div><div class="coach__move">{{ coach.rec_san }}</div></div>
+    {% if coach.rec_eval %}<div style="padding-bottom:6px"><div class="coach__eval">{{ coach.rec_eval }}</div></div>{% endif %}
+    <span class="coach__badge">BEST MOVE</span>
+  </div>
+  <div class="gr-status gr-status--followed" style="margin-top:14px"><span>&#9818;</span>It's your move — this is the coach's pick</div>
+  {% if coach.prose %}<p class="coach__summary">{{ coach.prose }}</p>{% endif %}
+  <div class="gr-legend"><span class="gr-legend__item"><span class="gr-legend__dot gr-legend__dot--brass"></span>Recommended</span></div>
+</div>
+{% endif %}

@@ -30,6 +30,34 @@ class TestMovesFromPgn:
         assert board.moves_from_pgn(None) == []
 
 
+class TestPositionsFromPgn:
+    def test_returns_one_more_than_plies(self):
+        # 4 plies -> 5 positions (initial + after each ply), index-aligned with
+        # moves_from_pgn (positions[i + 1] is the position moves[i] reaches).
+        moves = board.moves_from_pgn(PGN)
+        positions = board.positions_from_pgn(PGN)
+        assert len(positions) == len(moves) + 1
+
+    def test_first_is_initial_and_matches_moves(self):
+        moves = board.moves_from_pgn(PGN)
+        positions = board.positions_from_pgn(PGN)
+        assert positions[0].startswith("rnbqkbnr/pppppppp")
+        # positions[i] is the position *before* moves[i].
+        assert positions[0] == moves[0]["fen_before"]
+        assert positions[2] == moves[2]["fen_before"]
+
+    def test_last_reflects_the_played_moves(self):
+        positions = board.positions_from_pgn(PGN)
+        # After 1.e4 e5 2.Nf3 Nc6 the e/knight moves are on the board and it is
+        # White to move again.
+        assert " w " in positions[-1]
+        assert positions[-1] != positions[0]
+
+    def test_empty_or_missing_pgn(self):
+        assert board.positions_from_pgn("") == []
+        assert board.positions_from_pgn(None) == []
+
+
 class TestAnnotateMoves:
     def _suggestion(self, fen, best):
         return SimpleNamespace(fen=fen, move_no=None, best_move_san=best)

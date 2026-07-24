@@ -1,0 +1,24 @@
+{% comment %}
+  Analysis-history timeline (one entry per analysed user move). Click to jump to
+  that move. Expects `history`, `history_count`, `id`.
+{% endcomment %}
+<div class="gr-card">
+  <div class="gr-card__head">
+    <i class="fa-solid fa-clock-rotate-left"></i> Analysis history
+    <span class="gr-card__count">{{ history_count }}</span>
+  </div>
+  <ul class="gr-hist gm-scroll">
+    {% for h in history %}
+    <li class="gr-hist__item{% if h.selected %} gr-hist__item--sel{% endif %}"
+        hx-get="{% url 'game_position' id %}?sel={{ h.sel }}" hx-target="#gr-view" hx-swap="outerHTML">
+      <div class="gr-hist__top">
+        <span class="gr-hist__no">Move {{ h.no }}</span>
+        <span class="gr-hist__san">{{ h.rec_san }}</span>
+        <span class="gr-tag {% if h.followed %}gr-tag--followed{% else %}gr-tag--differed{% endif %}">{% if h.followed %}followed{% else %}differed{% endif %}</span>
+      </div>
+      {% if h.rec_eval %}<div class="gr-hist__eval">{{ h.rec_eval }}</div>{% endif %}
+      {% if h.prose %}<p class="gr-hist__prose">{{ h.prose }}</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>

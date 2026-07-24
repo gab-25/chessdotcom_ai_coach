@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Game · Chessdotcom AI Coach{% endblock %}
+
+{% block header_left %}
+<a href="{% url 'home' %}" class="back-link"><span style="font-size:16px">&larr;</span> Live games</a>
+{% endblock %}
+
+{% block header_status %}
+<span class="status-pill{% if is_live %} status-pill--watch{% endif %}" id="gr-pill">
+  <span class="status-pill__dot"></span>{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}
+</span>
+{% endblock %}
+
+{% block content %}
+<div class="page page--wide">
+  {% include "partials/position.html" %}
+</div>
+{% endblock %}

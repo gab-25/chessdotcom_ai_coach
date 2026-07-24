@@ -182,6 +182,37 @@ def moves_from_pgn(pgn: Optional[str]) -> List[Dict]:
     return moves
 
 
+def positions_from_pgn(pgn: Optional[str]) -> List[str]:
+    """Replay a PGN and return the FEN after each ply, initial position first.
+
+    ``positions[0]`` is the starting position and ``positions[i]`` is the position
+    after ``i`` plies — so a game of ``N`` plies yields ``N + 1`` FENs. The review
+    page renders the board at any selected move straight from this list, so the
+    client never has to re-implement move legality (castling, promotion, en
+    passant). Returns ``[]`` when the PGN is missing or unparseable — mirroring
+    ``moves_from_pgn`` so the two stay index-aligned (``positions[i + 1]`` is the
+    position reached by ``moves[i]``).
+    """
+    if not pgn:
+        return []
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn))
+    except Exception:
+        return []
+    if game is None:
+        return []
+
+    board = game.board()
+    positions = [board.fen()]
+    for move in game.mainline_moves():
+        try:
+            board.push(move)
+        except Exception:
+            break  # malformed movetext — stop at the last legal ply
+        positions.append(board.fen())
+    return positions
+
+
 def annotate_moves(moves: List[Dict], suggestions) -> List[Dict]:
     """Tag each move with the coach analysis requested at that position, if any.
 

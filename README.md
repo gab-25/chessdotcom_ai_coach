@@ -21,9 +21,12 @@ grandmaster coach.
   (`chessdotcom_ai_coach/services/scheduler.py`); runs once inside the web
   container. This is the only path that keeps game data fresh — the home page
   (below) just reads what the scheduler already synced.
-- **HTMX** — on-demand game loading and polling for the game list (a plain DB
-  read — see above) and for the async coach result, vendored via `django-htmx`
-- **Alpine.js** — board rendering (loaded from CDN, only on the game page)
+- **HTMX** — the whole UI is server-rendered fragments, vendored via
+  `django-htmx`: the game-list polling (a plain DB read — see above) and the
+  game detail page, where move-by-move navigation, the coach card and the live
+  game poll are all htmx fragment swaps (no custom JavaScript)
+- **Server-rendered board** — the FEN is expanded into a glyph board in Python
+  (`chessdotcom_ai_coach/services/board.py`); there is no client-side JS framework
 - **Gunicorn** — WSGI server in the container
 - Custom hand-written CSS theme (no Tailwind) in the `theme` app
   (`theme/static/css/styles.css`)
@@ -97,6 +100,22 @@ stays stuck on "Analyzing…" forever. Start Redis (the `redis` service in
 uv run celery -A chessdotcom_ai_coach worker -l info   # the analysis worker
 uv run python manage.py run_scheduler                  # the APScheduler process
 ```
+
+### Analysing a whole game
+
+The scheduler only analyses the position it's your turn to play, so reviewing a
+past game shows the coach's take on just those moves. To backfill the rest,
+enqueue analysis for every one of a user's moves in a game:
+
+```bash
+uv run python manage.py analyze_game <game_id> [--user <username>]
+```
+
+It reads the stored snapshot (no Chess.com call) and is idempotent — moves that
+are already analysed or queued are skipped, so it's safe to re-run. `--user` is
+only needed when the same game id is stored for more than one user. The results
+appear on the game detail page as you step through the moves (a Celery worker
+must be running).
 
 Then open http://localhost:8000, sign in, and set your **Chess.com username**
 on the user via the admin at http://localhost:8000/admin/ (field

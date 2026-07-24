@@ -1,4 +1,3 @@
-from asgiref.sync import sync_to_async
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
@@ -7,24 +6,17 @@ from django.shortcuts import redirect, render
 from .models import CoachSuggestion
 from .services import board as board_utils
 from .services import game_store
-from .services.chess_client import Client
 from .tasks import analyze_game_task
 
-
-def _client_for(user) -> Client:
-    """Build a Chess.com client for the authenticated user."""
-    return Client(username=user.chess_username)
+_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 
 def _decorate_games(games, username):
     """Attach board cells, move number, side-to-move and turn ownership to `Game` rows.
 
     Used for both the current and past-games sections of the home page (both
-    now plain DB reads — see `home`/`game_list`). `turn` reproduces the
-    side-to-move the Chess.com API used to supply directly, derived from the
-    stored FEN, so the game card's "to move" tag keeps working. `is_user_turn`
-    mirrors `_is_user_turn` so the list can highlight games awaiting the
-    logged-in user's move.
+    plain DB reads). `turn` reproduces the side-to-move from the stored FEN, and
+    `is_user_turn` highlights games awaiting the logged-in user's move.
     """
     for game in games:
         game.cells = board_utils.fen_to_cells(game.fen)
@@ -35,76 +27,11 @@ def _decorate_games(games, username):
     return games
 
 
-def _game_data_from_stored(stored):
-    """Rebuild the ``game_data`` shape ``_build_detail_context`` expects from a Game.
-
-    Lets the detail view fall back to the persisted snapshot when a game is no
-    longer current on Chess.com.
-    """
-    return {
-        "game": {
-            "fen": stored.fen,
-            "pgn": stored.pgn,
-            "time_class": stored.time_class,
-            "url": stored.url,
-        },
-        "white_name": stored.white_name or "White",
-        "black_name": stored.black_name or "Black",
-        "white_rating": stored.white_rating or None,
-        "black_rating": stored.black_rating or None,
-        "result": stored.result,
-        "result_label": stored.result_label,
-        "result_detail": stored.result_detail,
-    }
-
-
 def _uci_to_squares(uci):
     """Turn a UCI move like ``"d4f5"`` into its from/to square names."""
     if uci and len(uci) >= 4:
         return [uci[0:2], uci[2:4]]
     return []
-
-
-def _suggestion_for_fen(history, fen):
-    """Return ``(suggestion, highlight)`` for the stored analysis of ``fen``.
-
-    Lets the detail render (and the poll) keep the coach panel populated for the
-    position on the board until a new move changes the FEN. ``(None, None)`` when
-    no analysis exists for the current position.
-    """
-    for row in history:
-        if row.fen == fen:
-            suggestion = {
-                "eval_cp": row.eval_cp,
-                "eval_text": row.eval_text,
-                "best_move_san": row.best_move_san,
-                "best_move_uci": row.best_move_uci,
-                "analysis": row.analysis,
-                "status": row.status,
-            }
-            return suggestion, _uci_to_squares(row.best_move_uci)
-    return None, None
-
-
-def _poll_token(fen, suggestion):
-    """Poll cursor: changes when the position OR its analysis state changes.
-
-    The hidden poller sends the token it currently reflects; ``game_detail`` swaps
-    the body only when the fresh token differs. Encoding the suggestion status
-    (not just the FEN) means a PENDING→DONE transition for the *same* position is
-    picked up — otherwise the completed analysis would never replace the
-    "Analyzing…" card until a manual page reload.
-    """
-    status = suggestion["status"] if suggestion else "-"
-    return f"{fen}|{status}"
-
-
-def _is_user_turn(game_data, username):
-    """True when the side to move is the side the user plays."""
-    orientation = (
-        "white" if game_data["white_name"].lower() == username.lower() else "black"
-    )
-    return board_utils.active_color(game_data["game"].get("fen")) == orientation
 
 
 def _eval_fill(eval_cp):
@@ -115,89 +42,211 @@ def _eval_fill(eval_cp):
     return max(7, min(93, round(pct)))
 
 
-def _build_detail_context(
-    game_data,
-    username,
-    id,
-    *,
-    highlight=None,
-    analysis=None,
-    suggestion=None,
-    history=None,
-    can_analyze=True,
-):
-    """Assemble the game-detail template context from already-fetched data.
+def _sq_center(sq, flipped):
+    """Square centre as an ``(x%, y%)`` string pair for the SVG arrow overlay."""
+    col = ord(sq[0]) - 97
+    row = 8 - int(sq[1])
+    if flipped:
+        col, row = 7 - col, 7 - row
+    return f"{(col + 0.5) / 8 * 100:.2f}", f"{(row + 0.5) / 8 * 100:.2f}"
 
-    Pure (no IO) so the async coach view can fetch once and rebuild cheaply. The
-    played moves are derived from the PGN and annotated with the coach analysis
-    (if any) requested at each position, joined by ``(move_no, color)``.
-    """
-    game = game_data["game"]
-    fen = game.get("fen")
-    pgn = game.get("pgn")
-    white_name = game_data["white_name"]
-    orientation = "white" if white_name.lower() == username.lower() else "black"
 
-    history = history or []
-    moves = board_utils.moves_from_pgn(pgn)
-    board_utils.annotate_moves(moves, history)
+def _arrow(from_sq, to_sq, color, marker, flipped):
+    x1, y1 = _sq_center(from_sq, flipped)
+    x2, y2 = _sq_center(to_sq, flipped)
+    return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "marker": marker}
 
-    active = board_utils.active_color(fen)
-    is_user_turn = active == orientation
 
+def _suggestion_fields(row):
+    """The coach's move/eval/prose/arrow squares from a DONE suggestion row."""
+    rec = _uci_to_squares(row.best_move_uci)
     return {
-        "id": id,
-        "game": game,
-        "white_name": white_name,
-        "black_name": game_data["black_name"],
-        "white_rating": game_data.get("white_rating"),
-        "black_rating": game_data.get("black_rating"),
-        # Present only for past games rebuilt from the stored snapshot; live games
-        # fetched from Chess.com have no resolved result yet.
-        "result": game_data.get("result"),
-        "result_label": game_data.get("result_label"),
-        "result_detail": game_data.get("result_detail"),
-        "fen": fen,
-        "pgn": pgn,
-        "orientation": orientation,
-        "cells": board_utils.fen_to_cells(
-            fen, highlight=highlight, flipped=(orientation == "black")
-        ),
-        "move_no": board_utils.fullmove_number(fen),
-        "turn_label": active.capitalize(),
-        "is_user_turn": is_user_turn,
-        "last_move": board_utils.last_move_from_pgn(pgn),
-        "analysis": analysis,
-        # The current position is queued/in-flight in the background pipeline: the
-        # coach panel shows an "Analyzing…" state until the poll picks up the result.
-        "analyzing": bool(
-            suggestion and suggestion.get("status") == CoachSuggestion.Status.PENDING
-        ),
-        "eval_fill": _eval_fill(suggestion["eval_cp"]) if suggestion else 50,
-        "best_move_san": suggestion["best_move_san"] if suggestion else None,
-        "eval_text": suggestion["eval_text"] if suggestion else None,
-        "moves": moves,
-        "history": history,
-        "can_analyze": can_analyze,
-        "poll_token": _poll_token(fen, suggestion),
+        "rec_san": row.best_move_san or "",
+        "rec_eval": row.eval_text or "",
+        "prose": row.analysis or "",
+        "rec_from": rec[0] if rec else "",
+        "rec_to": rec[1] if rec else "",
+        "fill": _eval_fill(row.eval_cp),
     }
 
 
-def _fetch_detail(user, id):
-    """Fetch a game and return ``(game_data, error_message)``."""
-    game_data = _client_for(user).game_detail(id)
-    if not game_data:
-        return None, "Game not found or no longer active."
-    return game_data, None
+def _position_context(user, game, sel):
+    """Everything the position fragment needs to render one ply of a game.
+
+    Reads entirely from the stored ``Game`` snapshot (kept fresh by the
+    scheduler) and the persisted ``CoachSuggestion`` rows — no Chess.com call —
+    so navigation, the live poll and the review of a finished game are all cheap
+    DB reads. ``sel`` is the 0-based ply cursor (0 = starting position, ``head``
+    = the latest/current position).
+    """
+    username = user.chess_username
+    orientation = "white" if (game.white_name or "").lower() == username.lower() else "black"
+    flipped = orientation == "black"
+
+    pgn = game.pgn
+    moves = board_utils.moves_from_pgn(pgn)
+    positions = board_utils.positions_from_pgn(pgn) or [game.fen or _START_FEN]
+    history = list(CoachSuggestion.objects.filter(user=user, game_id=game.game_id))
+    board_utils.annotate_moves(moves, history)
+    by_fen = {row.fen: row for row in history}
+
+    head = len(moves)
+    sel = max(0, min(head, sel))
+    is_live = game.is_active
+    ply = moves[sel - 1] if sel > 0 else None
+
+    # Board + last-move highlight for the selected ply.
+    board_fen = positions[sel] if sel < len(positions) else (game.fen or _START_FEN)
+    highlight = _uci_to_squares(ply["uci"]) if ply else []
+    cells = board_utils.fen_to_cells(board_fen, highlight=highlight, flipped=flipped)
+
+    # Eval bar: carry the last analysed value forward across un-analysed plies.
+    eval_fill = 50
+    for i in range(1, sel + 1):
+        m = moves[i - 1]
+        s = m["suggestion"]
+        if m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.DONE:
+            eval_fill = _eval_fill(s.eval_cp)
+
+    at_live_head = is_live and sel == head
+    head_row = by_fen.get(game.fen)
+    user_to_move = board_utils.active_color(game.fen) == orientation if game.fen else False
+
+    coach = {"mode": "start"}
+    arrows = []
+
+    if at_live_head:
+        # The position you're about to play (or waiting on the opponent).
+        if not user_to_move:
+            coach = {"mode": "live_waiting"}
+        elif head_row is None:
+            coach = {"mode": "live_request", "fen": game.fen}
+        elif head_row.status == CoachSuggestion.Status.PENDING:
+            coach = {"mode": "live_pending"}
+        else:
+            fields = _suggestion_fields(head_row)
+            coach = {"mode": "live_analyzed", **fields}
+            eval_fill = fields["fill"]
+            if fields["rec_from"] and fields["rec_to"]:
+                arrows.append(_arrow(fields["rec_from"], fields["rec_to"], "#b78e54", "url(#gr-ah-brass)", flipped))
+    elif ply is None:
+        coach = {"mode": "start"}
+    elif ply["color"] != orientation:
+        coach = {"mode": "opponent", "san": ply["san"]}
+    else:
+        s = ply["suggestion"]
+        if s is None:
+            coach = {"mode": "unanalyzed", "san": ply["san"], "fen": ply["fen_before"]}
+        elif s.status == CoachSuggestion.Status.PENDING:
+            coach = {"mode": "pending", "san": ply["san"]}
+        else:
+            fields = _suggestion_fields(s)
+            followed = ply["followed"]
+            coach = {
+                "mode": "analyzed",
+                "played_san": ply["san"],
+                "played_eval": fields["rec_eval"] if followed else "",
+                "followed": followed,
+                **fields,
+            }
+            played_from = highlight[0] if highlight else ""
+            played_to = highlight[1] if len(highlight) > 1 else ""
+            rec_from = fields["rec_from"] or played_from
+            rec_to = fields["rec_to"] or played_to
+            if not followed and played_from and played_to:
+                arrows.append(_arrow(played_from, played_to, "#4a7a52", "url(#gr-ah-green)", flipped))
+            if rec_from and rec_to:
+                arrows.append(_arrow(rec_from, rec_to, "#b78e54", "url(#gr-ah-brass)", flipped))
+
+    # Moves grid.
+    moves_view = []
+    for i, m in enumerate(moves, start=1):
+        s = m["suggestion"]
+        done = m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.DONE
+        pending = m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.PENDING
+        moves_view.append(
+            {
+                "sel": i,
+                "no": m["move_no"],
+                "color": m["color"],
+                "san": m["san"],
+                "selected": i == sel,
+                "analyzed": done,
+                "pending": pending,
+                "followed": done and m["followed"],
+                "rec_san": (s.best_move_san if done else "") or "",
+            }
+        )
+
+    # Analysis-history timeline (analysed user moves, in order).
+    history_view = []
+    for i, m in enumerate(moves, start=1):
+        s = m["suggestion"]
+        if m["color"] != orientation or s is None or s.status != CoachSuggestion.Status.DONE:
+            continue
+        history_view.append(
+            {
+                "sel": i,
+                "no": m["move_no"],
+                "rec_san": s.best_move_san or "",
+                "rec_eval": s.eval_text or "",
+                "prose": s.analysis or "",
+                "followed": m["followed"],
+                "selected": i == sel,
+            }
+        )
+
+    last_move = None
+    sel_text = "Starting position"
+    if at_live_head:
+        sel_text = "Live · your move" if user_to_move else "Live · opponent to move"
+    elif ply is not None:
+        ref = f"{ply['move_no']}{'. ' if ply['color'] == 'white' else '… '}{ply['san']}"
+        last_move = ref
+        sel_text = f"Reviewing: {ref}"
+
+    if ply is not None:
+        move_label = f"Move {ply['move_no']} · {'White' if ply['color'] == 'white' else 'Black'}"
+    elif at_live_head:
+        move_label = "Live position"
+    else:
+        move_label = ""
+
+    return {
+        "id": game.game_id,
+        "is_live": is_live,
+        "sel": sel,
+        "head": head,
+        "behind": head - sel,
+        "prev_sel": max(0, sel - 1),
+        "next_sel": min(head, sel + 1),
+        "orientation": orientation,
+        "flipped": flipped,
+        "white_name": game.white_name or "White",
+        "black_name": game.black_name or "Black",
+        "white_rating": game.white_rating or None,
+        "black_rating": game.black_rating or None,
+        "result": game.result,
+        "result_label": game.result_label,
+        "result_detail": game.result_detail,
+        "time_class": game.time_class,
+        "cells": cells,
+        "eval_fill": eval_fill,
+        "arrows": arrows,
+        "coach": coach,
+        "moves": moves_view,
+        "history": history_view,
+        "history_count": len(history_view),
+        "last_move": last_move,
+        "sel_text": sel_text,
+        "move_label": move_label,
+        "at_live_head": at_live_head,
+    }
 
 
 @login_required
 def home(request):
-    """Home page: lists the user's current games plus the past-games history.
-
-    Plain DB read — the scheduler (`services.scheduler.sync_current_games`)
-    is the only path that pulls fresh data from Chess.com into `Game`.
-    """
+    """Home page: lists the user's current games plus the past-games history."""
     username = request.user.chess_username
     games = _decorate_games(game_store.current_games(request.user), username)
     past = _decorate_games(game_store.past_games(request.user), username)
@@ -206,11 +255,7 @@ def home(request):
 
 @login_required
 def game_list(request):
-    """HTMX endpoint: current games + past-games history fragment for polling.
-
-    Plain DB read, same as `home` — the scheduler keeps `Game` fresh, so the
-    5s poll here never has to touch Chess.com itself.
-    """
+    """HTMX endpoint: current games + past-games history fragment for polling."""
     username = request.user.chess_username
     games = _decorate_games(game_store.current_games(request.user), username)
     past = _decorate_games(game_store.past_games(request.user), username)
@@ -221,131 +266,107 @@ def game_list(request):
 
 @login_required
 def game_detail(request, id):
-    """Game detail page: renders the board, moves and the AI-coach panel.
+    """The one detail page — move-by-move over a game, live or finished.
 
-    Falls back to the persisted snapshot when the game is no longer current on
-    Chess.com, so past games stay browsable (read-only: no re-analysis).
+    The full page renders the shell plus the initial position fragment (the live
+    head for a game in progress, the opening for a finished one). Navigation, the
+    live poll and analysis are all htmx fragment swaps from here on.
     """
-    try:
-        game_data, error = _fetch_detail(request.user, id)
-    except Exception as exc:
-        if request.htmx:
-            # Transient fetch failure during a poll: skip this cycle, keep polling.
-            return HttpResponse(status=204)
-        return render(request, "error.html", {"message": str(exc)}, status=500)
+    game = game_store.stored_game(request.user, id)
+    if game is None:
+        return render(request, "error.html", {"message": "Game not found."}, status=404)
 
-    can_analyze = True
-    if error:
-        stored = game_store.stored_game(request.user, id)
-        if stored is None:
-            if request.htmx:
-                return HttpResponse(status=286)  # nothing to poll for: stop the poll
-            return render(request, "game.html", {"id": id, "error": error})
-        game_data = _game_data_from_stored(stored)
-        can_analyze = False  # past game: history is read-only
-
-    fen = game_data["game"].get("fen")
-
-    history = list(CoachSuggestion.objects.filter(user=request.user, game_id=id))
-    suggestion, highlight = _suggestion_for_fen(history, fen)
-
-    # HTMX poll (hidden poller inside #game-body) bookkeeping:
-    if request.htmx:
-        if not can_analyze:
-            # Game is no longer live -> HTTP 286 tells HTMX to stop polling.
-            return HttpResponse(status=286)
-        if request.GET.get("since") == _poll_token(fen, suggestion):
-            # Nothing changed — same position AND same analysis state -> no swap,
-            # leave the DOM (and analysis) untouched.
-            return HttpResponse(status=204)
-
-    context = _build_detail_context(
-        game_data,
-        request.user.chess_username,
-        id,
-        highlight=highlight,
-        analysis=suggestion["analysis"] if suggestion else None,
-        suggestion=suggestion,
-        history=history,
-        can_analyze=can_analyze,
-    )
-    if request.htmx:
-        # Position changed since the client's `since` -> swap the fresh body.
-        return render(request, "partials/game_body.html", context)
-    return render(request, "game.html", context)
+    moves = board_utils.moves_from_pgn(game.pgn)
+    sel = len(moves) if game.is_active else 0
+    context = _position_context(request.user, game, sel)
+    return render(request, "game_detail.html", context)
 
 
 @login_required
-async def coach_suggestion(request, id):
-    """HTMX endpoint: queues background analysis and re-renders the game body.
+def game_position(request, id):
+    """HTMX fragment: the position view for a given ply (nav / move-click)."""
+    game = game_store.stored_game(request.user, id)
+    if game is None:
+        return HttpResponse(status=404)
+    sel = _int(request.GET.get("sel"), 0)
+    return render(request, "partials/position.html", _position_context(request.user, game, sel))
 
-    Analysis no longer runs inline: when it's the user's turn this enqueues a
-    Celery task (deduped per position) and swaps ``#game-body`` with the stored
-    state — pending shows an "Analyzing…" card, and the existing poller reveals
-    the recommended move and eval once the worker finishes.
+
+@login_required
+def game_live(request, id):
+    """HTMX poll: swap in new moves for a live game, or 204 when nothing changed.
+
+    The client sends its current ``sel`` and the ``head`` it already knows. When
+    a new move has appeared we re-render the position — following the live head if
+    the user was sitting on it, otherwise leaving them on the move they're
+    reviewing (with the moves grid refreshed and a jump-to-live button shown).
     """
-    # Async view: resolve the user via auser() to avoid a synchronous DB
-    # access (request.user is lazy and would raise SynchronousOnlyOperation).
-    user = await request.auser()
-    game_data, error = _fetch_detail(user, id)
-    if error:
-        # Bare fragment (no base template) — the async context can't touch the
-        # DB, and base.html's header reads request.user. Re-analysis is only
-        # offered on active games, so a missing game is a genuine error here.
-        return render(request, "partials/detail_error.html", {"error": error})
+    game = game_store.stored_game(request.user, id)
+    if game is None:
+        return HttpResponse(status=204)
 
-    game = game_data["game"]
-    fen = game.get("fen", "")
+    sel = _int(request.GET.get("sel"), 0)
+    known_head = _int(request.GET.get("head"), 0)
+    head = len(board_utils.moves_from_pgn(game.pgn))
+    if head == known_head and game.is_active:
+        return HttpResponse(status=204)  # no new move — keep polling
 
-    # When it's the user's turn, ensure the position is queued for background
-    # analysis (idempotent): a pending/done row already exists for a FEN that's
-    # queued or analysed, so we only enqueue a Celery task when we just created it.
-    # A stale button click (opponent already moved) simply enqueues nothing.
-    if _is_user_turn(game_data, user.chess_username):
-        row, created = await CoachSuggestion.objects.aget_or_create(
-            user=user,
-            game_id=id,
-            fen=fen,
-            defaults={
-                "status": CoachSuggestion.Status.PENDING,
-                "move_no": board_utils.fullmove_number(fen),
-                "eval_text": "",
-                "analysis": "",
-            },
-        )
-        # Enqueue on first request, and re-enqueue when re-analysing a finished
-        # position: reset the row back to PENDING (clearing the stale result) so
-        # the panel shows the "Analyzing…" state and the poller reveals the fresh
-        # analysis. An already-PENDING row is left alone so the in-flight task is
-        # not duplicated.
-        if created or row.status != CoachSuggestion.Status.PENDING:
-            if not created:
+    following = sel >= known_head
+    render_sel = head if following else sel
+    return render(request, "partials/position.html", _position_context(request.user, game, render_sel))
+
+
+@login_required
+def analyze_position(request, id):
+    """HTMX endpoint: the coach card for a ply, requesting analysis on demand.
+
+    ``POST`` enqueues background analysis for the ply's position (idempotent),
+    reusing the same Celery task; ``GET`` is the pending self-poll. Both return
+    the coach-card fragment for the current state. Analysis is read/enqueued from
+    the stored snapshot, so a finished game never triggers a Chess.com call.
+    """
+    game = game_store.stored_game(request.user, id)
+    if game is None:
+        return HttpResponse(status=404)
+    sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
+    context = _position_context(request.user, game, sel)
+
+    if request.method == "POST":
+        fen = context["coach"].get("fen")
+        if fen:
+            row = CoachSuggestion.objects.filter(
+                user=request.user, game_id=id, fen=fen
+            ).first()
+            if row is None:
+                CoachSuggestion.objects.create(
+                    user=request.user,
+                    game_id=id,
+                    fen=fen,
+                    status=CoachSuggestion.Status.PENDING,
+                    move_no=board_utils.fullmove_number(fen),
+                    eval_text="",
+                    analysis="",
+                )
+                analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
+            elif row.status != CoachSuggestion.Status.PENDING:
                 row.status = CoachSuggestion.Status.PENDING
                 row.eval_text = ""
                 row.eval_cp = None
                 row.best_move_san = None
                 row.best_move_uci = None
                 row.analysis = ""
-                await row.asave()
-            await sync_to_async(analyze_game_task.delay)(
-                user.id, id, fen, game.get("pgn")
-            )
+                row.save()
+                analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
+            context = _position_context(request.user, game, sel)
 
-    # Re-render the body from stored state. The existing HTMX poller reveals the
-    # result once the worker finishes; the request no longer blocks on analysis.
-    history = [s async for s in CoachSuggestion.objects.filter(user=user, game_id=id)]
-    stored, highlight = _suggestion_for_fen(history, fen)
-    context = _build_detail_context(
-        game_data,
-        user.chess_username,
-        id,
-        highlight=highlight,
-        analysis=stored["analysis"] if stored else None,
-        suggestion=stored,
-        history=history,
-        can_analyze=True,
-    )
-    return render(request, "partials/game_body.html", context)
+    return render(request, "partials/coach_card.html", context)
+
+
+def _int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def logout_view(request):
