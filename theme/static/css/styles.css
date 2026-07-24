@@ -1240,9 +1240,35 @@ input {
 }
 
 /* Move navigator buttons */
+.gr-navwrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .gr-nav {
   display: flex;
   gap: 6px;
+}
+/* Jump-to-live button (shown while browsing behind a live game) */
+.gr-live-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--paper);
+  background: var(--live-red);
+  border: 0;
+  padding: 6px 11px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+.gr-live-btn[hidden] {
+  display: none;
+}
+.gr-live-btn .status-pill__dot {
+  background: #ffd7d3;
 }
 .gr-nav button {
   width: 34px;

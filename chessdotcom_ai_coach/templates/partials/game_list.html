@@ -60,7 +60,7 @@
   <h2 class="past-games__title"><i class="fa-solid fa-clock-rotate-left"></i> Past games</h2>
   <div class="games-grid">
     {% for game in past_games %}
-    <a href="{% url 'game_review' game.game_id %}" class="gm-card gm-card--past">
+    <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
       <div class="gm-card__head">
         <span class="gm-card__head-left">
           <span class="badge">{{ game.time_class|capfirst }}</span>

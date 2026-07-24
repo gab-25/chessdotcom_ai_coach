@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Game review · Chessdotcom AI Coach{% endblock %}
+{% block title %}Game · Chessdotcom AI Coach{% endblock %}
 
 {% block header_left %}
 <a href="{% url 'home' %}" class="back-link"><span style="font-size:16px">&larr;</span> Live games</a>
 {% endblock %}
 
 {% block header_status %}
-<div class="status-pill">
-  <span class="status-pill__dot"></span>REVIEW
+<div class="status-pill{% if is_live %} status-pill--watch{% endif %}" id="gr-pill">
+  <span class="status-pill__dot"></span><span id="gr-pill-text">{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}</span>
 </div>
 {% endblock %}
 
@@ -16,7 +16,7 @@
 <div class="page page--wide">
   {% if not has_moves %}
   <div class="alert alert--danger" style="max-width:520px">
-    <i class="fa-solid fa-circle-exclamation"></i> No moves to review for this game yet.
+    <i class="fa-solid fa-circle-exclamation"></i> Nothing to show for this game yet.
   </div>
   {% else %}
   <div class="game-layout" id="gr-root">
@@ -76,11 +76,16 @@
       <!-- move navigator -->
       <div class="movebar">
         <span class="movebar__last" id="gr-lastmove">Last: —</span>
-        <div class="gr-nav">
-          <button type="button" data-nav="first" title="Start" aria-label="Start">«</button>
-          <button type="button" data-nav="prev" title="Back (←)" aria-label="Back">‹</button>
-          <button type="button" data-nav="next" title="Forward (→)" aria-label="Forward">›</button>
-          <button type="button" data-nav="last" title="End" aria-label="End">»</button>
+        <div class="gr-navwrap">
+          <button type="button" class="gr-live-btn" id="gr-jumplive" hidden>
+            <span class="status-pill__dot"></span><span id="gr-jumplive-text">Live</span>
+          </button>
+          <div class="gr-nav">
+            <button type="button" data-nav="first" title="Start" aria-label="Start">«</button>
+            <button type="button" data-nav="prev" title="Back (←)" aria-label="Back">‹</button>
+            <button type="button" data-nav="next" title="Forward (→)" aria-label="Forward">›</button>
+            <button type="button" data-nav="last" title="End" aria-label="End">»</button>
+          </div>
         </div>
       </div>
     </div>
@@ -118,5 +123,5 @@
 </div>
 
 {{ review_data|json_script:"gr-data" }}
-<script src="{% static 'js/game_review.js' %}" defer></script>
+<script src="{% static 'js/game_detail.js' %}" defer></script>
 {% endblock %}

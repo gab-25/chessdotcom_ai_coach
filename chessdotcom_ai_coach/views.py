@@ -1,4 +1,3 @@
-from asgiref.sync import sync_to_async
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, JsonResponse
@@ -38,10 +37,10 @@ def _decorate_games(games, username):
 
 
 def _game_data_from_stored(stored):
-    """Rebuild the ``game_data`` shape ``_build_detail_context`` expects from a Game.
+    """Rebuild the ``game_data`` shape the detail view expects from a Game row.
 
     Lets the detail view fall back to the persisted snapshot when a game is no
-    longer current on Chess.com.
+    longer current on Chess.com — this is also the finished-game (review) path.
     """
     return {
         "game": {
@@ -67,40 +66,6 @@ def _uci_to_squares(uci):
     return []
 
 
-def _suggestion_for_fen(history, fen):
-    """Return ``(suggestion, highlight)`` for the stored analysis of ``fen``.
-
-    Lets the detail render (and the poll) keep the coach panel populated for the
-    position on the board until a new move changes the FEN. ``(None, None)`` when
-    no analysis exists for the current position.
-    """
-    for row in history:
-        if row.fen == fen:
-            suggestion = {
-                "eval_cp": row.eval_cp,
-                "eval_text": row.eval_text,
-                "best_move_san": row.best_move_san,
-                "best_move_uci": row.best_move_uci,
-                "analysis": row.analysis,
-                "status": row.status,
-            }
-            return suggestion, _uci_to_squares(row.best_move_uci)
-    return None, None
-
-
-def _poll_token(fen, suggestion):
-    """Poll cursor: changes when the position OR its analysis state changes.
-
-    The hidden poller sends the token it currently reflects; ``game_detail`` swaps
-    the body only when the fresh token differs. Encoding the suggestion status
-    (not just the FEN) means a PENDING→DONE transition for the *same* position is
-    picked up — otherwise the completed analysis would never replace the
-    "Analyzing…" card until a manual page reload.
-    """
-    status = suggestion["status"] if suggestion else "-"
-    return f"{fen}|{status}"
-
-
 def _is_user_turn(game_data, username):
     """True when the side to move is the side the user plays."""
     orientation = (
@@ -117,80 +82,129 @@ def _eval_fill(eval_cp):
     return max(7, min(93, round(pct)))
 
 
-def _build_detail_context(
-    game_data,
-    username,
-    id,
-    *,
-    highlight=None,
-    analysis=None,
-    suggestion=None,
-    history=None,
-    can_analyze=True,
-):
-    """Assemble the game-detail template context from already-fetched data.
-
-    Pure (no IO) so the async coach view can fetch once and rebuild cheaply. The
-    played moves are derived from the PGN and annotated with the coach analysis
-    (if any) requested at each position, joined by ``(move_no, color)``.
-    """
-    game = game_data["game"]
-    fen = game.get("fen")
-    pgn = game.get("pgn")
-    white_name = game_data["white_name"]
-    orientation = "white" if white_name.lower() == username.lower() else "black"
-
-    history = history or []
-    moves = board_utils.moves_from_pgn(pgn)
-    board_utils.annotate_moves(moves, history)
-
-    active = board_utils.active_color(fen)
-    is_user_turn = active == orientation
-
-    return {
-        "id": id,
-        "game": game,
-        "white_name": white_name,
-        "black_name": game_data["black_name"],
-        "white_rating": game_data.get("white_rating"),
-        "black_rating": game_data.get("black_rating"),
-        # Present only for past games rebuilt from the stored snapshot; live games
-        # fetched from Chess.com have no resolved result yet.
-        "result": game_data.get("result"),
-        "result_label": game_data.get("result_label"),
-        "result_detail": game_data.get("result_detail"),
-        "fen": fen,
-        "pgn": pgn,
-        "orientation": orientation,
-        "cells": board_utils.fen_to_cells(
-            fen, highlight=highlight, flipped=(orientation == "black")
-        ),
-        "move_no": board_utils.fullmove_number(fen),
-        "turn_label": active.capitalize(),
-        "is_user_turn": is_user_turn,
-        "last_move": board_utils.last_move_from_pgn(pgn),
-        "analysis": analysis,
-        # The current position is queued/in-flight in the background pipeline: the
-        # coach panel shows an "Analyzing…" state until the poll picks up the result.
-        "analyzing": bool(
-            suggestion and suggestion.get("status") == CoachSuggestion.Status.PENDING
-        ),
-        "eval_fill": _eval_fill(suggestion["eval_cp"]) if suggestion else 50,
-        "best_move_san": suggestion["best_move_san"] if suggestion else None,
-        "eval_text": suggestion["eval_text"] if suggestion else None,
-        "moves": moves,
-        "history": history,
-        "can_analyze": can_analyze,
-        "poll_token": _poll_token(fen, suggestion),
-    }
-
-
 def _fetch_detail(user, id):
     """Fetch a game and return ``(game_data, error_message)``."""
     game_data = _client_for(user).game_detail(id)
     if not game_data:
         return None, "Game not found or no longer active."
     return game_data, None
+
+
+def _suggestion_payload(row, *, followed=None, played_eval=None):
+    """Shape a CoachSuggestion row for the client (an ``analysis`` map entry).
+
+    ``pending`` while the analysis is in flight; otherwise the coach's move + eval
+    + prose + arrow squares. ``followed``/``played_eval`` are set for *played*
+    moves (review of a move the user made) and left off for the live to-move
+    position, which has no played move to compare against.
+    """
+    if row is None:
+        return None
+    if row.status == CoachSuggestion.Status.PENDING:
+        return {"pending": True}
+    rec = _uci_to_squares(row.best_move_uci)
+    payload = {
+        "recSan": row.best_move_san or "",
+        "recEval": row.eval_text or "",
+        "fill": _eval_fill(row.eval_cp),
+        "prose": row.analysis or "",
+        "recFrom": rec[0] if rec else "",
+        "recTo": rec[1] if rec else "",
+    }
+    if followed is not None:
+        payload["followed"] = followed
+        payload["playedEval"] = played_eval if followed else ""
+    return payload
+
+
+def _build_review_data(game_data, user, id, request, *, is_live):
+    """Serialise a game into the JSON model the detail page steps through.
+
+    Works for both a live game (fetched from Chess.com) and a finished one
+    (rebuilt from the stored snapshot). The page renders any ply client-side from
+    this data — the played moves (with from/to squares and the position the coach
+    analyses), the FEN after each ply, and the coach analysis keyed by ply index.
+
+    For a live game it also carries the *current* position: which side is to move,
+    whether it is the user's turn, and any coach analysis for it — so the head of
+    the timeline shows the live "your move to play" coach, and the client can poll
+    for new moves.
+    """
+    game = game_data["game"]
+    pgn = game.get("pgn")
+    fen = game.get("fen")
+    username = user.chess_username
+    white_name = game_data["white_name"]
+    orientation = "white" if white_name.lower() == username.lower() else "black"
+
+    moves = board_utils.moves_from_pgn(pgn)
+    positions = board_utils.positions_from_pgn(pgn)
+    history = list(CoachSuggestion.objects.filter(user=user, game_id=id))
+    board_utils.annotate_moves(moves, history)
+    by_fen = {row.fen: row for row in history}
+
+    plies = []
+    analysis = {}
+    for i, m in enumerate(moves, start=1):
+        squares = _uci_to_squares(m["uci"])
+        plies.append(
+            {
+                "no": m["move_no"],
+                "color": m["color"],
+                "san": m["san"],
+                "from": squares[0] if squares else "",
+                "to": squares[1] if squares else "",
+                "fenBefore": m["fen_before"],
+            }
+        )
+        suggestion = m["suggestion"]
+        if suggestion is None:
+            continue
+        payload = _suggestion_payload(
+            suggestion, followed=m["followed"], played_eval=suggestion.eval_text or ""
+        )
+        if payload is not None:
+            analysis[str(i)] = payload
+
+    live_head = len(plies)
+    user_to_move = _is_user_turn(game_data, username) if fen else False
+    head_analysis = _suggestion_payload(by_fen.get(fen)) if (is_live and fen) else None
+
+    return {
+        "plies": plies,
+        "positions": positions,
+        "analysis": analysis,
+        "meta": {
+            "orientation": orientation,
+            "isLive": bool(is_live),
+            "canAnalyze": True,
+            "liveHead": live_head,
+            "userToMove": bool(user_to_move),
+            "headFen": fen or "",
+            "headAnalysis": head_analysis,
+        },
+        "csrf": get_token(request),
+        "urls": {
+            "analyze": reverse("analyze_position", args=[id]),
+            "poll": reverse("game_detail", args=[id]) + "?poll=1",
+        },
+    }
+
+
+def _resolve_game(user, id):
+    """Return ``(game_data, is_live, stored)`` for the detail page.
+
+    Prefers the live game from Chess.com; falls back to the persisted snapshot
+    (a finished game). ``is_live`` is True only when the game is still current.
+    ``game_data`` is ``None`` when the game is neither current nor stored.
+    """
+    game_data, error = _fetch_detail(user, id)
+    if not error:
+        return game_data, True, game_store.stored_game(user, id)
+    stored = game_store.stored_game(user, id)
+    if stored is None:
+        return None, False, None
+    return _game_data_from_stored(stored), False, stored
 
 
 @login_required
@@ -223,255 +237,50 @@ def game_list(request):
 
 @login_required
 def game_detail(request, id):
-    """Game detail page: renders the board, moves and the AI-coach panel.
+    """The one detail page — a move-by-move walk over a game, live or finished.
 
-    Falls back to the persisted snapshot when the game is no longer current on
-    Chess.com, so past games stay browsable (read-only: no re-analysis).
+    A live game is fetched from Chess.com (falling back to the stored snapshot
+    once it ends); a finished game is served from the snapshot. Either way the
+    page renders the same board + coach + history + moves UI and steps through the
+    moves client-side. ``?poll=1`` returns the fresh JSON model instead of HTML so
+    the live page can pick up new moves without a disruptive full-body swap.
     """
+    poll = request.GET.get("poll") == "1"
     try:
-        game_data, error = _fetch_detail(request.user, id)
+        game_data, is_live, _ = _resolve_game(request.user, id)
     except Exception as exc:
-        if request.htmx:
-            # Transient fetch failure during a poll: skip this cycle, keep polling.
+        if poll:
+            # Transient fetch failure mid-poll: skip this tick, keep polling.
             return HttpResponse(status=204)
         return render(request, "error.html", {"message": str(exc)}, status=500)
 
-    can_analyze = True
-    if error:
-        stored = game_store.stored_game(request.user, id)
-        if stored is None:
-            if request.htmx:
-                return HttpResponse(status=286)  # nothing to poll for: stop the poll
-            return render(request, "game.html", {"id": id, "error": error})
-        game_data = _game_data_from_stored(stored)
-        can_analyze = False  # past game: history is read-only
-
-    fen = game_data["game"].get("fen")
-
-    history = list(CoachSuggestion.objects.filter(user=request.user, game_id=id))
-    suggestion, highlight = _suggestion_for_fen(history, fen)
-
-    # HTMX poll (hidden poller inside #game-body) bookkeeping:
-    if request.htmx:
-        if not can_analyze:
-            # Game is no longer live -> HTTP 286 tells HTMX to stop polling.
-            return HttpResponse(status=286)
-        if request.GET.get("since") == _poll_token(fen, suggestion):
-            # Nothing changed — same position AND same analysis state -> no swap,
-            # leave the DOM (and analysis) untouched.
+    if game_data is None:
+        if poll:
             return HttpResponse(status=204)
+        return render(request, "error.html", {"message": "Game not found."}, status=404)
 
-    context = _build_detail_context(
-        game_data,
-        request.user.chess_username,
-        id,
-        highlight=highlight,
-        analysis=suggestion["analysis"] if suggestion else None,
-        suggestion=suggestion,
-        history=history,
-        can_analyze=can_analyze,
-    )
-    if request.htmx:
-        # Position changed since the client's `since` -> swap the fresh body.
-        return render(request, "partials/game_body.html", context)
-    return render(request, "game.html", context)
-
-
-@login_required
-async def coach_suggestion(request, id):
-    """HTMX endpoint: queues background analysis and re-renders the game body.
-
-    Analysis no longer runs inline: when it's the user's turn this enqueues a
-    Celery task (deduped per position) and swaps ``#game-body`` with the stored
-    state — pending shows an "Analyzing…" card, and the existing poller reveals
-    the recommended move and eval once the worker finishes.
-    """
-    # Async view: resolve the user via auser() to avoid a synchronous DB
-    # access (request.user is lazy and would raise SynchronousOnlyOperation).
-    user = await request.auser()
-    game_data, error = _fetch_detail(user, id)
-    if error:
-        # Bare fragment (no base template) — the async context can't touch the
-        # DB, and base.html's header reads request.user. Re-analysis is only
-        # offered on active games, so a missing game is a genuine error here.
-        return render(request, "partials/detail_error.html", {"error": error})
-
-    game = game_data["game"]
-    fen = game.get("fen", "")
-
-    # When it's the user's turn, ensure the position is queued for background
-    # analysis (idempotent): a pending/done row already exists for a FEN that's
-    # queued or analysed, so we only enqueue a Celery task when we just created it.
-    # A stale button click (opponent already moved) simply enqueues nothing.
-    if _is_user_turn(game_data, user.chess_username):
-        row, created = await CoachSuggestion.objects.aget_or_create(
-            user=user,
-            game_id=id,
-            fen=fen,
-            defaults={
-                "status": CoachSuggestion.Status.PENDING,
-                "move_no": board_utils.fullmove_number(fen),
-                "eval_text": "",
-                "analysis": "",
-            },
-        )
-        # Enqueue on first request, and re-enqueue when re-analysing a finished
-        # position: reset the row back to PENDING (clearing the stale result) so
-        # the panel shows the "Analyzing…" state and the poller reveals the fresh
-        # analysis. An already-PENDING row is left alone so the in-flight task is
-        # not duplicated.
-        if created or row.status != CoachSuggestion.Status.PENDING:
-            if not created:
-                row.status = CoachSuggestion.Status.PENDING
-                row.eval_text = ""
-                row.eval_cp = None
-                row.best_move_san = None
-                row.best_move_uci = None
-                row.analysis = ""
-                await row.asave()
-            await sync_to_async(analyze_game_task.delay)(
-                user.id, id, fen, game.get("pgn")
-            )
-
-    # Re-render the body from stored state. The existing HTMX poller reveals the
-    # result once the worker finishes; the request no longer blocks on analysis.
-    history = [s async for s in CoachSuggestion.objects.filter(user=user, game_id=id)]
-    stored, highlight = _suggestion_for_fen(history, fen)
-    context = _build_detail_context(
-        game_data,
-        user.chess_username,
-        id,
-        highlight=highlight,
-        analysis=stored["analysis"] if stored else None,
-        suggestion=stored,
-        history=history,
-        can_analyze=True,
-    )
-    return render(request, "partials/game_body.html", context)
-
-
-def _review_status_payload(row):
-    """JSON-friendly status for one position's analysis (review poll/enqueue).
-
-    ``none`` — nothing requested yet; ``pending`` — queued/in-flight; ``done`` —
-    the coach's move + eval + prose. The client computes ``followed`` itself
-    (recommended SAN vs the move actually played), so it isn't sent here.
-    """
-    if row is None:
-        return {"status": "none"}
-    if row.status == CoachSuggestion.Status.PENDING:
-        return {"status": "pending"}
-    rec = _uci_to_squares(row.best_move_uci)
-    return {
-        "status": "done",
-        "recSan": row.best_move_san or "",
-        "recEval": row.eval_text or "",
-        "fill": _eval_fill(row.eval_cp),
-        "prose": row.analysis or "",
-        "recFrom": rec[0] if rec else "",
-        "recTo": rec[1] if rec else "",
-    }
-
-
-def _build_review_data(game_data, user, id, request):
-    """Serialize a finished game into the JSON model the review page steps through.
-
-    Everything the client needs to render any ply without a round trip: the played
-    moves (with from/to squares for highlighting/arrows and the position the coach
-    analyses), the FEN after each ply, and the coach analysis keyed by ply index.
-    """
-    game = game_data["game"]
-    pgn = game.get("pgn")
-    username = user.chess_username
-    white_name = game_data["white_name"]
-    orientation = "white" if white_name.lower() == username.lower() else "black"
-
-    moves = board_utils.moves_from_pgn(pgn)
-    positions = board_utils.positions_from_pgn(pgn)
-    history = list(CoachSuggestion.objects.filter(user=user, game_id=id))
-    board_utils.annotate_moves(moves, history)
-
-    plies = []
-    analysis = {}
-    for i, m in enumerate(moves, start=1):
-        squares = _uci_to_squares(m["uci"])
-        plies.append(
-            {
-                "no": m["move_no"],
-                "color": m["color"],
-                "san": m["san"],
-                "from": squares[0] if squares else "",
-                "to": squares[1] if squares else "",
-                "fenBefore": m["fen_before"],
-            }
-        )
-        suggestion = m["suggestion"]
-        if suggestion is None:
-            continue
-        if suggestion.status == CoachSuggestion.Status.PENDING:
-            analysis[str(i)] = {"pending": True}
-            continue
-        rec = _uci_to_squares(suggestion.best_move_uci)
-        followed = m["followed"]
-        analysis[str(i)] = {
-            "recSan": suggestion.best_move_san or "",
-            "recEval": suggestion.eval_text or "",
-            # We only store one analysis per position (the best line's eval); the
-            # played move shares it when it *is* the best move, otherwise unknown.
-            "playedEval": (suggestion.eval_text or "") if followed else "",
-            "fill": _eval_fill(suggestion.eval_cp),
-            "followed": followed,
-            "prose": suggestion.analysis or "",
-            "recFrom": rec[0] if rec else "",
-            "recTo": rec[1] if rec else "",
-        }
-
-    return {
-        "plies": plies,
-        "positions": positions,
-        "analysis": analysis,
-        "meta": {
-            "orientation": orientation,
-            # Reviewing a finished game still lets the user ask the coach about a
-            # position they never requested live.
-            "canAnalyze": True,
-        },
-        "csrf": get_token(request),
-        "urls": {"analyze": reverse("review_analyze", args=[id])},
-    }
-
-
-@login_required
-def game_review(request, id):
-    """Move-by-move review of a finished game (client-side stepping).
-
-    Reads the persisted snapshot — the review is a post-game experience, so it
-    always works from the stored PGN rather than the (now absent) live game.
-    """
-    stored = game_store.stored_game(request.user, id)
-    if stored is None:
-        return render(
-            request, "error.html", {"message": "Game not found."}, status=404
-        )
-    if not stored.pgn:
+    if not game_data["game"].get("pgn") and not game_data["game"].get("fen"):
+        if poll:
+            return HttpResponse(status=204)
         return render(
             request,
             "error.html",
-            {"message": "This game can't be reviewed yet — its moves aren't available."},
+            {"message": "This game can't be shown yet — its moves aren't available."},
         )
 
-    game_data = _game_data_from_stored(stored)
-    orientation = (
-        "white"
-        if game_data["white_name"].lower() == request.user.chess_username.lower()
-        else "black"
+    review_data = _build_review_data(
+        game_data, request.user, id, request, is_live=is_live
     )
-    review_data = _build_review_data(game_data, request.user, id, request)
+    if poll:
+        return JsonResponse(review_data)
+
+    orientation = review_data["meta"]["orientation"]
     return render(
         request,
-        "game_review.html",
+        "game_detail.html",
         {
             "id": id,
+            "is_live": is_live,
             "white_name": game_data["white_name"],
             "black_name": game_data["black_name"],
             "white_rating": game_data.get("white_rating"),
@@ -479,21 +288,21 @@ def game_review(request, id):
             "result": game_data.get("result"),
             "result_label": game_data.get("result_label"),
             "result_detail": game_data.get("result_detail"),
-            "time_class": stored.time_class,
+            "time_class": game_data["game"].get("time_class"),
             "orientation": orientation,
-            "has_moves": bool(review_data["plies"]),
+            "has_moves": bool(review_data["plies"]) or bool(game_data["game"].get("fen")),
             "review_data": review_data,
         },
     )
 
 
 @login_required
-def review_analyze(request, id):
-    """On-demand coach analysis of a single past position from the review page.
+def analyze_position(request, id):
+    """On-demand coach analysis of a single position (any move, or the live turn).
 
     ``GET  ?fen=…`` returns the current status (the client polls this); ``POST``
-    with ``fen`` enqueues background analysis (idempotent per position) and reuses
-    the same Celery task as the live coach panel. Returns JSON either way.
+    with ``fen`` enqueues background analysis (idempotent per position) reusing the
+    same Celery task as before. Returns JSON either way.
     """
     fen = request.POST.get("fen") or request.GET.get("fen")
     if not fen:
@@ -504,8 +313,17 @@ def review_analyze(request, id):
     ).first()
 
     if request.method == "POST":
-        stored = game_store.stored_game(request.user, id)
-        pgn = stored.pgn if stored else None
+        pgn = None
+        try:
+            game_data, error = _fetch_detail(request.user, id)
+            if not error:
+                pgn = game_data["game"].get("pgn")
+        except Exception:
+            game_data = None
+        if pgn is None:
+            stored = game_store.stored_game(request.user, id)
+            pgn = stored.pgn if stored else None
+
         if row is None:
             row = CoachSuggestion.objects.create(
                 user=request.user,
@@ -518,9 +336,8 @@ def review_analyze(request, id):
             )
             analyze_game_task.delay(request.user.id, id, fen, pgn)
         elif row.status != CoachSuggestion.Status.PENDING:
-            # Re-analyse: reset to PENDING (clear the stale result) and re-enqueue,
-            # mirroring the live coach_suggestion path. An already-PENDING row is
-            # left alone so the in-flight task is not duplicated.
+            # Re-analyse: reset to PENDING (clear the stale result) and re-enqueue.
+            # An already-PENDING row is left alone so the task is not duplicated.
             row.status = CoachSuggestion.Status.PENDING
             row.eval_text = ""
             row.eval_cp = None
@@ -530,7 +347,13 @@ def review_analyze(request, id):
             row.save()
             analyze_game_task.delay(request.user.id, id, fen, pgn)
 
-    return JsonResponse(_review_status_payload(row))
+    payload = _suggestion_payload(row)
+    if payload is None:
+        return JsonResponse({"status": "none"})
+    if payload.get("pending"):
+        return JsonResponse({"status": "pending"})
+    payload["status"] = "done"
+    return JsonResponse(payload)
 
 
 def logout_view(request):
