@@ -2,6 +2,7 @@ import re
 from typing import Dict, List, Optional
 
 from chessdotcom import ChessDotComClient
+from django.utils import timezone
 
 # Chess.com per-side `result` strings that mean the game was drawn. Anything that
 # isn't one of these and isn't "win" is treated as a loss for that side.
@@ -142,6 +143,11 @@ class Client:
         by the Chess.com game id (last URL segment), covering only the games the
         user played. Defaults to the current month when ``year``/``month`` are None.
         """
+        # The chessdotcom library requires both year and month (or a datetime);
+        # passing None for either raises ValueError, so default to the current month.
+        if year is None or month is None:
+            now = timezone.now()
+            year, month = now.year, now.month
         response = self._chessdotcomclient.get_player_games_by_month(  # pyright: ignore[reportAttributeAccessIssue]
             self.username, year, month
         )
