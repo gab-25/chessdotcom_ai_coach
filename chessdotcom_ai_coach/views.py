@@ -52,6 +52,9 @@ def _game_data_from_stored(stored):
         "black_name": stored.black_name or "Black",
         "white_rating": stored.white_rating or None,
         "black_rating": stored.black_rating or None,
+        "result": stored.result,
+        "result_label": stored.result_label,
+        "result_detail": stored.result_detail,
     }
 
 
@@ -149,6 +152,11 @@ def _build_detail_context(
         "black_name": game_data["black_name"],
         "white_rating": game_data.get("white_rating"),
         "black_rating": game_data.get("black_rating"),
+        # Present only for past games rebuilt from the stored snapshot; live games
+        # fetched from Chess.com have no resolved result yet.
+        "result": game_data.get("result"),
+        "result_label": game_data.get("result_label"),
+        "result_detail": game_data.get("result_detail"),
         "fen": fen,
         "pgn": pgn,
         "orientation": orientation,

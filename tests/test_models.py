@@ -37,6 +37,17 @@ class TestGame:
         game = Game.objects.create(user=user, game_id="1")
         assert game.is_active is True
 
+    def test_defaults_to_unknown_result_without_label(self, user):
+        game = Game.objects.create(user=user, game_id="1")
+        assert game.result == Game.Result.UNKNOWN
+        assert game.has_result is False
+        assert game.result_label == ""
+
+    def test_result_label_reflects_resolved_outcome(self, user):
+        game = Game.objects.create(user=user, game_id="1", result=Game.Result.WIN)
+        assert game.has_result is True
+        assert game.result_label == "Win"
+
 
 @pytest.mark.django_db
 class TestCoachSuggestion:

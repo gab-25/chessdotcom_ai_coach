@@ -110,6 +110,92 @@ class TestMyCurrentGames:
         assert client.my_current_games() == []
 
 
+def _archive_game(**overrides):
+    """Archive-shaped game: white/black are dicts carrying a `result` code."""
+    game = {
+        "url": "https://www.chess.com/game/daily/944768131",
+        "white": {"username": "MyUser", "rating": 1500, "result": "win"},
+        "black": {"username": "Opponent", "rating": 1600, "result": "resigned"},
+    }
+    game.update(overrides)
+    return game
+
+
+def _archive_client(response, username="MyUser"):
+    """Build a Client whose monthly-archive call returns ``response``."""
+    with patch(
+        "chessdotcom_ai_coach.services.chess_client.ChessDotComClient"
+    ) as mock_cls:
+        client = Client(username=username)
+    client._chessdotcomclient.get_player_games_by_month.return_value = response
+    return client
+
+
+class TestFinishedGameResults:
+    def test_win_uses_opponent_result_as_detail(self):
+        client = _archive_client(_response([_archive_game()]))
+
+        results = client.finished_game_results()
+
+        assert results == {"944768131": {"result": "win", "detail": "resignation"}}
+
+    def test_loss_uses_own_result_as_detail(self):
+        game = _archive_game(
+            white={"username": "MyUser", "result": "checkmated"},
+            black={"username": "Opponent", "result": "win"},
+        )
+        client = _archive_client(_response([game]))
+
+        results = client.finished_game_results()
+
+        assert results["944768131"] == {"result": "loss", "detail": "checkmate"}
+
+    def test_draw_has_no_detail(self):
+        game = _archive_game(
+            white={"username": "MyUser", "result": "agreed"},
+            black={"username": "Opponent", "result": "agreed"},
+        )
+        client = _archive_client(_response([game]))
+
+        results = client.finished_game_results()
+
+        assert results["944768131"] == {"result": "draw", "detail": ""}
+
+    def test_matches_user_on_black_side_case_insensitively(self):
+        game = _archive_game(
+            white={"username": "Opponent", "result": "win"},
+            black={"username": "myuser", "result": "timeout"},
+        )
+        client = _archive_client(_response([game]), username="MyUser")
+
+        results = client.finished_game_results()
+
+        assert results["944768131"] == {"result": "loss", "detail": "timeout"}
+
+    def test_skips_games_the_user_did_not_play(self):
+        game = _archive_game(
+            white={"username": "Someone", "result": "win"},
+            black={"username": "Else", "result": "checkmated"},
+        )
+        client = _archive_client(_response([game]))
+
+        assert client.finished_game_results() == {}
+
+    def test_returns_empty_when_json_is_not_a_dict(self):
+        client = _archive_client(SimpleNamespace(json=None))
+
+        assert client.finished_game_results() == {}
+
+    def test_passes_year_and_month_through(self):
+        client = _archive_client(_response([]))
+
+        client.finished_game_results(2026, 7)
+
+        client._chessdotcomclient.get_player_games_by_month.assert_called_once_with(
+            "MyUser", 2026, 7
+        )
+
+
 class TestGameDetail:
     def test_finds_game_by_id_and_parses_names(self):
         client = _client(_response([_game()]))

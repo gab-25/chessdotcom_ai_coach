@@ -76,3 +76,42 @@ class TestQueries:
         Game.objects.create(user=user, game_id="1")
         assert game_store.stored_game(user, "1") is not None
         assert game_store.stored_game(user, "nope") is None
+
+
+@pytest.mark.django_db
+class TestResults:
+    def test_set_result_persists_outcome_and_detail(self, user):
+        Game.objects.create(user=user, game_id="1", is_active=False)
+
+        game_store.set_result(user, "1", Game.Result.WIN, "resignation")
+
+        stored = Game.objects.get(user=user, game_id="1")
+        assert stored.result == Game.Result.WIN
+        assert stored.result_detail == "resignation"
+
+    def test_new_game_defaults_to_unknown_result(self, user):
+        Game.objects.create(user=user, game_id="1")
+        assert Game.objects.get(user=user, game_id="1").result == Game.Result.UNKNOWN
+
+    def test_unresolved_past_games_filters_active_resolved_and_stale(self, user):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        since = timezone.now() - timedelta(days=3)
+        # Eligible: finished, unresolved.
+        Game.objects.create(user=user, game_id="pending", is_active=False)
+        # Excluded: still active.
+        Game.objects.create(user=user, game_id="active", is_active=True)
+        # Excluded: already resolved.
+        Game.objects.create(
+            user=user, game_id="done", is_active=False, result=Game.Result.WIN
+        )
+        # Excluded: ended before the window.
+        stale = Game.objects.create(user=user, game_id="stale", is_active=False)
+        Game.objects.filter(pk=stale.pk).update(
+            updated_at=timezone.now() - timedelta(days=5)
+        )
+
+        ids = [g.game_id for g in game_store.unresolved_past_games(user, since)]
+        assert ids == ["pending"]

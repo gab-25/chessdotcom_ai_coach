@@ -11,6 +11,7 @@ import pytest
 
 from chessdotcom_ai_coach.models import CoachSuggestion, Game
 from chessdotcom_ai_coach.services.scheduler import (
+    backfill_results,
     enqueue_due_analyses,
     sync_current_games,
 )
@@ -187,3 +188,101 @@ class TestSyncCurrentGames:
         sync_current_games()  # must not raise
 
         mock_upsert.assert_called_once_with(good_user, ["ok"])
+
+
+@pytest.mark.django_db
+@patch("chessdotcom_ai_coach.services.scheduler.game_store.set_result")
+@patch("chessdotcom_ai_coach.services.scheduler.Client")
+class TestBackfillResults:
+    def _linked_user(self, django_user_model):
+        return django_user_model.objects.create_user(
+            username="login_name",
+            password="pw12345!",
+            chessdotcom_username="MyUser",
+        )
+
+    def test_resolves_unresolved_finished_game(
+        self, mock_client_cls, mock_set_result, django_user_model
+    ):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False)  # finished, result still UNKNOWN
+        mock_client_cls.return_value.finished_game_results.return_value = {
+            "944768131": {"result": "win", "detail": "resignation"}
+        }
+
+        resolved = backfill_results()
+
+        assert resolved == 1
+        mock_client_cls.assert_called_once_with(username="MyUser")
+        mock_set_result.assert_called_once_with(user, "944768131", "win", "resignation")
+
+    def test_skips_when_no_unresolved_games(
+        self, mock_client_cls, mock_set_result, django_user_model
+    ):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=True)  # still live → not backfilled
+
+        resolved = backfill_results()
+
+        assert resolved == 0
+        mock_client_cls.assert_not_called()
+        mock_set_result.assert_not_called()
+
+    def test_leaves_unmatched_games_unresolved(
+        self, mock_client_cls, mock_set_result, django_user_model
+    ):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False)
+        # Archive has no entry for this game id (both months empty).
+        mock_client_cls.return_value.finished_game_results.return_value = {}
+
+        resolved = backfill_results()
+
+        assert resolved == 0
+        mock_set_result.assert_not_called()
+
+    def test_falls_back_to_previous_month_when_not_in_current(
+        self, mock_client_cls, mock_set_result, django_user_model
+    ):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False)
+        # First call (current month) misses; second call (previous month) hits.
+        mock_client_cls.return_value.finished_game_results.side_effect = [
+            {},
+            {"944768131": {"result": "draw", "detail": ""}},
+        ]
+
+        resolved = backfill_results()
+
+        assert resolved == 1
+        assert mock_client_cls.return_value.finished_game_results.call_count == 2
+        mock_set_result.assert_called_once_with(user, "944768131", "draw", "")
+
+    def test_one_users_failure_does_not_block_the_rest(
+        self, mock_client_cls, mock_set_result, django_user_model
+    ):
+        bad = django_user_model.objects.create_user(
+            username="bad_login", password="pw12345!", chessdotcom_username="Bad"
+        )
+        good = django_user_model.objects.create_user(
+            username="good_login", password="pw12345!", chessdotcom_username="Good"
+        )
+        _game(bad, game_id="bad-game", is_active=False)
+        _game(good, game_id="good-game", is_active=False)
+
+        def _client_for(username):
+            client = MagicMock()
+            if username == "Bad":
+                client.finished_game_results.side_effect = Exception("boom")
+            else:
+                client.finished_game_results.return_value = {
+                    "good-game": {"result": "win", "detail": ""}
+                }
+            return client
+
+        mock_client_cls.side_effect = _client_for
+
+        resolved = backfill_results()  # must not raise
+
+        assert resolved == 1
+        mock_set_result.assert_called_once_with(good, "good-game", "win", "")

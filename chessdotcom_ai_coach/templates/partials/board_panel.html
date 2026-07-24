@@ -6,8 +6,11 @@
 <div>
   <div class="detail-meta">
     <span class="badge">{{ game.time_class|capfirst }}</span>
+    {% if result and result != "unknown" %}
+    <span class="badge badge--{{ result }}">{{ result_label }}{% if result_detail %} · {{ result_detail }}{% endif %}</span>
+    {% endif %}
     <span class="detail-meta__text">
-      {% if move_no %}Move {{ move_no }} · {% endif %}{{ turn_label }} to play
+      {% if result and result != "unknown" %}Game over{% else %}{% if move_no %}Move {{ move_no }} · {% endif %}{{ turn_label }} to play{% endif %}
     </span>
   </div>
 

@@ -66,6 +66,33 @@ def past_games(user) -> List[Game]:
     return list(Game.objects.filter(user=user, is_active=False))
 
 
+def set_result(user, game_id: str, result: str, detail: str = "") -> None:
+    """Persist a resolved outcome (win/loss/draw) for a stored game.
+
+    Pure DB write, keeping this module free of Chess.com IO: the scheduler fetches
+    the outcome from the archives and calls this to record it on the snapshot.
+    """
+    Game.objects.filter(user=user, game_id=game_id).update(
+        result=result, result_detail=detail
+    )
+
+
+def unresolved_past_games(user, since) -> List[Game]:
+    """Finished games still lacking a result, updated on/after ``since``.
+
+    The ``since`` cut-off bounds the archive backfill: only recently-ended games
+    are retried, so a game that never resolves stops being re-fetched forever.
+    """
+    return list(
+        Game.objects.filter(
+            user=user,
+            is_active=False,
+            result=Game.Result.UNKNOWN,
+            updated_at__gte=since,
+        )
+    )
+
+
 def stored_game(user, game_id: str) -> Game | None:
     """The persisted snapshot for a game id, or ``None`` (for game_detail fallback)."""
     return Game.objects.filter(user=user, game_id=game_id).first()

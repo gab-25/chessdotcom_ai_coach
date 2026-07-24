@@ -21,8 +21,16 @@ class CoachUserAdmin(UserAdmin):
 class GameAdmin(admin.ModelAdmin):
     """Read-only view over the persisted game snapshots."""
 
-    list_display = ("game_id", "user", "white_name", "black_name", "is_active", "updated_at")
-    list_filter = ("is_active", "time_class")
+    list_display = (
+        "game_id",
+        "user",
+        "white_name",
+        "black_name",
+        "is_active",
+        "result",
+        "updated_at",
+    )
+    list_filter = ("is_active", "result", "time_class")
     search_fields = ("game_id", "white_name", "black_name")
 
 

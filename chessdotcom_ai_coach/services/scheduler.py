@@ -6,6 +6,9 @@ games due for analysis from that local DB and enqueues Celery tasks.
 """
 
 import logging
+from datetime import timedelta
+
+from django.utils import timezone
 
 from ..models import CoachSuggestion, Game, User
 from ..tasks import analyze_game_task
@@ -14,6 +17,20 @@ from . import game_store
 from .chess_client import Client
 
 logger = logging.getLogger(__name__)
+
+# Only games that ended within this window are retried against the archives, so a
+# game that never resolves (e.g. played under a different alias) is not re-fetched
+# on every tick forever.
+RESULT_BACKFILL_WINDOW = timedelta(days=3)
+
+
+def _linked_users():
+    """Active users who linked a Chess.com account (the ones worth polling)."""
+    return (
+        User.objects.filter(is_active=True)
+        .exclude(chessdotcom_username__isnull=True)
+        .exclude(chessdotcom_username="")
+    )
 
 
 def _user_color(game: Game) -> str | None:
@@ -42,15 +59,56 @@ def sync_current_games() -> None:
     synced. A per-user failure (bad username, transient network error) is
     logged and skipped so it doesn't block the rest of the batch.
     """
-    users = User.objects.filter(is_active=True).exclude(
-        chessdotcom_username__isnull=True
-    ).exclude(chessdotcom_username="")
-    for user in users:
+    for user in _linked_users():
         try:
             games = Client(username=user.chess_username).my_current_games()
             game_store.upsert_current_games(user, games)
         except Exception:
             logger.exception("Chess.com sync failed for user %s", user.chess_username)
+
+
+def backfill_results() -> int:
+    """Resolve the win/loss/draw outcome of recently-ended games from the archives.
+
+    A game only leaves Chess.com's "current games" once it's over, and the snapshot
+    we kept has a PGN with Result "*", so the outcome must be fetched separately.
+    For each linked user with finished-but-unresolved games in the backfill window,
+    pull the current month's archive (falling back to the previous month for games
+    not found there, to cover month boundaries) and persist each match. A per-user
+    failure is logged and skipped so one bad account doesn't block the batch.
+    Returns the number of games resolved this tick.
+    """
+    updated = 0
+    since = timezone.now() - RESULT_BACKFILL_WINDOW
+    for user in _linked_users():
+        try:
+            pending = game_store.unresolved_past_games(user, since)
+            if not pending:
+                continue
+            client = Client(username=user.chess_username)
+            results = client.finished_game_results()  # current month
+            if any(game.game_id not in results for game in pending):
+                # Some games ended in a prior month (e.g. long daily games): merge
+                # in last month's archive, keeping the current month's entries.
+                prev_month_end = timezone.now().replace(day=1) - timedelta(days=1)
+                results = {
+                    **client.finished_game_results(
+                        prev_month_end.year, prev_month_end.month
+                    ),
+                    **results,
+                }
+            for game in pending:
+                match = results.get(game.game_id)
+                if match:
+                    game_store.set_result(
+                        user, game.game_id, match["result"], match["detail"]
+                    )
+                    updated += 1
+        except Exception:
+            logger.exception(
+                "Result backfill failed for user %s", user.chess_username
+            )
+    return updated
 
 
 def enqueue_due_analyses() -> int:
