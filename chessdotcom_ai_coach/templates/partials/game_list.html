@@ -60,7 +60,7 @@
   <h2 class="past-games__title"><i class="fa-solid fa-clock-rotate-left"></i> Past games</h2>
   <div class="games-grid">
     {% for game in past_games %}
-    <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
+    <a href="{% url 'game_review' game.game_id %}" class="gm-card gm-card--past">
       <div class="gm-card__head">
         <span class="gm-card__head-left">
           <span class="badge">{{ game.time_class|capfirst }}</span>
@@ -68,7 +68,7 @@
           <span class="badge badge--{{ game.result }}">{{ game.result_label }}{% if game.result_detail %} · {{ game.result_detail }}{% endif %}</span>
           {% endif %}
         </span>
-        <span class="gm-card__ended">ENDED{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
+        <span class="gm-card__ended"><i class="fa-solid fa-magnifying-glass"></i> REVIEW{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
       </div>
 
       <!-- Black -->

@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Game review · Chessdotcom AI Coach{% endblock %}
+
+{% block header_left %}
+<a href="{% url 'home' %}" class="back-link"><span style="font-size:16px">&larr;</span> Live games</a>
+{% endblock %}
+
+{% block header_status %}
+<div class="status-pill">
+  <span class="status-pill__dot"></span>REVIEW
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page page--wide">
+  {% if not has_moves %}
+  <div class="alert alert--danger" style="max-width:520px">
+    <i class="fa-solid fa-circle-exclamation"></i> No moves to review for this game yet.
+  </div>
+  {% else %}
+  <div class="game-layout" id="gr-root">
+
+    <!-- LEFT: board column -->
+    <div>
+      <div class="detail-meta">
+        {% if time_class %}<span class="badge">{{ time_class|capfirst }}</span>{% endif %}
+        {% if result_label %}
+        <span class="badge badge--{{ result }}">{{ result_label }}{% if result_detail %} · {{ result_detail }}{% endif %}</span>
+        {% endif %}
+        <span class="detail-meta__text" id="gr-seltext">Starting position</span>
+      </div>
+
+      <!-- top player: opponent (top of the oriented board) -->
+      {% if orientation == "black" %}
+      <div class="pbar pbar--top">
+        <span class="pbar__avatar pbar__avatar--w"></span>
+        <span class="pbar__id"><span class="pbar__name">{{ white_name }}</span><span class="pbar__meta">{{ white_rating|default:"—" }}</span></span>
+      </div>
+      {% else %}
+      <div class="pbar pbar--top">
+        <span class="pbar__avatar pbar__avatar--b"></span>
+        <span class="pbar__id"><span class="pbar__name">{{ black_name }}</span><span class="pbar__meta">{{ black_rating|default:"—" }}</span></span>
+      </div>
+      {% endif %}
+
+      <!-- eval bar + board -->
+      <div class="board-stage">
+        <div class="evalbar{% if orientation == 'black' %} evalbar--flipped{% endif %}">
+          <div class="evalbar__fill" id="gr-evalfill" style="height:50%"></div>
+          <div class="evalbar__mid"></div>
+        </div>
+        <div class="board-stage__board">
+          <div class="gr-board-wrap">
+            <div class="board board--lg" id="gr-board"></div>
+            <svg class="gr-arrows" id="gr-arrows" xmlns="http://www.w3.org/2000/svg"></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- bottom player: you (bottom of the oriented board) -->
+      {% if orientation == "black" %}
+      <div class="pbar pbar--bottom">
+        <span class="pbar__avatar pbar__avatar--b"></span>
+        <span class="pbar__id"><span class="pbar__name">{{ black_name }}</span><span class="pbar__meta">{{ black_rating|default:"—" }}</span></span>
+        <span class="pbar__you">YOU</span>
+      </div>
+      {% else %}
+      <div class="pbar pbar--bottom">
+        <span class="pbar__avatar pbar__avatar--w"></span>
+        <span class="pbar__id"><span class="pbar__name">{{ white_name }}</span><span class="pbar__meta">{{ white_rating|default:"—" }}</span></span>
+        <span class="pbar__you">YOU</span>
+      </div>
+      {% endif %}
+
+      <!-- move navigator -->
+      <div class="movebar">
+        <span class="movebar__last" id="gr-lastmove">Last: —</span>
+        <div class="gr-nav">
+          <button type="button" data-nav="first" title="Start" aria-label="Start">«</button>
+          <button type="button" data-nav="prev" title="Back (←)" aria-label="Back">‹</button>
+          <button type="button" data-nav="next" title="Forward (→)" aria-label="Forward">›</button>
+          <button type="button" data-nav="last" title="End" aria-label="End">»</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: coach column -->
+    <div class="game-col">
+      <div class="coach">
+        <div class="coach__head">
+          <span class="coach__head-icon">&#9818;</span>
+          <h3 class="coach__title">Coach suggestion</h3>
+          <span class="coach__tag" id="gr-movelabel"></span>
+        </div>
+        <div class="coach__body" id="gr-coach"></div>
+      </div>
+
+      <!-- analysis history timeline -->
+      <div class="gr-card">
+        <div class="gr-card__head">
+          <i class="fa-solid fa-clock-rotate-left"></i> Analysis history
+          <span class="gr-card__count" id="gr-hcount">0</span>
+        </div>
+        <ul class="gr-hist gm-scroll" id="gr-history"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- moves list -->
+  <div class="moves gr-moves">
+    <div class="moves__head">
+      <i class="fa-solid fa-list-ol"></i> Moves · click to review
+    </div>
+    <ol class="gr-moves-grid" id="gr-moves"></ol>
+  </div>
+  {% endif %}
+</div>
+
+{{ review_data|json_script:"gr-data" }}
+<script src="{% static 'js/game_review.js' %}" defer></script>
+{% endblock %}

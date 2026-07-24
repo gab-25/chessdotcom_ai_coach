@@ -1211,6 +1211,350 @@ input {
   color: var(--ink-mute);
 }
 
+/* ===================== Game review (move-by-move) ===================== */
+/* Board with an SVG arrow overlay; the wrapper bounds width so the arrows
+   (positioned in %) stay aligned with the squares. */
+.gr-board-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+}
+.gr-board-wrap .board {
+  --board-size: 100%;
+}
+.gr-arrows {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pbar__you {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--brass);
+}
+
+/* Move navigator buttons */
+.gr-nav {
+  display: flex;
+  gap: 6px;
+}
+.gr-nav button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(43, 38, 33, 0.12);
+  background: var(--paper-2);
+  color: #5c5346;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s;
+}
+.gr-nav button:hover {
+  border-color: var(--green-line);
+  color: var(--green-dark);
+}
+
+/* Coach-panel glyph (start / un-analysed states) */
+.gr-glyph {
+  font-size: 34px;
+  color: var(--green);
+  opacity: 0.55;
+  line-height: 1;
+  font-family: "Segoe UI Symbol", "Noto Sans Symbols2", serif;
+}
+.gr-glyph--sm {
+  font-size: 30px;
+  opacity: 0.5;
+}
+.gr-opp .coach__rec-label {
+  margin-bottom: 8px;
+}
+.gr-opp .coach__summary {
+  margin-top: 6px;
+}
+.gr-bigmove {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 40px;
+  line-height: 1;
+  color: var(--ink);
+}
+
+/* Played-vs-coach comparison */
+.gr-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+.gr-compare__cell {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 11px 13px;
+  background: var(--paper-2);
+}
+.gr-compare__cell--good {
+  border-color: rgba(74, 122, 82, 0.45);
+  background: rgba(74, 122, 82, 0.1);
+}
+.gr-compare__cell--diff {
+  border-color: rgba(183, 142, 84, 0.5);
+  background: rgba(183, 142, 84, 0.1);
+}
+.gr-compare__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: 6px;
+}
+.gr-compare__val {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.gr-compare__san {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--ink);
+}
+.gr-compare__eval {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.gr-compare__eval--green {
+  color: var(--green-dark);
+}
+
+/* Followed / differed status chip */
+.gr-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  padding: 6px 11px;
+  border-radius: 20px;
+}
+.gr-status--followed {
+  color: var(--green-dark);
+  background: rgba(74, 122, 82, 0.14);
+}
+.gr-status--differed {
+  color: #8a6a2e;
+  background: rgba(183, 142, 84, 0.16);
+}
+
+/* Arrow legend */
+.gr-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.gr-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.gr-legend__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.gr-legend__dot--brass {
+  background: var(--brass);
+}
+.gr-legend__dot--green {
+  background: var(--green);
+}
+
+/* Neutral card (analysis-history timeline) */
+.gr-card {
+  background: linear-gradient(165deg, var(--paper) 0%, var(--paper-2) 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.gr-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.gr-card__count {
+  margin-left: auto;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  border-radius: 20px;
+  padding: 2px 9px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.gr-hist {
+  list-style: none;
+  margin: 0;
+  padding: 0 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.gr-hist__item {
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.gr-hist__item:hover {
+  border-color: var(--green-line);
+}
+.gr-hist__item--sel {
+  background: #f0e9d6;
+  border-color: rgba(183, 142, 84, 0.6);
+}
+.gr-hist__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.gr-hist__no {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.gr-hist__san {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--ink);
+}
+.gr-hist__eval {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--green-dark);
+  margin-bottom: 4px;
+}
+.gr-hist__prose {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin: 0;
+}
+.gr-tag {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+.gr-tag--followed {
+  color: var(--green-dark);
+  background: rgba(74, 122, 82, 0.14);
+}
+.gr-tag--differed {
+  color: #8a6a2e;
+  background: rgba(183, 142, 84, 0.16);
+}
+
+/* Moves grid (click to review) */
+.gr-moves {
+  margin-top: 24px;
+}
+.gr-moves-grid {
+  list-style: none;
+  margin: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+.gr-move {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 14px;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.gr-move:hover {
+  background: var(--paper-2);
+}
+.gr-move--analyzed {
+  background: var(--green-soft);
+}
+.gr-move--sel {
+  background: #f0e9d6;
+  box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.7);
+}
+.gr-move__no {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+  min-width: 32px;
+}
+.gr-move__san {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--ink);
+}
+.gr-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 20px;
+}
+.gr-badge--followed {
+  color: var(--green-dark);
+  background: rgba(74, 122, 82, 0.14);
+}
+.gr-badge--differed {
+  color: #8a6a2e;
+  background: rgba(183, 142, 84, 0.16);
+}
+.gr-badge--pending {
+  color: var(--ink-mute);
+  background: var(--line-soft);
+}
+
 /* ===================== Responsive ===================== */
 @media (max-width: 860px) {
   .game-layout {

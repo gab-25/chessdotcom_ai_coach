@@ -1,8 +1,10 @@
 from asgiref.sync import sync_to_async
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
 from django.shortcuts import redirect, render
+from django.urls import reverse
 
 from .models import CoachSuggestion
 from .services import board as board_utils
@@ -346,6 +348,189 @@ async def coach_suggestion(request, id):
         can_analyze=True,
     )
     return render(request, "partials/game_body.html", context)
+
+
+def _review_status_payload(row):
+    """JSON-friendly status for one position's analysis (review poll/enqueue).
+
+    ``none`` — nothing requested yet; ``pending`` — queued/in-flight; ``done`` —
+    the coach's move + eval + prose. The client computes ``followed`` itself
+    (recommended SAN vs the move actually played), so it isn't sent here.
+    """
+    if row is None:
+        return {"status": "none"}
+    if row.status == CoachSuggestion.Status.PENDING:
+        return {"status": "pending"}
+    rec = _uci_to_squares(row.best_move_uci)
+    return {
+        "status": "done",
+        "recSan": row.best_move_san or "",
+        "recEval": row.eval_text or "",
+        "fill": _eval_fill(row.eval_cp),
+        "prose": row.analysis or "",
+        "recFrom": rec[0] if rec else "",
+        "recTo": rec[1] if rec else "",
+    }
+
+
+def _build_review_data(game_data, user, id, request):
+    """Serialize a finished game into the JSON model the review page steps through.
+
+    Everything the client needs to render any ply without a round trip: the played
+    moves (with from/to squares for highlighting/arrows and the position the coach
+    analyses), the FEN after each ply, and the coach analysis keyed by ply index.
+    """
+    game = game_data["game"]
+    pgn = game.get("pgn")
+    username = user.chess_username
+    white_name = game_data["white_name"]
+    orientation = "white" if white_name.lower() == username.lower() else "black"
+
+    moves = board_utils.moves_from_pgn(pgn)
+    positions = board_utils.positions_from_pgn(pgn)
+    history = list(CoachSuggestion.objects.filter(user=user, game_id=id))
+    board_utils.annotate_moves(moves, history)
+
+    plies = []
+    analysis = {}
+    for i, m in enumerate(moves, start=1):
+        squares = _uci_to_squares(m["uci"])
+        plies.append(
+            {
+                "no": m["move_no"],
+                "color": m["color"],
+                "san": m["san"],
+                "from": squares[0] if squares else "",
+                "to": squares[1] if squares else "",
+                "fenBefore": m["fen_before"],
+            }
+        )
+        suggestion = m["suggestion"]
+        if suggestion is None:
+            continue
+        if suggestion.status == CoachSuggestion.Status.PENDING:
+            analysis[str(i)] = {"pending": True}
+            continue
+        rec = _uci_to_squares(suggestion.best_move_uci)
+        followed = m["followed"]
+        analysis[str(i)] = {
+            "recSan": suggestion.best_move_san or "",
+            "recEval": suggestion.eval_text or "",
+            # We only store one analysis per position (the best line's eval); the
+            # played move shares it when it *is* the best move, otherwise unknown.
+            "playedEval": (suggestion.eval_text or "") if followed else "",
+            "fill": _eval_fill(suggestion.eval_cp),
+            "followed": followed,
+            "prose": suggestion.analysis or "",
+            "recFrom": rec[0] if rec else "",
+            "recTo": rec[1] if rec else "",
+        }
+
+    return {
+        "plies": plies,
+        "positions": positions,
+        "analysis": analysis,
+        "meta": {
+            "orientation": orientation,
+            # Reviewing a finished game still lets the user ask the coach about a
+            # position they never requested live.
+            "canAnalyze": True,
+        },
+        "csrf": get_token(request),
+        "urls": {"analyze": reverse("review_analyze", args=[id])},
+    }
+
+
+@login_required
+def game_review(request, id):
+    """Move-by-move review of a finished game (client-side stepping).
+
+    Reads the persisted snapshot — the review is a post-game experience, so it
+    always works from the stored PGN rather than the (now absent) live game.
+    """
+    stored = game_store.stored_game(request.user, id)
+    if stored is None:
+        return render(
+            request, "error.html", {"message": "Game not found."}, status=404
+        )
+    if not stored.pgn:
+        return render(
+            request,
+            "error.html",
+            {"message": "This game can't be reviewed yet — its moves aren't available."},
+        )
+
+    game_data = _game_data_from_stored(stored)
+    orientation = (
+        "white"
+        if game_data["white_name"].lower() == request.user.chess_username.lower()
+        else "black"
+    )
+    review_data = _build_review_data(game_data, request.user, id, request)
+    return render(
+        request,
+        "game_review.html",
+        {
+            "id": id,
+            "white_name": game_data["white_name"],
+            "black_name": game_data["black_name"],
+            "white_rating": game_data.get("white_rating"),
+            "black_rating": game_data.get("black_rating"),
+            "result": game_data.get("result"),
+            "result_label": game_data.get("result_label"),
+            "result_detail": game_data.get("result_detail"),
+            "time_class": stored.time_class,
+            "orientation": orientation,
+            "has_moves": bool(review_data["plies"]),
+            "review_data": review_data,
+        },
+    )
+
+
+@login_required
+def review_analyze(request, id):
+    """On-demand coach analysis of a single past position from the review page.
+
+    ``GET  ?fen=…`` returns the current status (the client polls this); ``POST``
+    with ``fen`` enqueues background analysis (idempotent per position) and reuses
+    the same Celery task as the live coach panel. Returns JSON either way.
+    """
+    fen = request.POST.get("fen") or request.GET.get("fen")
+    if not fen:
+        return JsonResponse({"error": "missing fen"}, status=400)
+
+    row = CoachSuggestion.objects.filter(
+        user=request.user, game_id=id, fen=fen
+    ).first()
+
+    if request.method == "POST":
+        stored = game_store.stored_game(request.user, id)
+        pgn = stored.pgn if stored else None
+        if row is None:
+            row = CoachSuggestion.objects.create(
+                user=request.user,
+                game_id=id,
+                fen=fen,
+                status=CoachSuggestion.Status.PENDING,
+                move_no=board_utils.fullmove_number(fen),
+                eval_text="",
+                analysis="",
+            )
+            analyze_game_task.delay(request.user.id, id, fen, pgn)
+        elif row.status != CoachSuggestion.Status.PENDING:
+            # Re-analyse: reset to PENDING (clear the stale result) and re-enqueue,
+            # mirroring the live coach_suggestion path. An already-PENDING row is
+            # left alone so the in-flight task is not duplicated.
+            row.status = CoachSuggestion.Status.PENDING
+            row.eval_text = ""
+            row.eval_cp = None
+            row.best_move_san = None
+            row.best_move_uci = None
+            row.analysis = ""
+            row.save()
+            analyze_game_task.delay(request.user.id, id, fen, pgn)
+
+    return JsonResponse(_review_status_payload(row))
 
 
 def logout_view(request):
