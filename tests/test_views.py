@@ -48,6 +48,28 @@ def _make_game(user, **overrides):
     return Game.objects.create(**defaults)
 
 
+def _ply_fen(idx):
+    """The ``fen_before`` for a 0-based ply of ``PGN`` (the coach's join key)."""
+    return board_utils.moves_from_pgn(PGN)[idx]["fen_before"]
+
+
+def _make_suggestion(user, fen, **overrides):
+    """Seed a ``CoachSuggestion`` row (DONE by default) for the standard game."""
+    defaults = dict(
+        user=user,
+        game_id="944768131",
+        fen=fen,
+        status=CoachSuggestion.Status.DONE,
+        eval_text="+0.3",
+        eval_cp=0.3,
+        best_move_san="Nf3",
+        best_move_uci="g1f3",
+        analysis="Develop the knight.",
+    )
+    defaults.update(overrides)
+    return CoachSuggestion.objects.create(**defaults)
+
+
 @pytest.mark.django_db
 class TestHome:
     def test_lists_games(self, auth_client, user):
@@ -302,3 +324,353 @@ class TestLogout:
 
         assert response.status_code == 302
         assert response["Location"] == "/login"
+
+
+@pytest.mark.django_db
+class TestLoginPage:
+    """The login page markup and the auth round-trip (Django's LoginView)."""
+
+    def test_renders_form_without_app_header(self, client):
+        response = client.get("/login")
+        body = response.content.decode()
+
+        assert response.status_code == 200
+        assert 'id="id_username"' in body
+        assert 'id="id_password"' in body
+        assert 'name="username"' in body and 'name="password"' in body
+        # Login overrides {% block header %} to nothing — no app chrome.
+        assert 'class="app-header"' not in body
+
+    def test_invalid_credentials_show_error(self, client, user):
+        response = client.post(
+            "/login", {"username": "MyUser", "password": "wrong"}
+        )
+
+        assert response.status_code == 200
+        assert b"Invalid username or password." in response.content
+
+    def test_valid_credentials_redirect_home(self, client, user):
+        response = client.post(
+            "/login", {"username": "MyUser", "password": "pw12345!"}
+        )
+
+        assert response.status_code == 302
+        assert response["Location"] == "/"
+
+
+@pytest.mark.django_db
+class TestCoachCardModes:
+    """Every branch of partials/coach_card.html, driven by ``coach.mode``."""
+
+    def test_opponent_move(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        # sel 2 is Black's move (e5) — the opponent's.
+        response = auth_client.get("/game/944768131/view", {"sel": "2"})
+
+        assert response.context["coach"]["mode"] == "opponent"
+        assert b"The coach only analyses your moves" in response.content
+
+    def test_unanalyzed_shows_request_button(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        # sel 3 is White's Nf3 (a user move) with no suggestion yet.
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "unanalyzed"
+        assert "Request suggestion" in body
+        assert 'hx-post="/game/944768131/analyze?sel=3"' in body
+        assert 'hx-target="#gr-coach"' in body
+
+    def test_pending_self_polls(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(
+            user, _ply_fen(2), status=CoachSuggestion.Status.PENDING
+        )
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "pending"
+        assert "spinner" in body
+        assert 'hx-trigger="every 2s"' in body
+        assert 'hx-get="/game/944768131/analyze?sel=3"' in body
+
+    def test_analyzed_followed(self, auth_client, user):
+        _make_game(user, is_active=False)
+        # Best move equals the move actually played (Nf3) → "followed".
+        _make_suggestion(user, _ply_fen(2), best_move_san="Nf3")
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "analyzed"
+        assert response.context["coach"]["followed"] is True
+        assert "You played the best move" in body
+        assert "gr-status--followed" in body
+        assert "gr-compare__cell--good" in body
+        # No "Played" legend entry / played-move arrow when followed.
+        assert "gr-legend__dot--green" not in body
+
+    def test_analyzed_differed(self, auth_client, user):
+        _make_game(user, is_active=False)
+        # Best move differs from the played Nf3 → "differed".
+        _make_suggestion(
+            user, _ply_fen(2), best_move_san="d4", best_move_uci="d2d4"
+        )
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "analyzed"
+        assert response.context["coach"]["followed"] is False
+        assert "The coach preferred" in body
+        assert "gr-status--differed" in body
+        assert "gr-compare__cell--diff" in body
+        # A "Played" legend entry appears alongside the brass "Recommended" one.
+        assert "gr-legend__dot--green" in body
+        assert 'stroke="#4a7a52"' in body  # green played-move arrow
+
+    def test_live_waiting_for_opponent(self, auth_client, user):
+        # Live game, Black to move while the user is White → waiting.
+        _make_game(
+            user,
+            fen="r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 2 3",
+        )
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.context["coach"]["mode"] == "live_waiting"
+        assert b"Opponent to move" in response.content
+
+    def test_live_request_for_user_move(self, auth_client, user):
+        _make_game(user)  # live, White (user) to move, no suggestion yet
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.context["coach"]["mode"] == "live_request"
+        assert b"Ask the coach what to play" in response.content
+
+    def test_live_pending_self_polls(self, auth_client, user):
+        _make_game(user)  # live head at FEN_LIVE, user to move
+        _make_suggestion(
+            user, FEN_LIVE, status=CoachSuggestion.Status.PENDING
+        )
+
+        response = auth_client.get("/game/944768131")
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "live_pending"
+        assert "Analysing the current position" in body
+        assert 'hx-trigger="every 2s"' in body
+
+
+@pytest.mark.django_db
+class TestMovesGrid:
+    """partials/moves_grid.html — the click-to-review move list."""
+
+    def test_each_move_links_to_its_position(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert 'hx-get="/game/944768131/view?sel=1"' in body
+        assert 'hx-target="#gr-view"' in body
+        # The selected ply is flagged.
+        assert "gr-move--sel" in body
+
+    def test_analyzed_move_shows_followed_badge(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(user, _ply_fen(2), best_move_san="Nf3")
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert "gr-move--analyzed" in body
+        assert "gr-badge--followed" in body
+
+    def test_pending_move_shows_pending_badge(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(
+            user, _ply_fen(2), status=CoachSuggestion.Status.PENDING
+        )
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert b"gr-badge--pending" in response.content
+
+
+@pytest.mark.django_db
+class TestHistoryList:
+    """partials/history_list.html — the analysed-moves timeline."""
+
+    def test_counts_and_lists_analysed_user_moves(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(user, _ply_fen(2), best_move_san="Nf3")  # followed
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["history_count"] == 1
+        assert 'class="gr-card__count">1<' in body
+        assert 'hx-get="/game/944768131/view?sel=3"' in body
+        assert "gr-tag--followed" in body
+
+    def test_empty_when_no_analysis(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "1"})
+
+        assert response.context["history_count"] == 0
+        assert b"gr-tag--" not in response.content
+
+
+@pytest.mark.django_db
+class TestBoardRendering:
+    """partials/board.html expanded from the stored FEN."""
+
+    def test_renders_64_cells(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "0"})
+
+        assert len(response.context["cells"]) == 64
+
+    def test_last_move_highlights_two_squares(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        # sel 3 is Nf3 (g1→f3): both squares ringed.
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        highlighted = [c for c in response.context["cells"] if c["highlight"]]
+
+        assert len(highlighted) == 2
+        assert b"board__sq--hl" in response.content
+
+    def test_black_orientation_reverses_cells(self, auth_client, user):
+        # Same starting position, once as White and once as Black.
+        white_game = _make_game(user, game_id="white1", is_active=False, fen=FEN_START)
+        black_game = _make_game(
+            user,
+            game_id="black1",
+            white_name="Opponent",
+            black_name="MyUser",
+            is_active=False,
+            fen=FEN_START,
+        )
+
+        white_cells = auth_client.get(
+            f"/game/{white_game.game_id}/view", {"sel": "0"}
+        ).context["cells"]
+        black_cells = auth_client.get(
+            f"/game/{black_game.game_id}/view", {"sel": "0"}
+        ).context["cells"]
+
+        assert black_cells == list(reversed(white_cells))
+
+
+@pytest.mark.django_db
+class TestNavigation:
+    """The move navigation bar in partials/position.html."""
+
+    def test_prev_next_head_and_button_targets(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+        ctx = response.context
+
+        assert (ctx["prev_sel"], ctx["next_sel"], ctx["head"]) == (2, 4, 4)
+        assert 'hx-get="/game/944768131/view?sel=0"' in body  # start
+        assert 'hx-get="/game/944768131/view?sel=2"' in body  # back
+        assert 'hx-get="/game/944768131/view?sel=4"' in body  # forward / end
+
+    def test_live_game_shows_jump_to_live_button(self, auth_client, user):
+        _make_game(user)  # live, head == 4
+
+        # Review an earlier ply on the live game (htmx fragment).
+        response = auth_client.get(
+            "/game/944768131/view", {"sel": "2"}, HTTP_HX_REQUEST="true"
+        )
+        body = response.content.decode()
+
+        assert response.context["behind"] == 2
+        assert "gr-live-btn" in body
+        assert "2 new · live" in body
+        assert 'hx-get="/game/944768131/view?sel=4"' in body  # jump to head
+
+
+@pytest.mark.django_db
+class TestHtmxFragments:
+    """HTMX-specific rendering: the out-of-band header pill sync."""
+
+    def test_htmx_request_syncs_pill_out_of_band(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get(
+            "/game/944768131/view", {"sel": "3"}, HTTP_HX_REQUEST="true"
+        )
+        body = response.content.decode()
+
+        assert 'id="gr-pill" hx-swap-oob="true"' in body
+
+    def test_non_htmx_request_has_no_pill_swap(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert 'id="gr-pill" hx-swap-oob="true"' not in body
+
+
+@pytest.mark.django_db
+class TestGameListStates:
+    """partials/game_list.html — empty state and the your-turn card."""
+
+    def test_empty_state(self, auth_client):
+        response = auth_client.get("/games")
+
+        assert b"No active games" in response.content
+
+    def test_your_turn_card(self, auth_client, user):
+        # FEN_START has White (the user) to move → your turn.
+        _make_game(user, fen=FEN_START)
+
+        response = auth_client.get("/games")
+        body = response.content.decode()
+
+        assert "gm-card--your-turn" in body
+        assert "Your turn" in body
+        assert "LIVE" in body
+
+
+@pytest.mark.django_db
+class TestEvalBar:
+    """The eval bar fill (_eval_fill / partials/_evalfill.html)."""
+
+    def test_defaults_to_midpoint_without_analysis(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert response.context["eval_fill"] == 50
+        assert b"height:50%" in response.content
+
+    def test_clamps_a_large_positive_eval(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(user, _ply_fen(2), best_move_san="Nf3", eval_cp=10)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert response.context["eval_fill"] == 93
+        assert b"height:93%" in response.content
+
+    def test_clamps_a_large_negative_eval(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(user, _ply_fen(2), best_move_san="Nf3", eval_cp=-10)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert response.context["eval_fill"] == 7
+        assert b"height:7%" in response.content
