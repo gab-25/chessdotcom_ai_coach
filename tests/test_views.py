@@ -465,6 +465,30 @@ class TestCoachCardModes:
         assert "Analysing the current position" in body
         assert 'hx-trigger="every 2s"' in body
 
+    def test_live_head_reviews_your_just_played_move(self, auth_client, user):
+        # Live game whose last ply is the user's OWN move (White Nf3), with the
+        # opponent now on the clock. The just-played move must still show its
+        # coach review and board arrows — not the bare "waiting" state.
+        live_pgn = '[Event "Test"]\n\n1. e4 e5 2. Nf3 *'
+        _make_game(
+            user,
+            pgn=live_pgn,
+            fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+        )
+        # Suggestion for that move (position before White's 2. Nf3); best move
+        # differs from the played Nf3 → both recommended and played arrows.
+        fen_before = board_utils.moves_from_pgn(live_pgn)[2]["fen_before"]
+        _make_suggestion(
+            user, fen_before, best_move_san="d4", best_move_uci="d2d4"
+        )
+
+        response = auth_client.get("/game/944768131")
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "analyzed"
+        assert 'stroke="#b78e54"' in body  # brass recommended arrow
+        assert 'stroke="#4a7a52"' in body  # green played-move arrow
+
 
 @pytest.mark.django_db
 class TestMovesGrid:
