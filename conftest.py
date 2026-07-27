@@ -2,7 +2,7 @@
 Global pytest configuration.
 
 Keeps the test suite self-contained: it must run without a live PostgreSQL,
-Ollama or Stockfish engine. We (1) provide safe defaults for the environment
+LLM server or Stockfish engine. We (1) provide safe defaults for the environment
 variables that modules read at import time, and (2) swap the database for a
 file-backed SQLite so no PostgreSQL server is needed.
 """
@@ -12,8 +12,7 @@ import tempfile
 
 # Defaults for env vars read at import time.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
-os.environ.setdefault("OLLAMA_HOST", "localhost")
-os.environ.setdefault("OLLAMA_PORT", "11434")
+os.environ.setdefault("LLM_BASE_URL", "http://localhost:8080/v1")
 
 import pytest
 

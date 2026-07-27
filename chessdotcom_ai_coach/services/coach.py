@@ -3,21 +3,20 @@ from typing import Optional, TypedDict
 
 import chess
 import chess.engine
-import ollama
+from openai import AsyncOpenAI
 
 # Stockfish Engine Configuration.
 # The engine runs as a local subprocess inside this container; STOCKFISH_PATH
 # points at the binary (see the Dockerfile). Defaults to "stockfish" on PATH.
 STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 
-# LLM Configuration (Local Llama 3.2 via Ollama)
-# The model is fixed here on purpose: it is not user- or env-selectable.
-# A 3B model is used to keep RAM usage low enough for an 8GB single-node cluster
-# (~2GB loaded vs ~5-6GB for the 8B build).
-OLLAMA_MODEL = "llama3.2:3b"
-OLLAMA_HOST = os.getenv("OLLAMA_HOST")
-OLLAMA_PORT = os.getenv("OLLAMA_PORT")
-OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
+# LLM Configuration (Local Llama 3.2 via llama.cpp llama-server)
+# llama-server exposes an OpenAI-compatible endpoint, so we talk to it with the
+# OpenAI async client. A 3B model is used to keep RAM usage low enough for an
+# 8GB single-node cluster (~2GB loaded vs ~5-6GB for the 8B build); the served
+# model is fixed by the llama-server command, not selectable per request.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://llm:8080/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-instruct")
 
 
 class Suggestion(TypedDict):
@@ -141,9 +140,9 @@ Instructions:
         try:
             # llama3.2:3b on CPU can take ~20-30s to produce a full analysis, so
             # allow a generous timeout; on failure we fall back to engine-only text.
-            client = ollama.AsyncClient(host=OLLAMA_URL, timeout=150.0)
-            response = await client.chat(  # pyright: ignore[reportCallIssue]
-                model=OLLAMA_MODEL,  # pyright: ignore[reportArgumentType]
+            client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=150.0)
+            response = await client.chat.completions.create(
+                model=LLM_MODEL,
                 messages=[
                     {
                         "role": "system",
@@ -151,11 +150,9 @@ Instructions:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                options={
-                    "temperature": 0.7,
-                },
+                temperature=0.7,
             )
-            content = response.message.content
+            content = response.choices[0].message.content
             analysis = content.strip() if content else eval_text
             return _suggestion(
                 eval_text=eval_text,

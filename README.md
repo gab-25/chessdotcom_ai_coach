@@ -1,14 +1,16 @@
 # chessdotcom_ai_coach
 
 Chess Coach AI — a **Django** web app that lists your live Chess.com games,
-renders the board, and asks an Ollama LLM to analyze the position like a
+renders the board, and asks a local LLM to analyze the position like a
 grandmaster coach.
 
 ## Stack
 
 - **Django 5** — ORM, templates, admin, session auth (custom `User` model)
 - **PostgreSQL** — via `psycopg2-binary`
-- **Ollama** — the AI coach prose (`chessdotcom_ai_coach/services/coach.py`)
+- **llama.cpp (`llama-server`)** — serves the local LLM behind an
+  OpenAI-compatible API; the app reaches it with the `openai` async client for
+  the AI coach prose (`chessdotcom_ai_coach/services/coach.py`)
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
@@ -39,11 +41,13 @@ docker compose up --build
 
 Compose starts the whole stack: `web` (Gunicorn + the APScheduler process,
 started by `entrypoint.sh` after `migrate`/`collectstatic`), a `worker` running
-the Celery worker, plus `redis`, `postgres` and `ollama`. The app is served on
-http://localhost:8000. In Compose the `POSTGRES_HOST`, `OLLAMA_HOST`/`OLLAMA_PORT`
-and `REDIS_URL` are overridden to reach the `postgres`, `ollama` and `redis`
-services; everything else comes from `.env`. Create a user via the admin (see
-below).
+the Celery worker, plus `redis`, `postgres` and `llm` (llama-server). The app is
+served on http://localhost:8000. In Compose the `POSTGRES_HOST`, `LLM_BASE_URL`
+and `REDIS_URL` are overridden to reach the `postgres`, `llm` and `redis`
+services; everything else comes from `.env`. On first start the `llm` service
+downloads the GGUF model into the `llm-models` volume, so the coach may fall
+back to Stockfish-only text until the download finishes. Create a user via the
+admin (see below).
 
 ## Run locally
 
@@ -57,7 +61,8 @@ Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
 | `DEBUG` | `true`/`false` (default `true`) |
 | `ALLOWED_HOSTS` | comma-separated hosts (default `*`) |
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
-| `OLLAMA_HOST` / `OLLAMA_PORT` | Ollama host and port (e.g. `localhost`/`11434`) |
+| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint (default `http://llm:8080/v1`; use `http://localhost:8080/v1` locally) |
+| `LLM_MODEL` | model name sent to the LLM server (default `llama-3.2-3b-instruct`) |
 | `REDIS_URL` | Celery broker + result backend (default `redis://redis:6379/0`; use `redis://localhost:6379/0` locally) |
 | `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
 
@@ -121,8 +126,14 @@ Then open http://localhost:8000, sign in, and set your **Chess.com username**
 on the user via the admin at http://localhost:8000/admin/ (field
 `chessdotcom_username`; it falls back to the login username if left blank).
 
-The AI coach requires the Ollama service with the `llama3.2:3b` model pulled:
+The AI coach requires the `llm` service (llama-server). It auto-downloads the
+`llama3.2:3b` GGUF (`bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M`, ~2GB) into the
+`llm-models` volume on first `docker compose up` — no manual pull needed. Check
+it is serving with:
 
 ```bash
-docker compose exec ollama ollama pull llama3.2:3b
+curl http://localhost:8080/health
 ```
+
+For a fully offline/reproducible setup, mount a local `.gguf` into the `llm`
+service and swap the `-hf ...` flag in `docker-compose.yaml` for `-m /models/<file>.gguf`.

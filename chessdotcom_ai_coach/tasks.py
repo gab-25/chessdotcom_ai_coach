@@ -4,7 +4,7 @@
 `async_to_sync` (Celery tasks run synchronously) and persists the result to
 `CoachSuggestion` — the same outcome the view used to produce inline, but
 out-of-band. `services/coach.py` is left untouched so its test mocking seam
-(patching `popen_uci` / `ollama.AsyncClient`) still applies.
+(patching `popen_uci` / `AsyncOpenAI`) still applies.
 """
 
 from asgiref.sync import async_to_sync

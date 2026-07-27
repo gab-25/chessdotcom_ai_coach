@@ -130,8 +130,8 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Integrations ----------------------------------------------------------
-OLLAMA_HOST = os.getenv("OLLAMA_HOST")
-OLLAMA_PORT = os.getenv("OLLAMA_PORT")
+# Base URL of the OpenAI-compatible LLM endpoint (llama.cpp llama-server).
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 
 # --- Celery ----------------------------------------------------------------
 # Redis is the broker and result backend. The scheduler (APScheduler) enqueues
