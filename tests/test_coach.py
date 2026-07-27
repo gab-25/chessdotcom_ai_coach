@@ -1,8 +1,8 @@
 """Unit tests for the AI coach service.
 
 Both external dependencies are mocked: the Stockfish UCI engine (launched via
-``chess.engine.popen_uci``) and the Ollama LLM client. Real ``python-chess``
-score objects drive the evaluation-text branches.
+``chess.engine.popen_uci``) and the OpenAI-compatible LLM client (llama-server).
+Real ``python-chess`` score objects drive the evaluation-text branches.
 """
 
 from contextlib import contextmanager
@@ -20,10 +20,10 @@ E2E4 = chess.Move.from_uci("e2e4")  # legal in the start position -> SAN "e4"
 
 @contextmanager
 def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False):
-    """Patch the engine subprocess and Ollama client for one call.
+    """Patch the engine subprocess and OpenAI-compatible LLM client for one call.
 
     ``score`` is placed in ``result.info["score"]``; ``move`` becomes
-    ``result.move``. If ``llm_raises`` the Ollama chat call raises, forcing
+    ``result.move``. If ``llm_raises`` the chat-completions call raises, forcing
     the Stockfish fallback branch.
     """
     engine = MagicMock()
@@ -34,16 +34,20 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
     # engine); stubbed here so no real subprocess is spawned.
     popen_uci = AsyncMock(return_value=(MagicMock(), engine))
 
-    ollama_client = MagicMock()
+    # llama-server is reached through the OpenAI async client; the response
+    # shape is ``response.choices[0].message.content``.
+    llm_client = MagicMock()
     if llm_raises:
-        ollama_client.chat = AsyncMock(side_effect=RuntimeError("ollama down"))
+        llm_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("llm down"))
     else:
-        ollama_client.chat = AsyncMock(
-            return_value=SimpleNamespace(message=SimpleNamespace(content=llm_content))
+        llm_client.chat.completions.create = AsyncMock(
+            return_value=SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=llm_content))]
+            )
         )
 
     with patch.object(coach.chess.engine, "popen_uci", popen_uci), patch.object(
-        coach.ollama, "AsyncClient", return_value=ollama_client
+        coach, "AsyncOpenAI", return_value=llm_client
     ):
         yield
 
