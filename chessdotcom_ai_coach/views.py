@@ -111,11 +111,19 @@ def _position_context(user, game, sel):
     at_live_head = is_live and sel == head
     head_row = by_fen.get(game.fen)
     user_to_move = board_utils.active_color(game.fen) == orientation if game.fen else False
+    # At the live head, take over the display only when it's genuinely the
+    # player's decision point (your move) or there's no played user move to
+    # review. When the player has just moved and the opponent is on the clock,
+    # fall through to the review branch so the move keeps its arrows and coach
+    # comparison — matching how the same ply looks once the game is finished.
+    live_head_view = at_live_head and (
+        user_to_move or ply is None or ply["color"] != orientation
+    )
 
     coach = {"mode": "start"}
     arrows = []
 
-    if at_live_head:
+    if live_head_view:
         # The position you're about to play (or waiting on the opponent).
         if not user_to_move:
             coach = {"mode": "live_waiting"}
