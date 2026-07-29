@@ -187,13 +187,18 @@ class TestGameDetail:
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
         body = response.content.decode()
 
-        # The arrow overlay and eval bar are always present as stable OOB
-        # targets, but in a full #gr-view render they are inline — not
-        # out-of-band (that is only for the standalone coach-card self-poll).
+        # The arrow overlay, eval bar, analysis history and moves grid are always
+        # present as stable OOB targets, but in a full #gr-view render they are
+        # inline — not out-of-band (that is only for the standalone coach-card
+        # self-poll).
         assert 'id="gr-arrows"' in body
         assert 'id="gr-evalfill"' in body
+        assert 'id="gr-history"' in body
+        assert 'id="gr-moves-panel"' in body
         assert 'id="gr-arrows" hx-swap-oob' not in body
         assert 'id="gr-evalfill" hx-swap-oob' not in body
+        assert 'id="gr-history" hx-swap-oob' not in body
+        assert 'id="gr-moves-panel" hx-swap-oob' not in body
 
     def test_embeds_completed_analysis(self, auth_client, user):
         _make_game(user, is_active=False)
@@ -307,6 +312,38 @@ class TestAnalyzePosition:
         assert 'id="gr-evalfill"' in body
         assert 'hx-swap-oob="true"' in body
         assert 'stroke="#b78e54"' in body  # brass recommended-move arrow
+
+    def test_get_adds_the_history_slot_out_of_band(self, mock_task, auth_client, user):
+        _make_game(user, is_active=False)
+        # sel 3 is White's 2nd move (Nf3) — the coach recommended it too.
+        _make_suggestion(user, _ply_fen(2))
+
+        response = auth_client.get("/game/944768131/analyze", {"sel": "3"})
+        body = response.content.decode()
+
+        # The freshly-arrived analysis gets its slot in the timeline and badges
+        # the move in the grid, both out-of-band — no full #gr-view re-render.
+        assert 'id="gr-history" hx-swap-oob="true"' in body
+        assert "Analysis history" in body
+        assert "Develop the knight." in body
+        assert 'class="gr-card__count">1<' in body
+        assert 'id="gr-moves-panel" hx-swap-oob="true"' in body
+        assert "gr-badge--followed" in body
+
+    def test_post_badges_the_move_as_pending_out_of_band(
+        self, mock_task, auth_client, user
+    ):
+        _make_game(user, is_active=False)
+
+        response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
+        body = response.content.decode()
+
+        # Enqueueing marks the move pending in the grid straight away; nothing
+        # is done yet, so the history stays empty.
+        assert 'id="gr-moves-panel" hx-swap-oob="true"' in body
+        assert "gr-badge--pending" in body
+        assert 'id="gr-history" hx-swap-oob="true"' in body
+        assert 'class="gr-card__count">0<' in body
 
     def test_analysis_never_calls_chess_com(self, mock_task, auth_client, user):
         _make_game(user, is_active=False)

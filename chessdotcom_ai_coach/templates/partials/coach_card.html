@@ -2,10 +2,11 @@
   The coach-card body (inside #gr-coach). Driven by `coach.mode`; also returned on
   its own by the analyze endpoint, so the pending states self-poll via htmx until
   the background analysis is done. When rendered standalone (`oob`), it also carries
-  the eval bar and board arrows out-of-band so a freshly-arrived analysis updates
-  the board without a full #gr-view re-render.
+  the eval bar, the board arrows, the analysis-history timeline and the moves grid
+  out-of-band, so a freshly-arrived analysis updates the board, gets its history
+  slot and badges the move without a full #gr-view re-render.
 {% endcomment %}
-{% if oob %}{% include "partials/_evalfill.html" %}{% include "partials/_arrows_svg.html" %}{% endif %}
+{% if oob %}{% include "partials/_evalfill.html" %}{% include "partials/_arrows_svg.html" %}{% include "partials/history_list.html" %}{% include "partials/moves_grid.html" %}{% endif %}
 {% if coach.mode == "start" %}
 <div class="coach__placeholder">
   <span class="gr-glyph">&#9818;</span>

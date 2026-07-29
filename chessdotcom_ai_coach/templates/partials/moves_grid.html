@@ -1,7 +1,12 @@
 {% comment %}
   Played-move grid; click a move to review it. Each item is an htmx GET that swaps
-  the whole position view. Expects `moves` (from _position_context) and `id`.
+  the whole position view. Expects `moves` (from _position_context) and `id`. The
+  outer container is always rendered (even with no moves) so its id is a stable
+  target: position.html renders it inline; the coach-card self-poll renders it
+  standalone with an out-of-band swap (`oob`), so a freshly-arrived analysis
+  updates the move's badge without a full #gr-view re-render.
 {% endcomment %}
+<div id="gr-moves-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
 {% if moves %}
 <div class="moves gr-moves">
   <div class="moves__head"><i class="fa-solid fa-list-ol"></i> Moves · click to review</div>
@@ -21,3 +26,4 @@
   </ol>
 </div>
 {% endif %}
+</div>
