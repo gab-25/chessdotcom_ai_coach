@@ -1,7 +1,11 @@
 {% comment %}
   Analysis-history timeline (one entry per analysed user move). Click to jump to
-  that move. Expects `history`, `history_count`, `id`.
+  that move. Expects `history`, `history_count`, `id`. position.html renders it
+  inline; the coach-card self-poll renders it standalone with an out-of-band swap
+  (`oob`), so a freshly-arrived analysis gets its slot without a full #gr-view
+  re-render.
 {% endcomment %}
+<div id="gr-history"{% if oob %} hx-swap-oob="true"{% endif %}>
 <div class="gr-card">
   <div class="gr-card__head">
     <i class="fa-solid fa-clock-rotate-left"></i> Analysis history
@@ -21,4 +25,5 @@
     </li>
     {% endfor %}
   </ul>
+</div>
 </div>
