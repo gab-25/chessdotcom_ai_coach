@@ -63,10 +63,17 @@ body {
 
 body {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   font-family: var(--font-body);
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Grows to push the footer to the bottom on short pages. */
+.app-main {
+  flex: 1 0 auto;
 }
 
 a {
@@ -199,21 +206,21 @@ input {
   background: #e8635a;
 }
 
-/* ===================== App footer (fixed version badge) =============== */
+/* ===================== App footer (version bar) ====================== */
 .app-footer {
-  position: fixed;
-  bottom: 10px;
-  right: 14px;
-  z-index: 5;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+.app-footer__inner {
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 14px 28px;
+  display: flex;
+  justify-content: flex-end;
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--ink-faint);
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 3px 9px;
-  pointer-events: none;
   user-select: none;
 }
 
@@ -254,11 +261,11 @@ input {
 .page {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 38px 28px 90px;
+  padding: 38px 28px 48px;
 }
 .page--wide {
   max-width: 1300px;
-  padding: 28px 28px 90px;
+  padding: 28px 28px 48px;
 }
 
 /* ===================== Buttons ===================== */
@@ -1607,7 +1614,10 @@ input {
     display: none;
   }
   .page {
-    padding: 26px 16px 80px;
+    padding: 26px 16px 40px;
+  }
+  .app-footer__inner {
+    padding: 12px 16px;
   }
   .coach__move {
     font-size: 44px;

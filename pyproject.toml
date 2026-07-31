@@ -1,6 +1,6 @@
 [project]
 name = "chessdotcom-ai-coach"
-version = "1.6.1"
+version = "1.6.2"
 description = ""
 authors = [
     { name = "gab-25", email = "gabrielesorci.25@gmail.com" }

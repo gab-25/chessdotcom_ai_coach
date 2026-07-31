@@ -8,6 +8,7 @@ just seed the DB. The Celery task is mocked where analysis is enqueued.
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings
 
 from chessdotcom_ai_coach.models import CoachSuggestion, Game
 from chessdotcom_ai_coach.services import board as board_utils
@@ -735,3 +736,19 @@ class TestEvalBar:
 
         assert response.context["eval_fill"] == 7
         assert b"height:7%" in response.content
+
+
+@pytest.mark.django_db
+class TestVersionFooter:
+    def test_footer_shows_version(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/")
+
+        assert b'class="app-footer"' in response.content
+        assert f"v{settings.APP_VERSION}".encode() in response.content
+
+    def test_login_page_has_no_footer(self, client):
+        response = client.get("/login")
+
+        assert b"app-footer" not in response.content
