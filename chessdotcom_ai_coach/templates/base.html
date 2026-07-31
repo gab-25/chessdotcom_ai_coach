@@ -51,10 +51,12 @@
     </header>
     {% endblock %}
 
-    {% block content %}{% endblock %}
+    <main class="app-main">{% block content %}{% endblock %}</main>
 
     {% block footer %}
-    <footer class="app-footer">v{{ version }}</footer>
+    <footer class="app-footer">
+      <div class="app-footer__inner">v{{ version }}</div>
+    </footer>
     {% endblock %}
   </body>
 </html>
