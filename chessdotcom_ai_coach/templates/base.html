@@ -30,6 +30,7 @@
           <span>
             <span class="brand__name">Chessdotcom</span><br />
             <span class="brand__sub">AI&nbsp;COACH</span>
+            <span class="brand__version">v{{ version }}</span>
           </span>
         </a>
 
@@ -52,11 +53,5 @@
     {% endblock %}
 
     <main class="app-main">{% block content %}{% endblock %}</main>
-
-    {% block footer %}
-    <footer class="app-footer">
-      <div class="app-footer__inner">v{{ version }}</div>
-    </footer>
-    {% endblock %}
   </body>
 </html>
