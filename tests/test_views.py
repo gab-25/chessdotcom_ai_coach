@@ -739,16 +739,16 @@ class TestEvalBar:
 
 
 @pytest.mark.django_db
-class TestVersionFooter:
-    def test_footer_shows_version(self, auth_client, user):
+class TestVersionBadge:
+    def test_header_shows_version(self, auth_client, user):
         _make_game(user)
 
         response = auth_client.get("/")
 
-        assert b'class="app-footer"' in response.content
+        assert b'class="brand__version"' in response.content
         assert f"v{settings.APP_VERSION}".encode() in response.content
 
-    def test_login_page_has_no_footer(self, client):
+    def test_login_page_has_no_version(self, client):
         response = client.get("/login")
 
-        assert b"app-footer" not in response.content
+        assert b"brand__version" not in response.content
