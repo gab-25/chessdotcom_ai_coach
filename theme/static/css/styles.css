@@ -1546,6 +1546,11 @@ input {
   background: #f0e9d6;
   box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.7);
 }
+/* The move you're about to play on a live game — provisional, not yet a ply. */
+.gr-move--live {
+  background: rgba(183, 142, 84, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(183, 142, 84, 0.45);
+}
 .gr-move__no {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1556,6 +1561,10 @@ input {
   font-family: var(--font-display);
   font-weight: 600;
   color: var(--ink);
+}
+.gr-move__san--live {
+  font-weight: 400;
+  color: var(--ink-mute);
 }
 .gr-badge {
   margin-left: auto;
@@ -1573,6 +1582,10 @@ input {
   background: rgba(74, 122, 82, 0.14);
 }
 .gr-badge--differed {
+  color: #8a6a2e;
+  background: rgba(183, 142, 84, 0.16);
+}
+.gr-badge--live {
   color: #8a6a2e;
   background: rgba(183, 142, 84, 0.16);
 }

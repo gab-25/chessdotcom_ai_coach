@@ -49,17 +49,17 @@
       <div class="movebar">
         <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
         <div class="gr-navwrap">
-          {% if is_live and sel < head %}
+          {% if is_live and sel < live_sel %}
           <button type="button" class="gr-live-btn" title="Jump to the live position"
-                  hx-get="{% url 'game_position' id %}?sel={{ head }}" hx-target="#gr-view" hx-swap="outerHTML">
-            <span class="status-pill__dot"></span>{{ behind }} new · live
+                  hx-get="{% url 'game_position' id %}?sel={{ live_sel }}" hx-target="#gr-view" hx-swap="outerHTML">
+            <span class="status-pill__dot"></span>{% if behind %}{{ behind }} new · {% endif %}live
           </button>
           {% endif %}
           <div class="gr-nav">
             <button type="button" title="Start" hx-get="{% url 'game_position' id %}?sel=0" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='Home'] from:body">«</button>
             <button type="button" title="Back (←)" hx-get="{% url 'game_position' id %}?sel={{ prev_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowLeft'] from:body">‹</button>
             <button type="button" title="Forward (→)" hx-get="{% url 'game_position' id %}?sel={{ next_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowRight'] from:body">›</button>
-            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ head }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
+            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ live_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
           </div>
         </div>
       </div>
