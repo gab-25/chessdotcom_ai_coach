@@ -17,17 +17,29 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 | `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish and calls the LLM. |
 | `redis` | `redis:7-alpine` | Celery broker and result backend. Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
-| `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Started by [`ollama-entrypoint.sh`](../ollama-entrypoint.sh), which pulls the model first. |
+| `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Needs a one-off model pull, see below. |
 
 `web` and `worker` both wait for `postgres` and `redis` to be **healthy**, but
-only for `ollama` to have **started** — the model pull takes minutes and the
-coach degrades gracefully to Stockfish-only text meanwhile, so blocking on it
-would be pointless.
+only for `ollama` to have **started** — the coach degrades gracefully to
+Stockfish-only text when the LLM isn't answering yet, so blocking on it would be
+pointless.
+
+### After the first start: pull the model
+
+Ollama ships no model. Until you run it, analyses complete on the Stockfish-only
+fallback:
+
+```bash
+docker compose exec ollama ollama pull llama3.2:3b
+```
+
+Once only, per `ollama-data` volume. Details and how to switch model in
+[configuration.md](configuration.md#pulling-the-model).
 
 ### Volumes
 
 - **`postgres-data`** — the database.
-- **`ollama-data`** — the model store. Keep it, or every restart re-pulls ~2GB.
+- **`ollama-data`** — the model store. Keep it, or you have to re-pull ~2GB.
 
 ## The container entrypoint
 

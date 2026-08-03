@@ -48,6 +48,7 @@ grandmaster coach.
 ```bash
 cp .env.example .env
 docker compose up --build
+docker compose exec ollama ollama pull llama3.2:3b   # once, ~2GB
 ```
 
 Compose starts the whole stack: `web` (Gunicorn + the APScheduler process,
@@ -57,9 +58,14 @@ http://localhost:8000.
 
 Compose overrides `POSTGRES_HOST`, `LLM_BASE_URL`, `LLM_MODEL`, `REDIS_URL` and
 `STOCKFISH_PATH` so the containers reach each other by service name; everything
-else comes from `.env`. On first start the `ollama` service pulls `llama3.2:3b`
-(~2GB) into the `ollama-data` volume, so the coach falls back to Stockfish-only
-text until the pull finishes.
+else comes from `.env`.
+
+**The `ollama` service starts empty** — it downloads no model on its own, so the
+pull above is required. It is stored in the `ollama-data` volume and survives
+restarts, so you only do it once. Skip it and the app still works, but every
+analysis falls back to Stockfish-only text with no coach prose. See
+[configuration.md](docs/configuration.md#pulling-the-model) for how to use a
+different model.
 
 Then create a user (see [First run](#first-run) below).
 

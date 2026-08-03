@@ -129,30 +129,57 @@ Check what is loaded right now:
 docker compose exec ollama ollama ps    # empty once the keep-alive window closes
 ```
 
-### Model pull
+### Pulling the model
 
-Ollama has no `-hf`-style auto-download, so
-[`ollama-entrypoint.sh`](../ollama-entrypoint.sh) — bind-mounted into the
-container as its entrypoint — starts the server, waits for the API, pulls
-`$OLLAMA_MODEL` (default `llama3.2:3b`) and then stays in foreground on the
-server process. The blob lands in the `ollama-data` volume, so later starts are a
-no-op. **While the first pull runs (~2GB), the coach falls back to Stockfish-only
-text**, which is expected and self-corrects.
+Ollama does **not** download anything on its own — there is no `-hf`-style
+auto-pull. A freshly created `ollama-data` volume is empty, and until you pull the
+model **every analysis falls back to Stockfish-only text**. That is the single
+manual step of a first install.
 
-To use a different model, pull it and point `LLM_MODEL` at the same tag:
+After the first `docker compose up`:
+
+```bash
+docker compose exec ollama ollama pull llama3.2:3b
+```
+
+~2GB, a few minutes on a normal connection. It is stored in the `ollama-data`
+volume, so it survives restarts and `docker compose down` — you only repeat this
+if the volume is deleted.
+
+Check what is in the store:
+
+```bash
+docker compose exec ollama ollama list
+curl http://localhost:11434/api/tags     # same thing, over HTTP
+```
+
+Running locally instead of in Compose (Ollama installed on the host), it is just:
+
+```bash
+ollama pull llama3.2:3b
+```
+
+#### Using a different model
+
+The tag you pull and `LLM_MODEL` **must match** — the app names the tag in every
+request, and Ollama returns an error for one it hasn't got. So it is two steps:
 
 ```bash
 docker compose exec ollama ollama pull qwen2.5:3b
 ```
 
-Then set `LLM_MODEL=qwen2.5:3b` (and `OLLAMA_MODEL` on the `ollama` service, so
-it survives a fresh volume). The two must match — the app's request names the
-tag, and Ollama returns an error for a tag it hasn't pulled.
+then set `LLM_MODEL=qwen2.5:3b` on `web` and `worker` (it is pinned in
+[`docker-compose.yaml`](../docker-compose.yaml), so edit it there rather than in
+`.env`) and `docker compose up -d web worker`.
+
+Browse the tags at [ollama.com/library](https://ollama.com/library). Mind the RAM:
+the `:3b` builds sit around 2GB, `:7b`/`:8b` around 5–6GB, which no longer fits an
+8GB node alongside Postgres, Redis, `web` and `worker`.
 
 Health check:
 
 ```bash
-curl http://localhost:11434/api/tags    # lists the pulled models
+curl http://localhost:11434/api/tags     # server up, and what it can serve
 ```
 
 The request itself uses a **150-second timeout** (CPU inference for this model

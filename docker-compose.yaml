@@ -71,19 +71,17 @@ services:
     # Ollama serves the coach prose behind an OpenAI-compatible endpoint on /v1.
     # OLLAMA_KEEP_ALIVE unloads the model 30s after the last request: on an 8GB
     # node the ~2GB of weights must not stay resident between analyses.
-    # OLLAMA_MODEL is read by the entrypoint's pull only; the model actually sent
-    # with each request is LLM_MODEL on web/worker. Keep the two in sync.
+    #
+    # The model is NOT pulled automatically. After the first start, run:
+    #   docker compose exec ollama ollama pull llama3.2:3b
+    # It has to match LLM_MODEL on web/worker. Until then the coach falls back to
+    # Stockfish-only text. See docs/configuration.md#pulling-the-model.
     environment:
       - OLLAMA_KEEP_ALIVE=30s
-      - OLLAMA_MODEL=llama3.2:3b
-    entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
-    # Drop the image's default CMD ("serve"); the entrypoint starts the server.
-    command: []
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
-      - ./ollama-entrypoint.sh:/ollama-entrypoint.sh:ro
 
 volumes:
   postgres-data:
