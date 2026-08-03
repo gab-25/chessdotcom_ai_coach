@@ -141,7 +141,9 @@ class TestGameDetail:
         assert response.status_code == 200
         assert b'id="gr-view"' in response.content
         assert b"WATCHING LIVE" in response.content
-        assert response.context["sel"] == response.context["head"] == 4
+        # Your turn: the page opens on the live slot, one past the last played ply.
+        assert response.context["head"] == 4
+        assert response.context["sel"] == response.context["live_sel"] == 5
         # At the live head, your move, no suggestion yet → request button.
         assert b"Request suggestion" in response.content
 
@@ -289,7 +291,7 @@ class TestAnalyzePosition:
         mock_task.delay.assert_not_called()
 
     def test_get_syncs_board_out_of_band(self, mock_task, auth_client, user):
-        _make_game(user)  # live, White (user) to move at the head (sel == head == 4)
+        _make_game(user)  # live, White (user) to move — the live slot is sel 5
         CoachSuggestion.objects.create(
             user=user,
             game_id="944768131",
@@ -302,7 +304,7 @@ class TestAnalyzePosition:
             analysis="Pin the knight.",
         )
 
-        response = auth_client.get("/game/944768131/analyze", {"sel": "4"})
+        response = auth_client.get("/game/944768131/analyze", {"sel": "5"})
         body = response.content.decode()
 
         # The card body updated…
@@ -566,12 +568,17 @@ class TestMovesGrid:
 
 @pytest.mark.django_db
 class TestLiveMoveSlot:
-    """The provisional grid item for the move you're about to play (live head)."""
+    """The provisional grid item for the move you're about to play.
+
+    On a live game where it's the user's turn the slot owns its own cursor,
+    ``live_sel`` (``head + 1`` — here 5), so the opponent's last move stays
+    reviewable at ``head``.
+    """
 
     def test_live_turn_shows_an_empty_slot(self, auth_client, user):
         _make_game(user)  # live, White (user) to move, no suggestion yet
 
-        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
         body = response.content.decode()
 
         assert "gr-move--live" in body
@@ -584,7 +591,7 @@ class TestLiveMoveSlot:
         _make_game(user)
         _make_suggestion(user, FEN_LIVE, status=CoachSuggestion.Status.PENDING)
 
-        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
         body = response.content.decode()
 
         assert "gr-move--live" in body
@@ -596,7 +603,7 @@ class TestLiveMoveSlot:
         _make_game(user)
         _make_suggestion(user, FEN_LIVE, best_move_san="Bb5")
 
-        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
         body = response.content.decode()
 
         # The move isn't played yet — the grid still holds only the 4 PGN plies,
@@ -607,35 +614,58 @@ class TestLiveMoveSlot:
     def test_slot_owns_the_selection_at_the_live_head(self, auth_client, user):
         _make_game(user)
 
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
+        body = response.content.decode()
+
+        assert body.count("gr-move--sel") == 1
+        assert "gr-move--live gr-move--sel" in body
+
+    def test_opponents_last_move_stays_reviewable(self, auth_client, user):
+        _make_game(user)  # live, your turn — head 4 is Black's Nc6
+
         response = auth_client.get("/game/944768131/view", {"sel": "4"})
         body = response.content.decode()
 
-        # The last played ply and the slot share the `head` cursor — only one of
-        # them may light up.
+        # Stepping back from the live slot reviews the opponent's move rather
+        # than falling through to the live view.
+        assert response.context["coach"]["mode"] == "opponent"
+        assert "Reviewing: 2… Nc6" in body
+        # …and the selection is on that ply, not on the live slot.
         assert body.count("gr-move--sel") == 1
-        assert "gr-move--live gr-move--sel" in body
+        assert "gr-move--live gr-move--sel" not in body
+
+    def test_back_from_the_live_slot_lands_on_the_last_ply(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
+
+        assert response.context["prev_sel"] == 4
+        assert response.context["next_sel"] == 5
 
     def test_no_slot_while_the_opponent_is_on_the_clock(self, auth_client, user):
         # Black to move: the coach has nothing to suggest for the user yet.
         _make_game(user, fen=FEN_LIVE.replace(" w ", " b "))
 
-        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
 
         assert b"gr-move--live" not in response.content
+        # The timeline ends at the last played ply.
+        assert response.context["sel"] == response.context["live_sel"] == 4
 
     def test_no_slot_on_a_finished_game(self, auth_client, user):
         _make_game(user, is_active=False)
 
-        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        response = auth_client.get("/game/944768131/view", {"sel": "5"})
 
         assert b"gr-move--live" not in response.content
+        assert response.context["sel"] == 4
 
     def test_arriving_suggestion_updates_the_slot_out_of_band(self, auth_client, user):
         _make_game(user)
         _make_suggestion(user, FEN_LIVE, best_move_san="Bb5")
 
         # The `live_pending` self-poll lands on the analyze endpoint.
-        response = auth_client.get("/game/944768131/analyze", {"sel": "4"})
+        response = auth_client.get("/game/944768131/analyze", {"sel": "5"})
         body = response.content.decode()
 
         assert 'id="gr-moves-panel" hx-swap-oob="true"' in body

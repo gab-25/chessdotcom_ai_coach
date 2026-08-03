@@ -77,7 +77,8 @@ def _position_context(user, game, sel):
     scheduler) and the persisted ``CoachSuggestion`` rows — no Chess.com call —
     so navigation, the live poll and the review of a finished game are all cheap
     DB reads. ``sel`` is the 0-based ply cursor (0 = starting position, ``head``
-    = the latest/current position).
+    = the last played ply, ``live_sel`` = the end of the timeline — the live
+    "your move" slot when it's your turn, ``head`` otherwise).
     """
     username = user.chess_username
     orientation = "white" if (game.white_name or "").lower() == username.lower() else "black"
@@ -91,26 +92,33 @@ def _position_context(user, game, sel):
     by_fen = {row.fen: row for row in history}
 
     head = len(moves)
-    sel = max(0, min(head, sel))
     is_live = game.is_active
-    ply = moves[sel - 1] if sel > 0 else None
+    head_row = by_fen.get(game.fen)
+    user_to_move = board_utils.active_color(game.fen) == orientation if game.fen else False
+    # The move you're about to play gets its own cursor one past the last played
+    # ply, so the opponent's final move stays reviewable at `head`. `live_sel` is
+    # therefore the end of the timeline; `head` stays the PGN ply count (what the
+    # live poll compares against).
+    has_live_slot = is_live and user_to_move
+    live_sel = head + 1 if has_live_slot else head
+    sel = max(0, min(live_sel, sel))
+    ply_idx = min(sel, head)  # the live slot sits on the board of the last ply
+    ply = moves[ply_idx - 1] if ply_idx > 0 else None
 
     # Board + last-move highlight for the selected ply.
-    board_fen = positions[sel] if sel < len(positions) else (game.fen or _START_FEN)
+    board_fen = positions[ply_idx] if ply_idx < len(positions) else (game.fen or _START_FEN)
     highlight = _uci_to_squares(ply["uci"]) if ply else []
     cells = board_utils.fen_to_cells(board_fen, highlight=highlight, flipped=flipped)
 
     # Eval bar: carry the last analysed value forward across un-analysed plies.
     eval_fill = 50
-    for i in range(1, sel + 1):
+    for i in range(1, ply_idx + 1):
         m = moves[i - 1]
         s = m["suggestion"]
         if m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.DONE:
             eval_fill = _eval_fill(s.eval_cp)
 
-    at_live_head = is_live and sel == head
-    head_row = by_fen.get(game.fen)
-    user_to_move = board_utils.active_color(game.fen) == orientation if game.fen else False
+    at_live_head = is_live and sel == live_sel
     # At the live head, take over the display only when it's genuinely the
     # player's decision point (your move) or there's no played user move to
     # review. When the player has just moved and the opponent is on the clock,
@@ -188,22 +196,19 @@ def _position_context(user, game, sel):
 
     # Live "your move" slot: at the head of a live game, while it's your turn, the
     # coach's suggestion has no played ply to badge yet. Give it a provisional item
-    # at the end of the grid so the pending state and the recommendation are visible
-    # before you move. It shares the `head` cursor with the last played ply, so when
-    # it owns the selection the real item must give it up.
+    # at the end of the grid, on its own `live_sel` cursor, so the pending state and
+    # the recommendation are visible before you move.
     live_move = None
-    if is_live and user_to_move:
+    if has_live_slot:
         done = head_row is not None and head_row.status == CoachSuggestion.Status.DONE
         live_move = {
-            "sel": head,
+            "sel": live_sel,
             "no": board_utils.fullmove_number(game.fen),
             "color": orientation,
             "pending": head_row is not None and head_row.status == CoachSuggestion.Status.PENDING,
             "rec_san": (head_row.best_move_san if done else "") or "",
             "selected": at_live_head,
         }
-        if live_move["selected"] and moves_view:
-            moves_view[-1]["selected"] = False
 
     # Analysis-history timeline (analysed user moves, in order).
     history_view = []
@@ -244,9 +249,10 @@ def _position_context(user, game, sel):
         "is_live": is_live,
         "sel": sel,
         "head": head,
-        "behind": head - sel,
+        "live_sel": live_sel,
+        "behind": max(0, head - sel),
         "prev_sel": max(0, sel - 1),
-        "next_sel": min(head, sel + 1),
+        "next_sel": min(live_sel, sel + 1),
         "orientation": orientation,
         "flipped": flipped,
         "white_name": game.white_name or "White",
@@ -305,7 +311,8 @@ def game_detail(request, id):
         return render(request, "error.html", {"message": "Game not found."}, status=404)
 
     moves = board_utils.moves_from_pgn(game.pgn)
-    sel = len(moves) if game.is_active else 0
+    # +1 lands on the live "your move" slot when it's your turn; clamped otherwise.
+    sel = len(moves) + 1 if game.is_active else 0
     context = _position_context(request.user, game, sel)
     return render(request, "game_detail.html", context)
 
@@ -340,7 +347,9 @@ def game_live(request, id):
         return HttpResponse(status=204)  # no new move — keep polling
 
     following = sel >= known_head
-    render_sel = head if following else sel
+    # Following the head means following the live slot too (clamped when the
+    # opponent is the one on the clock).
+    render_sel = head + 1 if following else sel
     return render(request, "partials/position.html", _position_context(request.user, game, render_sel))
 
 
