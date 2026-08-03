@@ -14,126 +14,106 @@ grandmaster coach.
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
-- **Celery + Redis** — game analysis runs out-of-band: the view enqueues a Celery
-  task (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend;
+- **Celery + Redis** — analysis runs out-of-band: a task is enqueued
+  (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend, and
   a hidden HTMX poller reveals the result once the worker finishes
-- **APScheduler** — background scheduler (`manage.py run_scheduler`) that, every
-  5 seconds, syncs each linked user's current games from Chess.com into the
-  local DB and then auto-enqueues analysis when it's the user's turn
-  (`chessdotcom_ai_coach/services/scheduler.py`); runs once inside the web
-  container. This is the only path that keeps game data fresh — the home page
-  (below) just reads what the scheduler already synced.
+- **APScheduler** — background scheduler (`manage.py run_scheduler`) that every
+  5 seconds syncs each linked user's current games from Chess.com into the local
+  DB and auto-enqueues analysis when it's the user's turn
+  (`chessdotcom_ai_coach/services/scheduler.py`). This is the only path that
+  keeps game data fresh — the pages just read what it already synced.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
-  `django-htmx`: the game-list polling (a plain DB read — see above) and the
-  game detail page, where move-by-move navigation, the coach card and the live
-  game poll are all htmx fragment swaps (no custom JavaScript)
+  `django-htmx`: game-list polling, move-by-move navigation, the coach card and
+  the live game poll are all fragment swaps, with no custom JavaScript
 - **Server-rendered board** — the FEN is expanded into a glyph board in Python
   (`chessdotcom_ai_coach/services/board.py`); there is no client-side JS framework
 - **Gunicorn** — WSGI server in the container
 - Custom hand-written CSS theme (no Tailwind) in the `theme` app
   (`theme/static/css/styles.css`)
 
+## Documentation
+
+| Page | What it covers |
+| --- | --- |
+| [Architecture](docs/architecture.md) | The four processes, the analysis flow end to end, the layering rules |
+| [Data model](docs/data-model.md) | `User`, `Game`, `CoachSuggestion` and the invariants the code relies on |
+| [Configuration](docs/configuration.md) | Every environment variable, Docker overrides, Stockfish and LLM setup |
+| [Development](docs/development.md) | Running locally, URL map, management commands, code conventions |
+| [Deployment](docs/deployment.md) | Docker Compose, container entrypoint, CI/CD, reverse proxy |
+| [Testing](docs/testing.md) | Running the suite and how it stays dependency-free |
+
 ## Run with Docker
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
 Compose starts the whole stack: `web` (Gunicorn + the APScheduler process,
 started by `entrypoint.sh` after `migrate`/`collectstatic`), a `worker` running
 the Celery worker, plus `redis`, `postgres` and `llm` (llama-server). The app is
-served on http://localhost:8000. In Compose the `POSTGRES_HOST`, `LLM_BASE_URL`
-and `REDIS_URL` are overridden to reach the `postgres`, `llm` and `redis`
-services; everything else comes from `.env`. On first start the `llm` service
-downloads the GGUF model into the `llm-models` volume, so the coach may fall
-back to Stockfish-only text until the download finishes. Create a user via the
-admin (see below).
+served on http://localhost:8000.
+
+Compose overrides `POSTGRES_HOST`, `LLM_BASE_URL`, `REDIS_URL` and
+`STOCKFISH_PATH` so the containers reach each other by service name; everything
+else comes from `.env`. On first start the `llm` service downloads the GGUF model
+(~2GB) into the `llm-models` volume, so the coach falls back to Stockfish-only
+text until the download finishes.
+
+Then create a user (see [First run](#first-run) below).
 
 ## Run locally
 
-Requires Python 3.13+ and a running PostgreSQL (the `postgres` service in
-`docker-compose.yaml` works). Configure `.env` — the settings read these keys
-(defaults in parentheses):
-
-| Key | Purpose |
-| --- | --- |
-| `SECRET_KEY` | Django secret key |
-| `DEBUG` | `true`/`false` (default `true`) |
-| `ALLOWED_HOSTS` | comma-separated hosts (default `*`) |
-| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` | database connection (`postgres`/`postgres`/`password`/`localhost`/`5432`) |
-| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint (default `http://llm:8080/v1`; use `http://localhost:8080/v1` locally) |
-| `LLM_MODEL` | model name sent to the LLM server (default `llama-3.2-3b-instruct`) |
-| `REDIS_URL` | Celery broker + result backend (default `redis://redis:6379/0`; use `redis://localhost:6379/0` locally) |
-| `STOCKFISH_PATH` | path to the Stockfish binary (default `stockfish`, resolved from `PATH`) |
-
-Move evaluation needs a **Stockfish** binary. In Docker it is bundled into the
-image (see the `Dockerfile`). For local runs, download the same official
-`sf_18` build the container uses — into the repo root — so behaviour matches:
+Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and a running PostgreSQL
+and Redis — the `postgres` and `redis` services in `docker-compose.yaml` work on
+their own (`docker compose up -d postgres redis`).
 
 ```bash
-# Run from the repo root. avx2 works on any x86-64 CPU since ~2013; if you hit
-# "Illegal instruction" (older CPU / VM), swap avx2 for sse41-popcnt.
-curl -fL https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64-avx2.tar \
-  | tar -x --strip-components=1 -C . stockfish/stockfish-ubuntu-x86-64-avx2
-mv stockfish-ubuntu-x86-64-avx2 stockfish
-chmod +x stockfish
-./stockfish --version   # -> Stockfish ... sf_18
-```
-
-Then point `STOCKFISH_PATH` at it in your `.env` (the leading `./` makes it a
-path rather than a `PATH` lookup):
-
-```
-STOCKFISH_PATH=./stockfish
-```
-
-The `stockfish` binary in the repo root is git-ignored, so it is never committed.
-
-```bash
+cp .env.example .env    # then set SECRET_KEY and check the local hosts
 uv sync
 uv run python manage.py migrate
 uv run python manage.py createsuperuser
-uv run python manage.py runserver
 ```
 
-Analysis runs asynchronously, so it needs **Redis** plus a **Celery worker** and
-the **scheduler** running alongside `runserver` — otherwise a requested analysis
-stays stuck on "Analyzing…" forever. Start Redis (the `redis` service in
-`docker-compose.yaml` works, or `redis-server` locally), then in two more shells:
+Move evaluation needs a **Stockfish** binary; in Docker it's bundled into the
+image, locally you download it into the repo root. See
+[docs/configuration.md](docs/configuration.md#stockfish) for the exact command,
+and for the full environment-variable reference.
+
+Analysis is asynchronous, so a local run needs **four processes** — without the
+worker and the scheduler, a requested analysis stays stuck on "Analyzing…"
+forever:
 
 ```bash
-uv run celery -A chessdotcom_ai_coach worker -l info   # the analysis worker
-uv run python manage.py run_scheduler                  # the APScheduler process
+uv run python manage.py runserver                        # the web app
+uv run celery -A chessdotcom_ai_coach worker -l info     # the analysis worker
+uv run python manage.py run_scheduler                    # the APScheduler process
+                                                         # + Redis and PostgreSQL
 ```
 
-### Analysing a whole game
+## First run
+
+Open http://localhost:8000, sign in, then set your **Chess.com username** on the
+user via the admin at http://localhost:8000/admin/ (field `chessdotcom_username`;
+it falls back to the login username if left blank, but the scheduler only polls
+users whose field is non-empty). Your current games appear within a few seconds.
+
+## Analysing a whole game
 
 The scheduler only analyses the position it's your turn to play, so reviewing a
-past game shows the coach's take on just those moves. To backfill the rest,
-enqueue analysis for every one of a user's moves in a game:
+past game shows the coach's take on just those moves. To backfill the rest:
 
 ```bash
 uv run python manage.py analyze_game <game_id> [--user <username>]
 ```
 
-It reads the stored snapshot (no Chess.com call) and is idempotent — moves that
-are already analysed or queued are skipped, so it's safe to re-run. `--user` is
-only needed when the same game id is stored for more than one user. The results
-appear on the game detail page as you step through the moves (a Celery worker
-must be running).
+It reads the stored snapshot (no Chess.com call) and is idempotent, so it's safe
+to re-run. A Celery worker must be running.
 
-Then open http://localhost:8000, sign in, and set your **Chess.com username**
-on the user via the admin at http://localhost:8000/admin/ (field
-`chessdotcom_username`; it falls back to the login username if left blank).
-
-The AI coach requires the `llm` service (llama-server). It auto-downloads the
-`llama3.2:3b` GGUF (`bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M`, ~2GB) into the
-`llm-models` volume on first `docker compose up` — no manual pull needed. Check
-it is serving with:
+## Tests
 
 ```bash
-curl http://localhost:8080/health
+uv run pytest
 ```
 
-For a fully offline/reproducible setup, mount a local `.gguf` into the `llm`
-service and swap the `-hf ...` flag in `docker-compose.yaml` for `-m /models/<file>.gguf`.
+No external services needed — see [docs/testing.md](docs/testing.md).
