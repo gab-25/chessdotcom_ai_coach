@@ -83,7 +83,8 @@ class TestHome:
         assert len(games) == 1
         assert games[0].game_id == "944768131"
         assert len(games[0].cells) == 64
-        assert games[0].move_no == 1
+        # The card follows the PGN (4 plies in), not the stale seeded FEN.
+        assert games[0].move_no == 3
 
     def test_does_not_call_chess_com(self, auth_client):
         with patch("chessdotcom_ai_coach.services.chess_client.Client") as mock_client:
@@ -127,6 +128,65 @@ class TestGameList:
         response = auth_client.get("/games")
 
         assert b'href="/game/old1"' in response.content
+
+
+@pytest.mark.django_db
+class TestGameCardPosition:
+    """The home card's mini board follows the PGN, like the detail page does.
+
+    Chess.com's ``fen`` field can lag its own movetext and is empty on some
+    payloads, which used to render the card as an untouched starting position.
+    """
+
+    def test_card_follows_the_pgn_not_a_stale_fen(self, auth_client, user):
+        _make_game(user, fen=FEN_START)  # stale: says nothing has been played
+
+        response = auth_client.get("/games")
+        game = response.context["games"][0]
+
+        expected = board_utils.positions_from_pgn(PGN)[-1]
+        assert game.cells == board_utils.fen_to_cells(expected)
+        assert game.move_no == 3
+        assert game.turn == "white"
+
+    def test_card_falls_back_to_the_stored_fen_without_a_pgn(self, auth_client, user):
+        _make_game(user, pgn="", fen=FEN_LIVE)
+
+        game = auth_client.get("/games").context["games"][0]
+
+        assert game.cells == board_utils.fen_to_cells(FEN_LIVE)
+        assert game.move_no == 3
+        assert game.turn == "white"
+
+    def test_card_without_pgn_or_fen_is_the_untouched_board(self, auth_client, user):
+        _make_game(user, pgn="", fen="")
+
+        game = auth_client.get("/games").context["games"][0]
+
+        # Documented fallback: nothing to draw → the starting position, and the
+        # template hides the move number behind `{% if game.move_no %}`.
+        assert game.cells == board_utils.fen_to_cells(None)
+        assert game.move_no is None
+
+    def test_past_card_shows_the_pgn_position(self, auth_client, user):
+        _make_game(user, is_active=False, fen=FEN_START)
+
+        game = auth_client.get("/games").context["past_games"][0]
+
+        assert game.cells == board_utils.fen_to_cells(
+            board_utils.positions_from_pgn(PGN)[-1]
+        )
+        assert game.move_no == 3
+
+    def test_your_turn_badge_follows_the_pgn(self, auth_client, user):
+        # The user is White. The stale FEN claims White is to move, but the PGN
+        # says White has already played 1. e4 — so it is not their turn.
+        _make_game(user, pgn='[Event "Test"]\n\n1. e4 *', fen=FEN_START)
+
+        response = auth_client.get("/games")
+
+        assert response.context["games"][0].is_user_turn is False
+        assert "Your turn" not in response.content.decode()
 
 
 @pytest.mark.django_db
@@ -806,7 +866,8 @@ class TestGameListStates:
         assert b"No active games" in response.content
 
     def test_your_turn_card(self, auth_client, user):
-        # FEN_START has White (the user) to move → your turn.
+        # The turn is read off the PGN: it ends on a Black ply, so White (the
+        # user) is to move → your turn.
         _make_game(user, fen=FEN_START)
 
         response = auth_client.get("/games")

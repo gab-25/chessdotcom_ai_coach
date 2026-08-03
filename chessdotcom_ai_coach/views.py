@@ -14,14 +14,25 @@ _START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 def _decorate_games(games, username):
     """Attach board cells, move number, side-to-move and turn ownership to `Game` rows.
 
-    Used for both the current and past-games sections of the home page (both
-    plain DB reads). `turn` reproduces the side-to-move from the stored FEN, and
+    Used for both the current and past-games sections of the home page (both plain
+    DB reads). The PGN — not the stored ``fen`` column — is the authority for what
+    is on the board, matching the detail page (see `_position_context`): Chess.com's
+    ``fen`` field can lag its own movetext, and is empty on some payloads, which
+    rendered the card as an untouched starting position (`board.fen_to_cells` falls
+    back to it silently). The stored FEN stays the fallback for rows snapshotted
+    without a PGN. `turn` reproduces the side-to-move from that position, and
     `is_user_turn` highlights games awaiting the logged-in user's move.
+
+    Note `move_no`/`turn` come from the *reached* position, not from the played
+    ply's own `move_no`/`color`: after a Black ply the two differ by one.
     """
     for game in games:
-        game.cells = board_utils.fen_to_cells(game.fen)
-        game.move_no = board_utils.fullmove_number(game.fen)
-        game.turn = board_utils.active_color(game.fen)
+        last = board_utils.last_ply_from_pgn(game.pgn)
+        fen = last["fen_after"] if last else game.fen
+
+        game.cells = board_utils.fen_to_cells(fen)
+        game.move_no = board_utils.fullmove_number(fen)
+        game.turn = board_utils.active_color(fen)
         orientation = "white" if game.white_name.lower() == username.lower() else "black"
         game.is_user_turn = game.turn == orientation
     return games

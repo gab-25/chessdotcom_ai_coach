@@ -10,7 +10,7 @@ game views.
 from __future__ import annotations
 
 import io
-import re
+from functools import lru_cache
 from typing import Dict, List, Optional
 
 import chess
@@ -98,48 +98,58 @@ def fullmove_number(fen: Optional[str]) -> Optional[int]:
     return None
 
 
-def last_move_from_pgn(pgn: Optional[str]) -> Optional[str]:
-    """Extract the last move played from a PGN, with its move number.
+_LAST_PLY_KEYS = ("move_no", "color", "san", "uci", "fen_after")
 
-    Returns something like ``"11...Be7"`` or ``"12. Nf5"``, or ``None`` when the
-    movetext can't be parsed.
+
+@lru_cache(maxsize=512)
+def _last_ply_tuple(pgn: str) -> Optional[tuple]:
+    """Replay ``pgn`` once and return its last ply plus the reached FEN, as a tuple.
+
+    Split out from :func:`last_ply_from_pgn` purely so the memoisation can hang off
+    an immutable value: a cached dict would be handed to callers free to mutate it,
+    poisoning every later cache hit. Keyed on the PGN text, which only changes when
+    a move is actually played — so the home page's 5s poll re-replays a game only
+    on the tick where it advanced.
+    """
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn))
+    except Exception:
+        return None
+    if game is None:
+        return None
+
+    board = game.board()
+    last: Optional[tuple] = None
+    for move in game.mainline_moves():
+        move_no = board.fullmove_number
+        color = "white" if board.turn == chess.WHITE else "black"
+        try:
+            san = board.san(move)
+            board.push(move)
+        except Exception:
+            break  # malformed movetext — stop at the last legal ply
+        last = (move_no, color, san, move.uci())
+    return last + (board.fen(),) if last else None
+
+
+def last_ply_from_pgn(pgn: Optional[str]) -> Optional[Dict]:
+    """The last played ply of a PGN, together with the position it reached.
+
+    Returns ``{move_no, color, san, uci, fen_after}`` — the same shape as an entry
+    of :func:`moves_from_pgn`, except the FEN is the position *after* the ply (hence
+    ``fen_after``): what the board actually shows now. ``move_no``/``color`` describe
+    the move that was *played*, so they are the counterpart of the side now *to
+    move* — derive the latter with :func:`fullmove_number` / :func:`active_color` on
+    ``fen_after`` rather than adjusting these by hand. Returns ``None`` when the PGN
+    is missing, unparseable or carries no moves.
+
+    Exists so a caller that only needs "where is this game now" replays the PGN once
+    instead of pairing :func:`moves_from_pgn` with :func:`positions_from_pgn`.
     """
     if not pgn:
         return None
-
-    # Drop the header tags; keep the movetext that follows the blank line.
-    movetext = pgn
-    if "\n\n" in pgn:
-        movetext = pgn.split("\n\n", 1)[1]
-
-    # Strip comments, NAGs, result markers and variation parens.
-    movetext = re.sub(r"\{[^}]*\}", " ", movetext)
-    movetext = re.sub(r"\$\d+", " ", movetext)
-    movetext = re.sub(r"[()]", " ", movetext)
-    movetext = re.sub(r"\b(1-0|0-1|1/2-1/2|\*)\b", " ", movetext)
-
-    # Tokens: a move number like "12." / "12..." or a SAN move.
-    tokens = movetext.split()
-    last_san = None
-    last_number = None
-    pending_black = False  # True once we've seen "N..." (black to move)
-    for tok in tokens:
-        m = re.fullmatch(r"(\d+)\.(\.\.)?", tok)
-        if m:
-            last_number = int(m.group(1))
-            pending_black = bool(m.group(2))
-            continue
-        # A SAN move (allow check/mate/promotion/castle marks).
-        if re.fullmatch(r"[NBRQKOa-h][A-Za-z0-9+#=\-]*", tok):
-            last_san = tok
-            if last_number is not None:
-                sep = "..." if pending_black else ". "
-                last_san_labeled = f"{last_number}{sep}{tok}"
-            else:
-                last_san_labeled = tok
-            # After a white move, the next SAN (same number) is black's.
-            pending_black = True
-    return last_san_labeled if last_san else None
+    found = _last_ply_tuple(pgn)
+    return dict(zip(_LAST_PLY_KEYS, found)) if found else None
 
 
 def moves_from_pgn(pgn: Optional[str]) -> List[Dict]:

@@ -58,6 +58,50 @@ class TestPositionsFromPgn:
         assert board.positions_from_pgn(None) == []
 
 
+class TestLastPlyFromPgn:
+    """The home card's position source: one replay, last ply + reached FEN."""
+
+    def test_returns_the_last_played_ply(self):
+        last = board.last_ply_from_pgn(PGN)
+        assert last["move_no"] == 2
+        assert last["color"] == "black"
+        assert last["san"] == "Nc6"
+        assert last["uci"] == "b8c6"
+
+    def test_fen_after_is_the_position_the_ply_reached(self):
+        # Anchors the helper to positions_from_pgn, which the detail page renders
+        # from — the card and the detail page cannot drift apart by a ply.
+        last = board.last_ply_from_pgn(PGN)
+        assert last["fen_after"] == board.positions_from_pgn(PGN)[-1]
+
+    def test_move_number_describes_the_played_move_not_the_next(self):
+        # After 2. Nf3 the *played* ply is White's move 2, but the position is at
+        # move 2 with Black to move; after 2... Nc6 the position moves on to 3.
+        last = board.last_ply_from_pgn('[Event "Test"]\n\n1. e4 e5 2. Nf3 *')
+        assert (last["move_no"], last["color"]) == (2, "white")
+        assert board.fullmove_number(last["fen_after"]) == 2
+        assert board.active_color(last["fen_after"]) == "black"
+
+        assert board.fullmove_number(board.last_ply_from_pgn(PGN)["fen_after"]) == 3
+
+    def test_none_for_missing_or_moveless_pgn(self):
+        assert board.last_ply_from_pgn("") is None
+        assert board.last_ply_from_pgn(None) is None
+        assert board.last_ply_from_pgn('[Event "Test"]\n\n*') is None
+
+    def test_stops_at_the_last_legal_ply(self):
+        last = board.last_ply_from_pgn('[Event "Test"]\n\n1. e4 e5 2. Qq9 *')
+        assert last["san"] == "e5"
+
+    def test_the_returned_dict_is_safe_to_mutate(self):
+        # The replay is memoised on the PGN text; the cache holds an immutable
+        # tuple so a caller mutating its dict can't poison later hits.
+        first = board.last_ply_from_pgn(PGN)
+        first["san"] = "tampered"
+
+        assert board.last_ply_from_pgn(PGN)["san"] == "Nc6"
+
+
 class TestAnnotateMoves:
     def _suggestion(self, fen, best):
         return SimpleNamespace(fen=fen, move_no=None, best_move_san=best)
