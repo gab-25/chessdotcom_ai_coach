@@ -565,6 +565,86 @@ class TestMovesGrid:
 
 
 @pytest.mark.django_db
+class TestLiveMoveSlot:
+    """The provisional grid item for the move you're about to play (live head)."""
+
+    def test_live_turn_shows_an_empty_slot(self, auth_client, user):
+        _make_game(user)  # live, White (user) to move, no suggestion yet
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        body = response.content.decode()
+
+        assert "gr-move--live" in body
+        assert "your move" in body
+        # Nothing requested yet — no badge on the slot.
+        assert "gr-badge--live" not in body
+        assert "gr-badge--pending" not in body
+
+    def test_pending_suggestion_badges_the_slot(self, auth_client, user):
+        _make_game(user)
+        _make_suggestion(user, FEN_LIVE, status=CoachSuggestion.Status.PENDING)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        body = response.content.decode()
+
+        assert "gr-move--live" in body
+        assert "gr-badge--pending" in body
+
+    def test_done_suggestion_shows_the_recommendation_before_you_play(
+        self, auth_client, user
+    ):
+        _make_game(user)
+        _make_suggestion(user, FEN_LIVE, best_move_san="Bb5")
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        body = response.content.decode()
+
+        # The move isn't played yet — the grid still holds only the 4 PGN plies,
+        # but the coach's pick is already visible on the live slot.
+        assert "gr-badge--live" in body
+        assert "Bb5" in body
+
+    def test_slot_owns_the_selection_at_the_live_head(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        body = response.content.decode()
+
+        # The last played ply and the slot share the `head` cursor — only one of
+        # them may light up.
+        assert body.count("gr-move--sel") == 1
+        assert "gr-move--live gr-move--sel" in body
+
+    def test_no_slot_while_the_opponent_is_on_the_clock(self, auth_client, user):
+        # Black to move: the coach has nothing to suggest for the user yet.
+        _make_game(user, fen=FEN_LIVE.replace(" w ", " b "))
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+
+        assert b"gr-move--live" not in response.content
+
+    def test_no_slot_on_a_finished_game(self, auth_client, user):
+        _make_game(user, is_active=False)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+
+        assert b"gr-move--live" not in response.content
+
+    def test_arriving_suggestion_updates_the_slot_out_of_band(self, auth_client, user):
+        _make_game(user)
+        _make_suggestion(user, FEN_LIVE, best_move_san="Bb5")
+
+        # The `live_pending` self-poll lands on the analyze endpoint.
+        response = auth_client.get("/game/944768131/analyze", {"sel": "4"})
+        body = response.content.decode()
+
+        assert 'id="gr-moves-panel" hx-swap-oob="true"' in body
+        assert "gr-move--live" in body
+        assert "gr-badge--live" in body
+        assert "Bb5" in body
+
+
+@pytest.mark.django_db
 class TestHistoryList:
     """partials/history_list.html — the analysed-moves timeline."""
 

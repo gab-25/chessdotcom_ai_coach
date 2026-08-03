@@ -186,6 +186,25 @@ def _position_context(user, game, sel):
             }
         )
 
+    # Live "your move" slot: at the head of a live game, while it's your turn, the
+    # coach's suggestion has no played ply to badge yet. Give it a provisional item
+    # at the end of the grid so the pending state and the recommendation are visible
+    # before you move. It shares the `head` cursor with the last played ply, so when
+    # it owns the selection the real item must give it up.
+    live_move = None
+    if is_live and user_to_move:
+        done = head_row is not None and head_row.status == CoachSuggestion.Status.DONE
+        live_move = {
+            "sel": head,
+            "no": board_utils.fullmove_number(game.fen),
+            "color": orientation,
+            "pending": head_row is not None and head_row.status == CoachSuggestion.Status.PENDING,
+            "rec_san": (head_row.best_move_san if done else "") or "",
+            "selected": at_live_head,
+        }
+        if live_move["selected"] and moves_view:
+            moves_view[-1]["selected"] = False
+
     # Analysis-history timeline (analysed user moves, in order).
     history_view = []
     for i, m in enumerate(moves, start=1):
@@ -243,6 +262,7 @@ def _position_context(user, game, sel):
         "arrows": arrows,
         "coach": coach,
         "moves": moves_view,
+        "live_move": live_move,
         "history": history_view,
         "history_count": len(history_view),
         "last_move": last_move,
