@@ -118,5 +118,5 @@ case — the fixtures and helper builders there are the fastest path:
 No coverage tooling is configured, and there's no linter or formatter (`ruff`,
 `black`, `flake8` are all absent). There are also no integration tests that run
 the real engine or a real LLM — every external dependency is mocked, so a change
-in Stockfish's UCI output or in llama-server's response shape would pass CI and
+in Stockfish's UCI output or in the LLM's response shape would pass CI and
 fail at runtime.

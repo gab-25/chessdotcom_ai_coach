@@ -130,7 +130,7 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Integrations ----------------------------------------------------------
-# Base URL of the OpenAI-compatible LLM endpoint (llama.cpp llama-server).
+# Base URL of the OpenAI-compatible LLM endpoint (Ollama's /v1).
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 
 # --- Celery ----------------------------------------------------------------

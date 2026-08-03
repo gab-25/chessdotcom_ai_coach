@@ -17,17 +17,17 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 | `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish and calls the LLM. |
 | `redis` | `redis:7-alpine` | Celery broker and result backend. Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
-| `llm` | `ghcr.io/ggml-org/llama.cpp:server` | OpenAI-compatible endpoint on `8080`. |
+| `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Started by [`ollama-entrypoint.sh`](../ollama-entrypoint.sh), which pulls the model first. |
 
 `web` and `worker` both wait for `postgres` and `redis` to be **healthy**, but
-only for `llm` to have **started** — the model download takes minutes and the
+only for `ollama` to have **started** — the model pull takes minutes and the
 coach degrades gracefully to Stockfish-only text meanwhile, so blocking on it
 would be pointless.
 
 ### Volumes
 
 - **`postgres-data`** — the database.
-- **`llm-models`** — the GGUF cache. Keep it, or every restart re-downloads ~2GB.
+- **`ollama-data`** — the model store. Keep it, or every restart re-pulls ~2GB.
 
 ## The container entrypoint
 
@@ -110,5 +110,7 @@ than following `latest`.
 - Neither Redis nor Postgres is authenticated or firewalled in the Compose file,
   and both publish their ports to the host. Fine locally; not fine on a public
   machine.
-- Give the LLM host enough RAM: ~2GB for the loaded 3B model plus the KV cache
-  bounded by `-c 4096`.
+- Give the LLM host enough RAM: ~2GB while the 3B model is loaded. Thanks to
+  `OLLAMA_KEEP_ALIVE=30s` that is a *peak* during and just after an analysis, not
+  a permanent floor — Ollama unloads the weights once the window closes. See
+  [configuration.md](configuration.md#keep-alive--why-ollama-and-not-llama-server).

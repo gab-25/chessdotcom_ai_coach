@@ -1,7 +1,7 @@
 """Unit tests for the AI coach service.
 
 Both external dependencies are mocked: the Stockfish UCI engine (launched via
-``chess.engine.popen_uci``) and the OpenAI-compatible LLM client (llama-server).
+``chess.engine.popen_uci``) and the OpenAI-compatible LLM client (Ollama).
 Real ``python-chess`` score objects drive the evaluation-text branches.
 """
 
@@ -34,8 +34,8 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
     # engine); stubbed here so no real subprocess is spawned.
     popen_uci = AsyncMock(return_value=(MagicMock(), engine))
 
-    # llama-server is reached through the OpenAI async client; the response
-    # shape is ``response.choices[0].message.content``.
+    # Ollama is reached through the OpenAI async client; the response shape is
+    # ``response.choices[0].message.content``.
     llm_client = MagicMock()
     if llm_raises:
         llm_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("llm down"))

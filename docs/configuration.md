@@ -17,13 +17,13 @@ Copy [`.env.example`](../.env.example) to `.env` and edit.
 | `POSTGRES_PASSWORD` | Database password | `password` | `password` |
 | `POSTGRES_HOST` | Database host | `localhost` | `localhost` |
 | `POSTGRES_PORT` | Database port | `5432` | `5432` |
-| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint | `http://llm:8080/v1` | `http://localhost:8080/v1` |
-| `LLM_MODEL` | Model name sent with each request | `llama-3.2-3b-instruct` | same |
+| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint | `http://ollama:11434/v1` | `http://localhost:11434/v1` |
+| `LLM_MODEL` | Model tag sent with each request | `llama3.2:3b` | same |
 | `REDIS_URL` | Celery broker **and** result backend | `redis://redis:6379/0` | `redis://localhost:6379/0` |
 | `STOCKFISH_PATH` | Path to the engine binary | `stockfish` (resolved on `PATH`) | `./stockfish` |
 
 Note that the **defaults are the Docker values**, not the local ones —
-`llm:8080` and `redis:6379` are Compose service names. A local run with an
+`ollama:11434` and `redis:6379` are Compose service names. A local run with an
 incomplete `.env` therefore fails by trying to reach hostnames that only exist
 inside the Compose network, rather than by complaining about a missing setting.
 If analysis silently never completes locally, check `LLM_BASE_URL` and
@@ -37,16 +37,20 @@ is informational.
 ## What Docker Compose overrides
 
 [`docker-compose.yaml`](../docker-compose.yaml) passes `.env` through to the
-`web` and `worker` services via `env_file`, then overrides four keys on both so
+`web` and `worker` services via `env_file`, then overrides five keys on both so
 the containers reach each other by service name:
 
 ```yaml
 environment:
   - POSTGRES_HOST=postgres
-  - LLM_BASE_URL=http://llm:8080/v1
+  - LLM_BASE_URL=http://ollama:11434/v1
+  - LLM_MODEL=llama3.2:3b
   - REDIS_URL=redis://redis:6379/0
   - STOCKFISH_PATH=stockfish
 ```
+
+`LLM_MODEL` is pinned here (rather than left to `.env`) so the tag the app asks
+for always matches the one the `ollama` service pulls at startup.
 
 So you can keep local values in `.env` and still `docker compose up` without
 editing anything.
@@ -92,33 +96,64 @@ always terminated in a `finally` block.
 
 ## LLM
 
-The `llm` service runs `ghcr.io/ggml-org/llama.cpp:server`, which exposes an
-OpenAI-compatible API — the app talks to it with the standard `openai` async
-client and a dummy API key.
-
-```yaml
-command: >
-  -hf bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
-  --host 0.0.0.0 --port 8080 -c 4096 --jinja
-```
-
-- `-hf` auto-downloads the GGUF (~2GB) into the `llm-models` volume on first
-  start — no manual pull. **While the download runs, the coach falls back to
-  Stockfish-only text**, which is expected and self-corrects.
-- `-c 4096` bounds the KV cache, and therefore RAM.
-- `--jinja` uses the model's embedded chat template.
+The `ollama` service runs `ollama/ollama:latest`. Ollama exposes an
+OpenAI-compatible API under `/v1`, so the app talks to it with the standard
+`openai` async client and a dummy API key — nothing in
+[`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) is
+Ollama-specific.
 
 A 3B model is deliberate: ~2GB loaded, against ~5–6GB for the 8B build, which
 keeps the whole stack inside an 8GB node.
 
+### Keep alive — why Ollama and not llama-server
+
+```yaml
+environment:
+  - OLLAMA_KEEP_ALIVE=30s
+```
+
+This is the reason the project uses Ollama. `llama-server` keeps the weights
+resident for the process's entire lifetime; Ollama **unloads the model 30
+seconds after the last request**, so between analyses the ~2GB goes back to the
+node. On an 8GB box shared with Postgres, Redis, `web` and `worker`, that
+headroom is what makes the stack fit.
+
+The trade-off: a request that arrives after an idle gap also pays for reloading
+the model. That is bounded (a few seconds for a 3B Q4) and covered by the
+150-second client timeout. Raise the value if you analyse in long bursts and have
+the RAM; lower it to `0` to unload immediately.
+
+Check what is loaded right now:
+
+```bash
+docker compose exec ollama ollama ps    # empty once the keep-alive window closes
+```
+
+### Model pull
+
+Ollama has no `-hf`-style auto-download, so
+[`ollama-entrypoint.sh`](../ollama-entrypoint.sh) — bind-mounted into the
+container as its entrypoint — starts the server, waits for the API, pulls
+`$OLLAMA_MODEL` (default `llama3.2:3b`) and then stays in foreground on the
+server process. The blob lands in the `ollama-data` volume, so later starts are a
+no-op. **While the first pull runs (~2GB), the coach falls back to Stockfish-only
+text**, which is expected and self-corrects.
+
+To use a different model, pull it and point `LLM_MODEL` at the same tag:
+
+```bash
+docker compose exec ollama ollama pull qwen2.5:3b
+```
+
+Then set `LLM_MODEL=qwen2.5:3b` (and `OLLAMA_MODEL` on the `ollama` service, so
+it survives a fresh volume). The two must match — the app's request names the
+tag, and Ollama returns an error for a tag it hasn't pulled.
+
 Health check:
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:11434/api/tags    # lists the pulled models
 ```
-
-For a fully offline or reproducible setup, mount a local `.gguf` into the service
-and swap `-hf ...` for `-m /models/<file>.gguf`.
 
 The request itself uses a **150-second timeout** (CPU inference for this model
 runs 20–30s, and worst cases are much slower) and `temperature=0.7`. If it fails

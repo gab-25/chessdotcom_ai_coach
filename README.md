@@ -8,9 +8,10 @@ grandmaster coach.
 
 - **Django 5** — ORM, templates, admin, session auth (custom `User` model)
 - **PostgreSQL** — via `psycopg2-binary`
-- **llama.cpp (`llama-server`)** — serves the local LLM behind an
-  OpenAI-compatible API; the app reaches it with the `openai` async client for
-  the AI coach prose (`chessdotcom_ai_coach/services/coach.py`)
+- **Ollama** — serves the local LLM behind an OpenAI-compatible API on `/v1`; the
+  app reaches it with the `openai` async client for the AI coach prose
+  (`chessdotcom_ai_coach/services/coach.py`). `OLLAMA_KEEP_ALIVE` unloads the
+  model between analyses, so the ~2GB of weights don't sit in RAM permanently
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
@@ -51,14 +52,14 @@ docker compose up --build
 
 Compose starts the whole stack: `web` (Gunicorn + the APScheduler process,
 started by `entrypoint.sh` after `migrate`/`collectstatic`), a `worker` running
-the Celery worker, plus `redis`, `postgres` and `llm` (llama-server). The app is
-served on http://localhost:8000.
+the Celery worker, plus `redis`, `postgres` and `ollama`. The app is served on
+http://localhost:8000.
 
-Compose overrides `POSTGRES_HOST`, `LLM_BASE_URL`, `REDIS_URL` and
+Compose overrides `POSTGRES_HOST`, `LLM_BASE_URL`, `LLM_MODEL`, `REDIS_URL` and
 `STOCKFISH_PATH` so the containers reach each other by service name; everything
-else comes from `.env`. On first start the `llm` service downloads the GGUF model
-(~2GB) into the `llm-models` volume, so the coach falls back to Stockfish-only
-text until the download finishes.
+else comes from `.env`. On first start the `ollama` service pulls `llama3.2:3b`
+(~2GB) into the `ollama-data` volume, so the coach falls back to Stockfish-only
+text until the pull finishes.
 
 Then create a user (see [First run](#first-run) below).
 
