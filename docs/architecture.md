@@ -29,7 +29,7 @@ graph TD
     subgraph ext["External / local engines"]
         ChessCom["Chess.com public API"]
         SF["Stockfish<br/><i>local subprocess</i>"]
-        LLM["llama-server<br/><i>OpenAI-compatible</i>"]
+        LLM["Ollama<br/><i>OpenAI-compatible</i>"]
     end
 
     Browser -->|"poll every 5s / 2s"| Web

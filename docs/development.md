@@ -7,8 +7,11 @@
   [`docker-compose.yaml`](../docker-compose.yaml) work fine on their own:
   `docker compose up -d postgres redis`
 - **Stockfish** — see [configuration.md](configuration.md#stockfish)
-- **llama-server** (optional) — without it the coach falls back to Stockfish-only
-  prose, which is perfectly usable for development: `docker compose up -d llm`
+- **Ollama** (optional) — without it the coach falls back to Stockfish-only
+  prose, which is perfectly usable for development. To get real coach prose:
+  `docker compose up -d ollama` and then, once,
+  `docker compose exec ollama ollama pull llama3.2:3b`
+  (see [configuration.md](configuration.md#pulling-the-model))
 
 ## Setup
 

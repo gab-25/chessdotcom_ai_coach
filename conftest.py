@@ -12,7 +12,7 @@ import tempfile
 
 # Defaults for env vars read at import time.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
-os.environ.setdefault("LLM_BASE_URL", "http://localhost:8080/v1")
+os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
 
 import pytest
 

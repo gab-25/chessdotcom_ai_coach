@@ -17,17 +17,29 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 | `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish and calls the LLM. |
 | `redis` | `redis:7-alpine` | Celery broker and result backend. Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
-| `llm` | `ghcr.io/ggml-org/llama.cpp:server` | OpenAI-compatible endpoint on `8080`. |
+| `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Needs a one-off model pull, see below. |
 
 `web` and `worker` both wait for `postgres` and `redis` to be **healthy**, but
-only for `llm` to have **started** — the model download takes minutes and the
-coach degrades gracefully to Stockfish-only text meanwhile, so blocking on it
-would be pointless.
+only for `ollama` to have **started** — the coach degrades gracefully to
+Stockfish-only text when the LLM isn't answering yet, so blocking on it would be
+pointless.
+
+### After the first start: pull the model
+
+Ollama ships no model. Until you run it, analyses complete on the Stockfish-only
+fallback:
+
+```bash
+docker compose exec ollama ollama pull llama3.2:3b
+```
+
+Once only, per `ollama-data` volume. Details and how to switch model in
+[configuration.md](configuration.md#pulling-the-model).
 
 ### Volumes
 
 - **`postgres-data`** — the database.
-- **`llm-models`** — the GGUF cache. Keep it, or every restart re-downloads ~2GB.
+- **`ollama-data`** — the model store. Keep it, or you have to re-pull ~2GB.
 
 ## The container entrypoint
 
@@ -110,5 +122,7 @@ than following `latest`.
 - Neither Redis nor Postgres is authenticated or firewalled in the Compose file,
   and both publish their ports to the host. Fine locally; not fine on a public
   machine.
-- Give the LLM host enough RAM: ~2GB for the loaded 3B model plus the KV cache
-  bounded by `-c 4096`.
+- Give the LLM host enough RAM: ~2GB while the 3B model is loaded. Thanks to
+  `OLLAMA_KEEP_ALIVE=30s` that is a *peak* during and just after an analysis, not
+  a permanent floor — Ollama unloads the weights once the window closes. See
+  [configuration.md](configuration.md#keep-alive--why-ollama-and-not-llama-server).

@@ -10,13 +10,13 @@ from openai import AsyncOpenAI
 # points at the binary (see the Dockerfile). Defaults to "stockfish" on PATH.
 STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 
-# LLM Configuration (Local Llama 3.2 via llama.cpp llama-server)
-# llama-server exposes an OpenAI-compatible endpoint, so we talk to it with the
+# LLM Configuration (Local Llama 3.2 via Ollama)
+# Ollama exposes an OpenAI-compatible endpoint on /v1, so we talk to it with the
 # OpenAI async client. A 3B model is used to keep RAM usage low enough for an
-# 8GB single-node cluster (~2GB loaded vs ~5-6GB for the 8B build); the served
-# model is fixed by the llama-server command, not selectable per request.
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://llm:8080/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-instruct")
+# 8GB single-node cluster (~2GB loaded vs ~5-6GB for the 8B build), and Ollama's
+# OLLAMA_KEEP_ALIVE unloads it between analyses so that RAM comes back.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
 
 
 class Suggestion(TypedDict):
@@ -138,8 +138,10 @@ Instructions:
 """
 
         try:
-            # llama3.2:3b on CPU can take ~20-30s to produce a full analysis, so
-            # allow a generous timeout; on failure we fall back to engine-only text.
+            # llama3.2:3b on CPU can take ~20-30s to produce a full analysis, and
+            # after an idle gap the request also pays for reloading the model that
+            # OLLAMA_KEEP_ALIVE unloaded, so allow a generous timeout; on failure
+            # we fall back to engine-only text.
             client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=150.0)
             response = await client.chat.completions.create(
                 model=LLM_MODEL,
