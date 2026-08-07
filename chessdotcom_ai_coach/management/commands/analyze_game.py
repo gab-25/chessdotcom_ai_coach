@@ -1,10 +1,10 @@
 """Enqueue coach analysis for every one of a user's moves in a single game.
 
-The scheduler only analyses the current-turn position; this backfills the rest so
-a game can be reviewed with the coach's take on each of the user's moves. Reads
-the stored snapshot and enqueues the same Celery tasks the app uses — no
-Chess.com call. Idempotent: already-analysed (or already-queued) moves are
-skipped, so it's safe to re-run.
+A finished game is backfilled automatically by `scheduler.backfill_results`; this
+is the manual trigger, for a game still in progress or one the archive never
+resolved. Reads the stored snapshot and enqueues the same Celery tasks the app
+uses — no Chess.com call. Idempotent: already-analysed (or already-queued) moves
+are skipped, so it's safe to re-run.
 
     python manage.py analyze_game <game_id> [--user <username>]
 

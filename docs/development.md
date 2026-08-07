@@ -92,9 +92,11 @@ worker and enqueue duplicates.
 uv run python manage.py analyze_game <game_id> [--user <username>]
 ```
 
-The scheduler only analyses positions it's *your* turn to play, so reviewing a
-past game shows the coach's take on just those moves. This command backfills the
-rest — it enqueues analysis for **every** move you played in the game.
+A finished game is backfilled automatically (`scheduler.backfill_results` runs
+this once the archive resolves the outcome), so this command is for forcing it:
+a game still in progress, or one the archive never matched — an alias mismatch,
+or an end date outside `RESULT_BACKFILL_WINDOW`. It enqueues analysis for
+**every** move you played in the game.
 
 It reads the stored snapshot (no Chess.com call) and is idempotent: moves already
 analysed or queued are skipped, so re-running is safe. `--user` is only needed

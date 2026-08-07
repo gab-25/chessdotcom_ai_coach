@@ -139,9 +139,12 @@ class Client:
         ``white``/``black`` are URL strings), each archived game carries
         ``white``/``black`` as dicts with a ``result`` code.
 
-        Returns ``{game_id: {"result": "win"|"loss"|"draw", "detail": str}}`` keyed
-        by the Chess.com game id (last URL segment), covering only the games the
-        user played. Defaults to the current month when ``year``/``month`` are None.
+        Returns ``{game_id: {"result", "detail", "pgn"}}`` keyed by the Chess.com
+        game id (last URL segment), covering only the games the user played.
+        ``pgn`` is the archive's *final* movetext: our own snapshot was taken while
+        the game was still current, so it can be missing the last moves played
+        between two scheduler ticks — the caller uses this to complete it.
+        Defaults to the current month when ``year``/``month`` are None.
         """
         # The chessdotcom library requires both year and month (or a datetime);
         # passing None for either raises ValueError, so default to the current month.
@@ -187,6 +190,10 @@ class Client:
             game_url = game.get("url", "")
             game_id = game_url.split("/")[-1] if game_url else ""
             if game_id:
-                results[game_id] = {"result": outcome, "detail": detail}
+                results[game_id] = {
+                    "result": outcome,
+                    "detail": detail,
+                    "pgn": game.get("pgn", ""),
+                }
 
         return results

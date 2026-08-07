@@ -14,6 +14,7 @@ from ..models import CoachSuggestion, Game, User
 from ..tasks import analyze_game_task
 from . import board as board_utils
 from . import game_store
+from .analysis import enqueue_game_analysis
 from .chess_client import Client
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,21 @@ logger = logging.getLogger(__name__)
 # game that never resolves (e.g. played under a different alias) is not re-fetched
 # on every tick forever.
 RESULT_BACKFILL_WINDOW = timedelta(days=3)
+
+# How long a suggestion may sit PENDING before it's assumed lost and re-enqueued.
+# This must comfortably exceed the worst-case *queue* wait, not just one analysis:
+# a whole-game backfill is ~40 moves x (2s Stockfish + up to 150s LLM), so a task
+# can legitimately wait far longer than it takes to run. Too low a value re-queues
+# tasks that are still alive and grows the very backlog it's reacting to.
+STALE_PENDING_AFTER = timedelta(minutes=30)
+
+# Give up on a position after this many hand-offs to the worker, so one that fails
+# every time (unparseable FEN, engine that won't start) stops looping.
+MAX_ANALYSIS_ATTEMPTS = 3
+
+# Cap the rows revived per tick so a large backlog is drained gradually rather
+# than dumped on the worker in one go.
+REQUEUE_BATCH_SIZE = 20
 
 
 def _linked_users():
@@ -68,7 +84,7 @@ def sync_current_games() -> None:
 
 
 def backfill_results() -> int:
-    """Resolve the win/loss/draw outcome of recently-ended games from the archives.
+    """Resolve recently-ended games from the archives, then analyse every user move.
 
     A game only leaves Chess.com's "current games" once it's over, and the snapshot
     we kept has a PGN with Result "*", so the outcome must be fetched separately.
@@ -77,6 +93,18 @@ def backfill_results() -> int:
     not found there, to cover month boundaries) and persist each match. A per-user
     failure is logged and skipped so one bad account doesn't block the batch.
     Returns the number of games resolved this tick.
+
+    This is also where a finished game gets its *complete* analysis. `enqueue_due_analyses`
+    only ever sees the position a 5s poll happens to catch, so any turn that comes
+    and goes between two ticks is never analysed — in fast time controls that's most
+    of them. Here the archive has just given us the final PGN, so the whole move list
+    is known and `enqueue_game_analysis` can fill in what the live path missed.
+    Doing it after `set_result` matters: the refreshed PGN is what makes the backfill
+    complete rather than stopping at our possibly-truncated snapshot.
+
+    Known gap: only games that resolve within `RESULT_BACKFILL_WINDOW` get here, so a
+    game that never matches an archive entry (e.g. played under a different alias) is
+    never backfilled — `manage.py analyze_game` remains the manual escape hatch.
     """
     updated = 0
     since = timezone.now() - RESULT_BACKFILL_WINDOW
@@ -101,8 +129,13 @@ def backfill_results() -> int:
                 match = results.get(game.game_id)
                 if match:
                     game_store.set_result(
-                        user, game.game_id, match["result"], match["detail"]
+                        user,
+                        game.game_id,
+                        match["result"],
+                        match["detail"],
+                        match.get("pgn", ""),
                     )
+                    enqueue_game_analysis(user, game.game_id)
                     updated += 1
         except Exception:
             logger.exception(
@@ -131,6 +164,7 @@ def enqueue_due_analyses() -> int:
             defaults={
                 "status": CoachSuggestion.Status.PENDING,
                 "move_no": board_utils.fullmove_number(game.fen),
+                "attempts": 1,  # creating the row is itself a hand-off to the worker
                 "eval_text": "",
                 "analysis": "",
             },
@@ -141,3 +175,53 @@ def enqueue_due_analyses() -> int:
             )
             enqueued += 1
     return enqueued
+
+
+def requeue_stale_analyses() -> int:
+    """Revive suggestions left PENDING by a task that never came back.
+
+    The `CoachSuggestion` row doubles as the in-flight lock, so a task lost with
+    its worker (an OOM kill, say — Celery does not redeliver by default) strands
+    the row PENDING for ever: every later `get_or_create` finds it and enqueues
+    nothing, and the coach card spins on its self-poll with no way out. This gives
+    the lock an expiry.
+
+    A row untouched for `STALE_PENDING_AFTER` is handed to the worker again and its
+    `attempts` bumped — the save also refreshes `updated_at`, which spaces out the
+    next retry. Past `MAX_ANALYSIS_ATTEMPTS` the position is closed as DONE with the
+    same "unavailable" shape `coach.get_best_move` produces on error, so the spinner
+    stops without inventing a new status. Re-enqueuing a task that was in fact still
+    alive is wasteful but harmless: `analyze_game_task` upserts on the same key.
+    Returns the number of rows re-enqueued this tick.
+    """
+    cutoff = timezone.now() - STALE_PENDING_AFTER
+    stale = CoachSuggestion.objects.filter(
+        status=CoachSuggestion.Status.PENDING, updated_at__lt=cutoff
+    )[:REQUEUE_BATCH_SIZE]
+
+    requeued = 0
+    for row in stale:
+        if row.attempts >= MAX_ANALYSIS_ATTEMPTS:
+            logger.warning(
+                "Giving up on analysis for game %s move %s after %d attempts",
+                row.game_id,
+                row.move_no,
+                row.attempts,
+            )
+            row.status = CoachSuggestion.Status.DONE
+            row.eval_text = "Analysis unavailable."
+            row.analysis = (
+                "The coach could not analyse this position: the background "
+                f"analysis did not complete after {row.attempts} attempts."
+            )
+            row.save()
+            continue
+
+        game = Game.objects.filter(user_id=row.user_id, game_id=row.game_id).first()
+        row.attempts += 1
+        row.save()  # `auto_now` on updated_at: this also defers the next retry
+        analyze_game_task.delay(
+            row.user_id, row.game_id, row.fen, (game.pgn or None) if game else None
+        )
+        requeued += 1
+    return requeued

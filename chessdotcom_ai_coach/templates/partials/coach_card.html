@@ -35,7 +35,24 @@
   <div class="coach__placeholder">
     <span class="spinner"></span>
     <p>Analysing <b>{{ coach.san }}</b> in the background… the suggestion will appear shortly.</p>
+    {# Escape hatch: a task lost with its worker leaves this spinning until the
+       scheduler's stale sweep notices. This re-queues the position right away. #}
+    <button type="button" class="btn btn--ghost btn--sm"
+            hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
+      <i class="fa-solid fa-rotate-right"></i> Retry
+    </button>
   </div>
+</div>
+
+{% elif coach.mode == "failed" %}
+<div class="coach__placeholder">
+  <span class="gr-glyph gr-glyph--sm">&#9888;</span>
+  <p>The coach couldn&rsquo;t analyse {% if coach.san %}<b>{{ coach.san }}</b>{% else %}this position{% endif %}.</p>
+  {% if coach.reason %}<p class="coach__summary">{{ coach.reason }}</p>{% endif %}
+  <button type="button" class="btn btn--accent btn--sm"
+          hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
+    <i class="fa-solid fa-rotate-right"></i> Try again
+  </button>
 </div>
 
 {% elif coach.mode == "analyzed" %}
@@ -86,6 +103,10 @@
   <div class="coach__placeholder">
     <span class="spinner"></span>
     <p>Analysing the current position… the suggestion will appear shortly.</p>
+    <button type="button" class="btn btn--ghost btn--sm"
+            hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
+      <i class="fa-solid fa-rotate-right"></i> Retry
+    </button>
   </div>
 </div>
 

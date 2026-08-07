@@ -66,15 +66,21 @@ def past_games(user) -> List[Game]:
     return list(Game.objects.filter(user=user, is_active=False))
 
 
-def set_result(user, game_id: str, result: str, detail: str = "") -> None:
+def set_result(user, game_id: str, result: str, detail: str = "", pgn: str = "") -> None:
     """Persist a resolved outcome (win/loss/draw) for a stored game.
 
     Pure DB write, keeping this module free of Chess.com IO: the scheduler fetches
     the outcome from the archives and calls this to record it on the snapshot.
+
+    ``pgn`` is the archive's final movetext, written only when non-empty: our own
+    snapshot stops at the last successful sync before the game left "current
+    games", so it can be missing the closing moves. An empty value means the
+    archive had nothing to add and must never clobber the snapshot we do have.
     """
-    Game.objects.filter(user=user, game_id=game_id).update(
-        result=result, result_detail=detail
-    )
+    fields = {"result": result, "result_detail": detail}
+    if pgn:
+        fields["pgn"] = pgn
+    Game.objects.filter(user=user, game_id=game_id).update(**fields)
 
 
 def unresolved_past_games(user, since) -> List[Game]:
