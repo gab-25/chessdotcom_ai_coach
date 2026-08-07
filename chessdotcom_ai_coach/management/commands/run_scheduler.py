@@ -8,11 +8,12 @@ duplicates.
 Every tick (5s — matching the home page's own HTMX poll cadence, so nothing
 needs data fresher than that) first syncs each linked user's current games
 from Chess.com into the local DB (`sync_current_games`), then resolves the
-outcome of games that just ended from the Chess.com archives
-(`backfill_results`), then checks the DB for games due for analysis and enqueues
-them (`enqueue_due_analyses`). The steps run in separate try/except blocks so a
-Chess.com outage doesn't stop the local enqueue check from still running against
-whatever `Game` rows exist.
+outcome of games that just ended from the Chess.com archives and backfills the
+analysis of every move in them (`backfill_results`), then checks the DB for games
+due for analysis and enqueues them (`enqueue_due_analyses`), and finally revives
+analyses stranded PENDING by a lost task (`requeue_stale_analyses`). The steps run
+in separate try/except blocks so a Chess.com outage doesn't stop the local enqueue
+check from still running against whatever `Game` rows exist.
 """
 
 import logging
@@ -23,6 +24,7 @@ from django.core.management.base import BaseCommand
 from ...services.scheduler import (
     backfill_results,
     enqueue_due_analyses,
+    requeue_stale_analyses,
     sync_current_games,
 )
 
@@ -69,3 +71,10 @@ class Command(BaseCommand):
             enqueue_due_analyses()
         except Exception:
             logger.exception("Scheduler tick failed")
+        try:
+            # Last: anything still PENDING well past its due time lost its worker,
+            # so hand it back to the queue (or retire it) rather than leave the row
+            # locking the position for ever.
+            requeue_stale_analyses()
+        except Exception:
+            logger.exception("Stale-analysis requeue failed")

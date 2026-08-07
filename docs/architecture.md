@@ -67,7 +67,8 @@ sequenceDiagram
     C-->>S: games (PGN + FEN)
     S->>DB: upsert_current_games() — snapshot, retire vanished games
     S->>C: finished_game_results() for recently-ended games
-    S->>DB: set_result() — win / loss / draw
+    S->>DB: set_result() — win / loss / draw + the archive's final PGN
+    S->>Q: enqueue_game_analysis() — every user move the 5s poll never saw
 
     S->>DB: for each active game where it's the user's turn:<br/>get_or_create CoachSuggestion(user, game_id, fen)
     alt row was just created
@@ -75,6 +76,9 @@ sequenceDiagram
     else row already exists
         Note over S,DB: already pending or done — skip.<br/>The row IS the lock.
     end
+
+    S->>DB: requeue_stale_analyses() — rows PENDING past their expiry
+    Note over S,Q: a task that died with its worker is<br/>handed back, or retired after N attempts
 
     Q->>W: deliver task
     W->>E: get_best_move(fen, pgn)
@@ -94,14 +98,14 @@ sequenceDiagram
 | Component | Entry point | Notes |
 | --- | --- | --- |
 | Scheduler tick | [`management/commands/run_scheduler.py`](../chessdotcom_ai_coach/management/commands/run_scheduler.py) | `POLL_INTERVAL_SECONDS = 5`, matching the home page's own HTMX cadence. `max_instances=1` and `coalesce=True` so a slow tick never overlaps the next. |
-| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `backfill_results`, `enqueue_due_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local enqueue check running. |
+| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `backfill_results`, `enqueue_due_analyses`, `requeue_stale_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local enqueue check running. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
 | Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |
 | Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `my_current_games()` and `finished_game_results()`. Pure IO + shape normalisation, no DB access. |
 | Persistence | [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) | Pure DB reads/writes: `upsert_current_games`, `current_games`, `past_games`, `set_result`, `stored_game`. No Chess.com access. |
 | Board rendering | [`services/board.py`](../chessdotcom_ai_coach/services/board.py) | Expands FEN/PGN into what templates can iterate over. |
 | Views | [`views.py`](../chessdotcom_ai_coach/views.py) | Thin, except `_position_context` (see below). |
-| Whole-game backfill | [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) | `enqueue_game_analysis` — same idempotent enqueue, applied to every move of a game. |
+| Whole-game backfill | [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) | `enqueue_game_analysis` — same idempotent enqueue, applied to every move of a game. Run automatically by `backfill_results` when a game ends, and manually by `manage.py analyze_game`. |
 
 ## Board rendering
 

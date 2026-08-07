@@ -57,6 +57,33 @@ def _arrow(from_sq, to_sq, color, marker, flipped):
     return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "marker": marker}
 
 
+def _is_failed(row):
+    """True when a DONE row carries no analysis at all — neither move nor eval.
+
+    Either the engine errored (``coach.get_best_move`` still returns a row) or the
+    scheduler retired the position after too many lost tasks. The eval check is what
+    separates a failure from a *terminal* position, where Stockfish legitimately has
+    no move to suggest but still scores the position.
+    """
+    return not row.best_move_san and row.eval_cp is None
+
+
+def _failed_coach(row, san=""):
+    """Card state for a finished analysis that produced nothing.
+
+    Rendering a failure through the "analyzed" branch would show an empty
+    recommendation and claim the coach preferred nothing, so it gets its own state —
+    carrying the FEN, so the user can ask for the analysis again rather than being
+    left with a dead card.
+    """
+    return {
+        "mode": "failed",
+        "san": san,
+        "fen": row.fen,
+        "reason": row.analysis or row.eval_text or "",
+    }
+
+
 def _suggestion_fields(row):
     """The coach's move/eval/prose/arrow squares from a DONE suggestion row."""
     rec = _uci_to_squares(row.best_move_uci)
@@ -138,7 +165,11 @@ def _position_context(user, game, sel):
         elif head_row is None:
             coach = {"mode": "live_request", "fen": game.fen}
         elif head_row.status == CoachSuggestion.Status.PENDING:
-            coach = {"mode": "live_pending"}
+            # Carry the FEN so the card's retry button can re-enqueue a position
+            # whose task was lost, without waiting for the scheduler to notice.
+            coach = {"mode": "live_pending", "fen": head_row.fen}
+        elif _is_failed(head_row):
+            coach = _failed_coach(head_row)
         else:
             fields = _suggestion_fields(head_row)
             coach = {"mode": "live_analyzed", **fields}
@@ -154,7 +185,12 @@ def _position_context(user, game, sel):
         if s is None:
             coach = {"mode": "unanalyzed", "san": ply["san"], "fen": ply["fen_before"]}
         elif s.status == CoachSuggestion.Status.PENDING:
-            coach = {"mode": "pending", "san": ply["san"]}
+            # `s.fen`, not `ply["fen_before"]`: the row was joined on the ply, so it
+            # may hold Chess.com's spelling of this position. Posting its own FEN
+            # makes the retry hit the stuck row instead of creating a duplicate.
+            coach = {"mode": "pending", "san": ply["san"], "fen": s.fen}
+        elif _is_failed(s):
+            coach = _failed_coach(s, san=ply["san"])
         else:
             fields = _suggestion_fields(s)
             followed = ply["followed"]
@@ -216,6 +252,8 @@ def _position_context(user, game, sel):
         s = m["suggestion"]
         if m["color"] != orientation or s is None or s.status != CoachSuggestion.Status.DONE:
             continue
+        if _is_failed(s):
+            continue  # a failed analysis is not a suggestion to list
         history_view.append(
             {
                 "sel": i,
@@ -381,19 +419,24 @@ def analyze_position(request, id):
                     fen=fen,
                     status=CoachSuggestion.Status.PENDING,
                     move_no=board_utils.fullmove_number(fen),
+                    attempts=1,
                     eval_text="",
                     analysis="",
                 )
-                analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
-            elif row.status != CoachSuggestion.Status.PENDING:
+            else:
+                # Re-enqueue whatever state the row is in, PENDING included: a task
+                # lost with its worker leaves the row pending for ever, and an
+                # explicit click is exactly the signal to break that lock. `attempts`
+                # restarts too, so the user's retry isn't spent by earlier failures.
                 row.status = CoachSuggestion.Status.PENDING
+                row.attempts = 1
                 row.eval_text = ""
                 row.eval_cp = None
                 row.best_move_san = None
                 row.best_move_uci = None
                 row.analysis = ""
                 row.save()
-                analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
+            analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
             context = _position_context(request.user, game, sel)
 
     # Standalone card render: carry the eval bar and board arrows out-of-band so

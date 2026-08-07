@@ -107,8 +107,13 @@ users whose field is non-empty). Your current games appear within a few seconds.
 
 ## Analysing a whole game
 
-The scheduler only analyses the position it's your turn to play, so reviewing a
-past game shows the coach's take on just those moves. To backfill the rest:
+While a game is live the scheduler can only analyse the position its 5s poll
+happens to catch, so in fast time controls plenty of your turns come and go
+between two ticks and are never seen. Once the game ends and the archive gives us
+the final PGN, the scheduler backfills the rest automatically — every move you
+played gets its own analysis.
+
+To force it (a game still in progress, or one the archive never resolved):
 
 ```bash
 uv run python manage.py analyze_game <game_id> [--user <username>]

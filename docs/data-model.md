@@ -131,9 +131,32 @@ The same pattern appears in
 what makes `manage.py analyze_game` safe to re-run.
 
 The one place that deliberately bypasses it is the explicit **re-analyze** button
-([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py)): on `POST`, an
-existing non-pending row is reset to `PENDING` with its fields cleared and
-re-enqueued. That's a user asking for a fresh take, not a duplicate.
+([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py)): on `POST`, the
+row is reset to `PENDING` with its fields cleared and re-enqueued whatever state
+it was in, pending included. That's a user asking for a fresh take, not a
+duplicate — and it's the manual way out of the deadlock described next.
+
+### The lock needs an expiry
+
+Making the row the lock has one failure mode: if the task dies with its worker
+(an OOM kill, say — Celery does not redeliver by default), nothing ever writes
+the row to `DONE`. It stays `PENDING`, every later `get_or_create` finds it and
+enqueues nothing, and the coach card self-polls for ever. The lock is held by a
+task that no longer exists.
+
+`scheduler.requeue_stale_analyses()` gives it an expiry. A row untouched for
+`STALE_PENDING_AFTER` is handed back to the worker and its `attempts` bumped; the
+save refreshes `updated_at`, which spaces out the next retry. Past
+`MAX_ANALYSIS_ATTEMPTS` the position is retired as `DONE` carrying the same
+"unavailable" shape `coach.get_best_move` produces on engine failure, so the card
+stops spinning without inventing a new status.
+
+`STALE_PENDING_AFTER` is deliberately generous (30 minutes). It has to exceed the
+worst-case **queue** wait, not the runtime of one analysis: a whole-game backfill
+is ~40 moves × (2s Stockfish + up to 150s LLM), so a task can sit queued far
+longer than it takes to run. Too low a value re-queues tasks that are still alive
+and grows the very backlog it's reacting to. A spurious re-enqueue is wasteful but
+never corrupting — `analyze_game_task` upserts on the same key.
 
 ### Status lifecycle
 
@@ -143,11 +166,25 @@ stateDiagram-v2
     PENDING --> DONE: analyze_game_task persists the result
     DONE --> PENDING: user clicks "Re-analyze"
     PENDING --> PENDING: HTMX self-polls every 2s
+    PENDING --> PENDING: requeue_stale_analyses<br/>revives a lost task
+    PENDING --> DONE: retired after MAX_ANALYSIS_ATTEMPTS
 ```
 
-A row stuck at `PENDING` forever means **no Celery worker is running** — the task
-was enqueued into Redis and nothing consumed it. That is exactly the "Analyzing…"
-symptom described in [development.md](development.md).
+A row stuck at `PENDING` for a few seconds is normal. One that stays there across
+several scheduler ticks *and* is never revived means **no Celery worker is
+running** — the task was enqueued into Redis and nothing consumed it. That is
+exactly the "Analyzing…" symptom described in [development.md](development.md).
+
+### Duplicate rows for one ply
+
+The unique key is the raw FEN, but the same ply can reach the DB under two
+spellings: the live scheduler stores Chess.com's FEN while
+[`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) stores
+python-chess's `board.fen()`, and the two can differ in the halfmove clock or the
+en-passant field. `_ply_already_covered` therefore matches on `(move_no, side to
+move)` — the ply identity `board_utils.annotate_moves` already joins on — before
+creating anything, so the end-of-game backfill doesn't re-analyse every move the
+coach already handled live.
 
 ### Evaluation fields
 

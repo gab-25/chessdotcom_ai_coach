@@ -105,6 +105,12 @@ class CoachSuggestion(models.Model):
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.PENDING
     )
+    # How many times this position has been handed to the worker. A task lost
+    # with its worker (Celery does not redeliver by default) leaves the row
+    # PENDING forever, so the scheduler re-enqueues stale rows — this bounds that
+    # retrying so a position that always fails doesn't loop for ever. See
+    # `services.scheduler.requeue_stale_analyses`.
+    attempts = models.PositiveSmallIntegerField(default=0)
     eval_text = models.CharField(max_length=255, blank=True)
     eval_cp = models.FloatField(null=True, blank=True)
     best_move_san = models.CharField(max_length=16, blank=True, null=True)
