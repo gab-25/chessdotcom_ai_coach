@@ -41,11 +41,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    # Append-only persistence, on a volume: without it a restart of this
-    # container empties the queue, and every enqueued analysis is orphaned — its
-    # `CoachSuggestion` row still reads PENDING, so the reconciliation passes skip
-    # it as already queued. The scheduler recovers those
-    # (`requeue_orphaned_analyses`), but not losing them is cheaper.
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
