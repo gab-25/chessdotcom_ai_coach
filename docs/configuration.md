@@ -34,6 +34,22 @@ If analysis silently never completes locally, check `LLM_BASE_URL` and
 (`os.getenv`), not through Django settings — `settings.LLM_BASE_URL` exists but
 is informational.
 
+## Celery settings
+
+Not environment variables, but worth knowing why they are what they are — they
+are set in [`settings.py`](../chessdotcom_ai_coach/settings.py) and they change
+how the worker behaves under restart:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `requeue_stale_analyses` is the guarantee that actually holds. |
+| `CELERY_TASK_REJECT_ON_WORKER_LOST` | `True` | Makes the above cover a worker killed outright (an OOM kill), not just a clean shutdown. |
+| `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. |
+
+Because a task can therefore run more than once, `attempts` is capped: one that
+kills its worker would otherwise be retried for ever. See
+[data-model.md](data-model.md#the-lock-needs-an-expiry).
+
 ## What Docker Compose overrides
 
 [`docker-compose.yaml`](../docker-compose.yaml) passes `.env` through to the

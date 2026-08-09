@@ -18,11 +18,12 @@ grandmaster coach.
 - **Celery + Redis** — analysis runs out-of-band: a task is enqueued
   (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend, and
   a hidden HTMX poller reveals the result once the worker finishes
-- **APScheduler** — background scheduler (`manage.py run_scheduler`) that every
-  5 seconds syncs each linked user's current games from Chess.com into the local
-  DB and auto-enqueues analysis when it's the user's turn
-  (`chessdotcom_ai_coach/services/scheduler.py`). This is the only path that
-  keeps game data fresh — the pages just read what it already synced.
+- **APScheduler** — background scheduler (`manage.py run_scheduler`) with two
+  jobs (`chessdotcom_ai_coach/services/scheduler.py`): every 5 seconds it syncs
+  each linked user's current games from Chess.com into the local DB and enqueues
+  the analyses those games are missing, and every 10 minutes it does the same
+  sweep over the finished ones. This is the only path that keeps game data fresh
+  — the pages just read what it already synced.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
   `django-htmx`: game-list polling, move-by-move navigation, the coach card and
   the live game poll are all fragment swaps, with no custom JavaScript
@@ -69,6 +70,33 @@ different model.
 
 Then create a user (see [First run](#first-run) below).
 
+## Monitoring the analyses
+
+Analyses are queued, so a game fills in over minutes rather than all at once.
+To follow what the worker is doing:
+
+```bash
+docker compose logs -f worker      # live task log
+```
+
+The line to watch for is `Task ... succeeded in Ns`. Reading the log:
+
+- **Nothing but `received`, never `succeeded`** → tasks are arriving but not
+  finishing. Check the LLM: `docker compose logs ollama`.
+- **`LLM Error` followed by a task that still succeeds** → the analysis fell back
+  to Stockfish-only text. If those come in bursts, the worker is outrunning
+  Ollama — see the `--concurrency` note in `docker-compose.yaml`.
+- **`Giving up on analysis ... after 3 attempts`** → that position is `failed`
+  and is not retried automatically. Use the card's "Try again", or
+  `manage.py analyze_game <game_id>`.
+- **Silence, with analyses still outstanding** → the queue and the database
+  disagree: rows say `PENDING` but no message is waiting for them, so nothing
+  picks them up. Compare the two, `docker compose exec redis redis-cli llen
+  celery` against the `pending` count. The scheduler repairs this on its own
+  (`Re-enqueued N analyses that were PENDING with an empty queue` in
+  `docker compose logs web`); seeing it repeatedly means the queue is being lost,
+  so check that the `redis-data` volume is mounted.
+
 ## Run locally
 
 Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and a running PostgreSQL
@@ -107,8 +135,18 @@ users whose field is non-empty). Your current games appear within a few seconds.
 
 ## Analysing a whole game
 
-The scheduler only analyses the position it's your turn to play, so reviewing a
-past game shows the coach's take on just those moves. To backfill the rest:
+Every move you played gets its own analysis, and you don't have to ask for it.
+The scheduler doesn't just react to the position it happens to see — on each run
+it compares the game's PGN against the analyses already stored and queues the
+difference. A turn that came and went between two polls, a task lost to a worker
+restart, a game that was already over when you linked the account: all of it is
+picked up on a later run. Active games are reconciled on the 5 second tick,
+finished ones every 10 minutes, for as long as they are stored.
+
+Analyses are queued, not instant — a whole game is dozens of them, each a few
+seconds of Stockfish plus an LLM call — so a game you just finished fills in
+gradually. To skip the wait for one game, or to retry one whose analyses were
+given up on:
 
 ```bash
 uv run python manage.py analyze_game <game_id> [--user <username>]

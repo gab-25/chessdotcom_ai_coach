@@ -34,9 +34,13 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
     # engine); stubbed here so no real subprocess is spawned.
     popen_uci = AsyncMock(return_value=(MagicMock(), engine))
 
-    # Ollama is reached through the OpenAI async client; the response shape is
+    # Ollama is reached through the OpenAI async client, entered as an async
+    # context manager (it owns an httpx pool that must close on this event loop),
+    # so the mock has to yield itself from `__aenter__`. The response shape is
     # ``response.choices[0].message.content``.
     llm_client = MagicMock()
+    llm_client.__aenter__ = AsyncMock(return_value=llm_client)
+    llm_client.__aexit__ = AsyncMock(return_value=False)
     if llm_raises:
         llm_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("llm down"))
     else:

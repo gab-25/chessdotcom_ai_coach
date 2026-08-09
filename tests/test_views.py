@@ -259,6 +259,43 @@ class TestAnalyzePosition:
         row = CoachSuggestion.objects.get(user=user, game_id="944768131", fen=move_fen)
         assert row.status == CoachSuggestion.Status.PENDING
 
+    def test_post_re_enqueues_a_row_stuck_in_flight(self, mock_task, auth_client, user):
+        """An in-flight row is skipped by every later `get_or_create`, so an explicit
+        click has to break the lock rather than wait for the scheduler's timeout."""
+        _make_game(user, is_active=False)
+        row = _make_suggestion(
+            user, _ply_fen(2), status=CoachSuggestion.Status.RUNNING, attempts=3
+        )
+
+        response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
+
+        assert response.status_code == 200
+        mock_task.delay.assert_called_once()
+        row.refresh_from_db()
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.attempts == 0  # the user's retry isn't spent by earlier failures
+        assert CoachSuggestion.objects.filter(user=user, game_id="944768131").count() == 1
+
+    def test_post_re_analyses_a_failed_row(self, mock_task, auth_client, user):
+        """A retired position must not be a dead end."""
+        _make_game(user, is_active=False)
+        row = _make_suggestion(
+            user,
+            _ply_fen(2),
+            status=CoachSuggestion.Status.FAILED,
+            eval_cp=None,
+            best_move_san=None,
+            best_move_uci=None,
+            analysis="did not complete",
+        )
+
+        auth_client.post("/game/944768131/analyze", {"sel": "3"})
+
+        mock_task.delay.assert_called_once()
+        row.refresh_from_db()
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.analysis == ""
+
     def test_post_is_noop_for_opponent_move(self, mock_task, auth_client, user):
         _make_game(user, is_active=False)
 
@@ -436,6 +473,87 @@ class TestCoachCardModes:
         assert "spinner" in body
         assert 'hx-trigger="every 2s"' in body
         assert 'hx-get="/game/944768131/analyze?sel=3"' in body
+
+    def test_running_renders_as_pending(self, auth_client, user):
+        """RUNNING and PENDING are worth telling apart in the scheduler (only a
+        RUNNING analysis can time out) but not on the card: either way the answer
+        isn't there yet."""
+        _make_game(user, is_active=False)
+        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.RUNNING)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert response.context["coach"]["mode"] == "pending"
+        assert 'hx-trigger="every 2s"' in response.content.decode()
+
+    def test_pending_does_not_offer_a_retry(self, auth_client, user):
+        """The scheduler's timeout recovers a stuck analysis on its own; a button
+        here would only invite breaking a lock on work that is still running."""
+        _make_game(user, is_active=False)
+        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
+
+        body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
+
+        assert "Retry" not in body
+
+    def test_failed_analysis_offers_a_retry(self, auth_client, user):
+        _make_game(user, is_active=False)
+        _make_suggestion(
+            user,
+            _ply_fen(2),
+            status=CoachSuggestion.Status.FAILED,
+            eval_cp=None,
+            best_move_san=None,
+            best_move_uci=None,
+            analysis="Error during Stockfish analysis: boom",
+        )
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "failed"
+        assert "t analyse" in body  # "The coach couldn&rsquo;t analyse Nf3."
+        assert "Error during Stockfish analysis: boom" in body
+        assert "Try again" in body
+        # A failure is not a suggestion: it must not pad the analysis history.
+        assert response.context["history_count"] == 0
+
+    def test_a_retired_row_explains_itself(self, auth_client, user):
+        """The scheduler retires a position without any prose — it never got far
+        enough to produce any — so the card has to supply the reason."""
+        _make_game(user, is_active=False)
+        _make_suggestion(
+            user,
+            _ply_fen(2),
+            status=CoachSuggestion.Status.FAILED,
+            eval_cp=None,
+            best_move_san=None,
+            best_move_uci=None,
+            eval_text="",
+            analysis="",
+        )
+
+        body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
+
+        assert "did not complete" in body
+        assert "Try again" in body
+
+    def test_terminal_position_is_not_treated_as_a_failure(self, auth_client, user):
+        """Stockfish has no move to suggest at mate/stalemate, but it still scores
+        the position — that's an evaluation, not a failed analysis."""
+        _make_game(user, is_active=False)
+        _make_suggestion(
+            user,
+            _ply_fen(2),
+            eval_cp=-10.0,
+            best_move_san=None,
+            best_move_uci=None,
+            eval_text="Decisive advantage for Black: Mate in 2 moves.",
+        )
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert response.context["coach"]["mode"] == "analyzed"
 
     def test_analyzed_followed(self, auth_client, user):
         _make_game(user, is_active=False)

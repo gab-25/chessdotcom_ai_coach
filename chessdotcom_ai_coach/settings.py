@@ -140,3 +140,27 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TASK_ALWAYS_EAGER = False
+
+# Acknowledge a task after it ran, not when it was delivered, so an analysis in
+# flight when the worker goes down is not simply lost. On a graceful stop
+# (`docker compose restart/stop`) Celery hands its un-acked messages straight
+# back and the analysis starts over immediately.
+#
+# A *hard* kill is slower to recover, not faster: the messages sit in Redis'
+# `unacked` set, and kombu only re-delivers them after its visibility timeout
+# (an hour by default). The guarantee that actually holds in that case is
+# app-side — `scheduler.requeue_stale_analyses` returns any row left RUNNING for
+# `ANALYSIS_TIMEOUT` to the queue. Don't rely on the broker for it.
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+# One task reserved at a time: an analysis takes seconds to minutes, so
+# prefetching a batch would hide those tasks from an idle worker and, with
+# `acks_late`, put the whole batch back on the queue when one worker dies.
+#
+# This bounds what a worker *reserves*, not what it *runs*: concurrency is a
+# separate knob, and Celery defaults it to one process per CPU core. That
+# default is wrong here — Ollama serves one request at a time, so parallel
+# analyses queue behind it until they exceed the coach's 150s timeout. The cap
+# lives with the worker command in `docker-compose.yaml` (`--concurrency=2`),
+# since it depends on the machine and the LLM runtime rather than on the app.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1

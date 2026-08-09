@@ -116,6 +116,7 @@ def _archive_game(**overrides):
         "url": "https://www.chess.com/game/daily/944768131",
         "white": {"username": "MyUser", "rating": 1500, "result": "win"},
         "black": {"username": "Opponent", "rating": 1600, "result": "resigned"},
+        "pgn": '[Result "1-0"]\n\n1. e4 e5 2. Nf3 1-0',
     }
     game.update(overrides)
     return game
@@ -137,7 +138,32 @@ class TestFinishedGameResults:
 
         results = client.finished_game_results()
 
-        assert results == {"944768131": {"result": "win", "detail": "resignation"}}
+        assert results == {
+            "944768131": {
+                "result": "win",
+                "detail": "resignation",
+                "pgn": '[Result "1-0"]\n\n1. e4 e5 2. Nf3 1-0',
+            }
+        }
+
+    def test_carries_the_archive_pgn(self):
+        """The final movetext travels with the result: our own snapshot stops at the
+        last sync before the game left "current games", so it can be truncated."""
+        game = _archive_game(pgn='[Result "0-1"]\n\n1. d4 d5 2. c4 e6 0-1')
+        client = _archive_client(_response([game]))
+
+        results = client.finished_game_results()
+
+        assert results["944768131"]["pgn"] == '[Result "0-1"]\n\n1. d4 d5 2. c4 e6 0-1'
+
+    def test_pgn_is_empty_when_the_archive_omits_it(self):
+        game = _archive_game()
+        del game["pgn"]
+        client = _archive_client(_response([game]))
+
+        results = client.finished_game_results()
+
+        assert results["944768131"]["pgn"] == ""
 
     def test_loss_uses_own_result_as_detail(self):
         game = _archive_game(
@@ -148,7 +174,8 @@ class TestFinishedGameResults:
 
         results = client.finished_game_results()
 
-        assert results["944768131"] == {"result": "loss", "detail": "checkmate"}
+        assert results["944768131"]["result"] == "loss"
+        assert results["944768131"]["detail"] == "checkmate"
 
     def test_draw_has_no_detail(self):
         game = _archive_game(
@@ -159,7 +186,8 @@ class TestFinishedGameResults:
 
         results = client.finished_game_results()
 
-        assert results["944768131"] == {"result": "draw", "detail": ""}
+        assert results["944768131"]["result"] == "draw"
+        assert results["944768131"]["detail"] == ""
 
     def test_matches_user_on_black_side_case_insensitively(self):
         game = _archive_game(
@@ -170,7 +198,8 @@ class TestFinishedGameResults:
 
         results = client.finished_game_results()
 
-        assert results["944768131"] == {"result": "loss", "detail": "timeout"}
+        assert results["944768131"]["result"] == "loss"
+        assert results["944768131"]["detail"] == "timeout"
 
     def test_skips_games_the_user_did_not_play(self):
         game = _archive_game(

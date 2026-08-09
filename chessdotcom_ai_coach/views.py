@@ -57,6 +57,39 @@ def _arrow(from_sq, to_sq, color, marker, flipped):
     return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "marker": marker}
 
 
+def _in_flight(row):
+    """True while the analysis is queued or running — both render as "pending".
+
+    The two are worth distinguishing in the scheduler (only a RUNNING row can time
+    out) but not on the card: either way the answer isn't there yet and the
+    fragment self-polls until it is.
+    """
+    return row.status in (
+        CoachSuggestion.Status.PENDING,
+        CoachSuggestion.Status.RUNNING,
+    )
+
+
+def _failed_coach(row, san=""):
+    """Card state for a position the coach gave up on.
+
+    Rendering a failure through the "analyzed" branch would show an empty
+    recommendation and claim the coach preferred nothing, so it gets its own state —
+    carrying the FEN, so the user can ask for the analysis again rather than being
+    left with a dead card.
+    """
+    return {
+        "mode": "failed",
+        "san": san,
+        "fen": row.fen,
+        # A row retired by the scheduler carries no prose — it never got far enough
+        # to produce any — so say why instead of showing a bare card.
+        "reason": row.analysis
+        or row.eval_text
+        or "The background analysis did not complete.",
+    }
+
+
 def _suggestion_fields(row):
     """The coach's move/eval/prose/arrow squares from a DONE suggestion row."""
     rec = _uci_to_squares(row.best_move_uci)
@@ -137,8 +170,12 @@ def _position_context(user, game, sel):
             coach = {"mode": "live_waiting"}
         elif head_row is None:
             coach = {"mode": "live_request", "fen": game.fen}
-        elif head_row.status == CoachSuggestion.Status.PENDING:
-            coach = {"mode": "live_pending"}
+        elif _in_flight(head_row):
+            # Carry the FEN so a card that comes back FAILED can re-enqueue this
+            # exact position rather than creating a duplicate row.
+            coach = {"mode": "live_pending", "fen": head_row.fen}
+        elif head_row.status == CoachSuggestion.Status.FAILED:
+            coach = _failed_coach(head_row)
         else:
             fields = _suggestion_fields(head_row)
             coach = {"mode": "live_analyzed", **fields}
@@ -153,8 +190,13 @@ def _position_context(user, game, sel):
         s = ply["suggestion"]
         if s is None:
             coach = {"mode": "unanalyzed", "san": ply["san"], "fen": ply["fen_before"]}
-        elif s.status == CoachSuggestion.Status.PENDING:
-            coach = {"mode": "pending", "san": ply["san"]}
+        elif _in_flight(s):
+            # `s.fen`, not `ply["fen_before"]`: the row was joined on the ply, so it
+            # may hold Chess.com's spelling of this position. Posting its own FEN
+            # makes a later retry hit that row instead of creating a duplicate.
+            coach = {"mode": "pending", "san": ply["san"], "fen": s.fen}
+        elif s.status == CoachSuggestion.Status.FAILED:
+            coach = _failed_coach(s, san=ply["san"])
         else:
             fields = _suggestion_fields(s)
             followed = ply["followed"]
@@ -179,7 +221,7 @@ def _position_context(user, game, sel):
     for i, m in enumerate(moves, start=1):
         s = m["suggestion"]
         done = m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.DONE
-        pending = m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.PENDING
+        pending = m["color"] == orientation and s is not None and _in_flight(s)
         moves_view.append(
             {
                 "sel": i,
@@ -205,7 +247,7 @@ def _position_context(user, game, sel):
             "sel": live_sel,
             "no": board_utils.fullmove_number(game.fen),
             "color": orientation,
-            "pending": head_row is not None and head_row.status == CoachSuggestion.Status.PENDING,
+            "pending": head_row is not None and _in_flight(head_row),
             "rec_san": (head_row.best_move_san if done else "") or "",
             "selected": at_live_head,
         }
@@ -384,16 +426,20 @@ def analyze_position(request, id):
                     eval_text="",
                     analysis="",
                 )
-                analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
-            elif row.status != CoachSuggestion.Status.PENDING:
+            else:
+                # Re-enqueue whatever state the row is in, in-flight ones included:
+                # an explicit click is exactly the signal to break a lock the
+                # scheduler hasn't timed out yet. `attempts` restarts too, so the
+                # user's retry isn't spent by earlier failures.
                 row.status = CoachSuggestion.Status.PENDING
+                row.attempts = 0
                 row.eval_text = ""
                 row.eval_cp = None
                 row.best_move_san = None
                 row.best_move_uci = None
                 row.analysis = ""
                 row.save()
-                analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
+            analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
             context = _position_context(request.user, game, sel)
 
     # Standalone card render: carry the eval bar and board arrows out-of-band so

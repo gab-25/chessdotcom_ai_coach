@@ -78,6 +78,13 @@ class Game(models.Model):
         return f"{self.white_name} vs {self.black_name} ({self.game_id})"
 
 
+# How many times a worker may start on the same position before it is retired as
+# FAILED. Lives here rather than in `services.scheduler` because both the worker
+# (`tasks.analyze_game_task`, which counts the attempts) and the scheduler (which
+# retries the stuck ones) need it, and the worker cannot import the scheduler.
+MAX_ANALYSIS_ATTEMPTS = 3
+
+
 class CoachSuggestion(models.Model):
     """The coach's analysis for one position: at most ONE per (user, game_id, fen).
 
@@ -96,15 +103,30 @@ class CoachSuggestion(models.Model):
     move_no = models.PositiveIntegerField(null=True, blank=True)
 
     class Status(models.TextChoices):
-        PENDING = "pending", "Pending"  # enqueued, analysis in flight
+        PENDING = "pending", "Pending"  # queued on the broker, no worker yet
+        RUNNING = "running", "Running"  # a worker picked it up and is analysing
         DONE = "done", "Done"  # analysis computed and persisted
+        FAILED = "failed", "Failed"  # gave up after MAX_ANALYSIS_ATTEMPTS
 
     # The row doubles as the in-flight lock: the scheduler creates it PENDING (via
     # get_or_create on the unique key) and only enqueues when it was just created,
-    # so a position under analysis is not re-enqueued on every 1s poll tick.
+    # so a position under analysis is not re-enqueued on every poll tick.
+    #
+    # PENDING and RUNNING are kept apart because they fail differently. A PENDING
+    # row is just waiting its turn on the broker — a whole-game backfill can leave
+    # it queued for far longer than an analysis takes — and is recovered by Celery
+    # redelivering the message (`task_acks_late`). A RUNNING row has a worker on
+    # it, so a single analysis bounds how long it may legitimately take, and
+    # anything past `services.scheduler.ANALYSIS_TIMEOUT` is genuinely stuck.
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.PENDING
     )
+    # How many times a worker has actually started analysing this position —
+    # incremented by `tasks.analyze_game_task` as it claims the row, not by
+    # whoever enqueued it, so a task sitting in a long queue never spends an
+    # attempt. Bounds the retrying so a position that fails every time (broken
+    # FEN, engine that won't start) is retired instead of looping for ever.
+    attempts = models.PositiveSmallIntegerField(default=0)
     eval_text = models.CharField(max_length=255, blank=True)
     eval_cp = models.FloatField(null=True, blank=True)
     best_move_san = models.CharField(max_length=16, blank=True, null=True)

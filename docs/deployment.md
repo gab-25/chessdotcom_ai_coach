@@ -15,7 +15,7 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 | --- | --- | --- |
 | `web` | built from [`Dockerfile`](../Dockerfile) | Gunicorn **plus** the APScheduler process, started by [`entrypoint.sh`](../entrypoint.sh). Exposes `8000`. |
 | `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish and calls the LLM. |
-| `redis` | `redis:7-alpine` | Celery broker and result backend. Health-checked with `redis-cli ping`. |
+| `redis` | `redis:7-alpine` | Celery broker and result backend, with append-only persistence on the `redis-data` volume (see [Volumes](#volumes)). Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
 | `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Needs a one-off model pull, see below. |
 
@@ -23,6 +23,31 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 only for `ollama` to have **started** — the coach degrades gracefully to
 Stockfish-only text when the LLM isn't answering yet, so blocking on it would be
 pointless.
+
+### Restarting the worker
+
+Safe to do at any time, including mid-analysis. Tasks are acknowledged after they
+run (`CELERY_TASK_ACKS_LATE`), so anything in flight when the container goes down
+**restarts from the beginning** rather than disappearing:
+
+```bash
+docker compose restart worker
+```
+
+This is a graceful stop, so Celery hands its un-acked messages back on the way
+out and you'll see the same tasks re-delivered in the new worker's log within
+seconds.
+
+A **hard** kill (OOM, `docker kill`) is different: nothing gets to hand anything
+back, and Redis only re-delivers those messages after kombu's visibility timeout,
+an hour by default. You'll see it as an `unacked` count stuck above the worker's
+concurrency. The recovery there is app-side and takes 10 minutes: the scheduler
+returns any row left `RUNNING` past `ANALYSIS_TIMEOUT` to the queue. Behind that
+sits the 10-minute finished-game scan, which re-queues analyses that went missing
+entirely.
+
+So a redeploy costs at most the mid-flight analyses, redone — never a gap in the
+history — but budget minutes, not seconds, when the worker died badly.
 
 ### After the first start: pull the model
 
@@ -40,6 +65,12 @@ Once only, per `ollama-data` volume. Details and how to switch model in
 
 - **`postgres-data`** — the database.
 - **`ollama-data`** — the model store. Keep it, or you have to re-pull ~2GB.
+- **`redis-data`** — the task queue, with `--appendonly yes`. Without it a
+  restart of the `redis` container empties the queue, and every analysis waiting
+  in it is orphaned: the `CoachSuggestion` row still reads `PENDING`, so the
+  reconciliation passes skip it as already queued and nothing ever runs it. The
+  scheduler does recover that state (`requeue_orphaned_analyses`), but only once
+  the queue is fully drained — keeping the volume avoids the situation.
 
 ## The container entrypoint
 

@@ -30,7 +30,7 @@ services:
       - LLM_MODEL=llama3.2:3b
       - REDIS_URL=redis://redis:6379/0
       - STOCKFISH_PATH=stockfish
-    command: celery -A chessdotcom_ai_coach worker -l info
+    command: celery -A chessdotcom_ai_coach worker -l info --concurrency=2
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +41,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
     ports:
       - "6379:6379"
     healthcheck:
@@ -78,3 +81,4 @@ services:
 volumes:
   postgres-data:
   ollama-data:
+  redis-data:
