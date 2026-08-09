@@ -135,6 +135,19 @@ class TestEnqueueGameAnalysis:
 
         assert result["enqueued"] == 2  # both of White's moves are untouched
 
+    def test_limit_caps_what_a_single_call_enqueues(self, mock_task, user):
+        """The finished-game scan sweeps the whole history, so it spreads a large
+        backlog over several runs instead of dumping it on the worker at once."""
+        _game(user)
+
+        result = enqueue_game_analysis(user, "g1", limit=1)
+
+        assert result["enqueued"] == 1
+        assert result["total"] == 2
+        assert mock_task.delay.call_count == 1
+        # The other move is simply left for the next call — nothing is marked.
+        assert CoachSuggestion.objects.filter(user=user, game_id="g1").count() == 1
+
     def test_returns_none_when_game_missing(self, mock_task, user):
         assert enqueue_game_analysis(user, "nope") is None
         mock_task.delay.assert_not_called()

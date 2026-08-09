@@ -18,11 +18,12 @@ grandmaster coach.
 - **Celery + Redis** — analysis runs out-of-band: a task is enqueued
   (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend, and
   a hidden HTMX poller reveals the result once the worker finishes
-- **APScheduler** — background scheduler (`manage.py run_scheduler`) that every
-  5 seconds syncs each linked user's current games from Chess.com into the local
-  DB and auto-enqueues analysis when it's the user's turn
-  (`chessdotcom_ai_coach/services/scheduler.py`). This is the only path that
-  keeps game data fresh — the pages just read what it already synced.
+- **APScheduler** — background scheduler (`manage.py run_scheduler`) with two
+  jobs (`chessdotcom_ai_coach/services/scheduler.py`): every 5 seconds it syncs
+  each linked user's current games from Chess.com into the local DB and enqueues
+  the analyses those games are missing, and every 10 minutes it does the same
+  sweep over the finished ones. This is the only path that keeps game data fresh
+  — the pages just read what it already synced.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
   `django-htmx`: game-list polling, move-by-move navigation, the coach card and
   the live game poll are all fragment swaps, with no custom JavaScript
@@ -107,13 +108,18 @@ users whose field is non-empty). Your current games appear within a few seconds.
 
 ## Analysing a whole game
 
-While a game is live the scheduler can only analyse the position its 5s poll
-happens to catch, so in fast time controls plenty of your turns come and go
-between two ticks and are never seen. Once the game ends and the archive gives us
-the final PGN, the scheduler backfills the rest automatically — every move you
-played gets its own analysis.
+Every move you played gets its own analysis, and you don't have to ask for it.
+The scheduler doesn't just react to the position it happens to see — on each run
+it compares the game's PGN against the analyses already stored and queues the
+difference. A turn that came and went between two polls, a task lost to a worker
+restart, a game that was already over when you linked the account: all of it is
+picked up on a later run. Active games are reconciled on the 5 second tick,
+finished ones every 10 minutes, for as long as they are stored.
 
-To force it (a game still in progress, or one the archive never resolved):
+Analyses are queued, not instant — a whole game is dozens of them, each a few
+seconds of Stockfish plus an LLM call — so a game you just finished fills in
+gradually. To skip the wait for one game, or to retry one whose analyses were
+given up on:
 
 ```bash
 uv run python manage.py analyze_game <game_id> [--user <username>]

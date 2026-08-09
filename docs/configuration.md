@@ -34,6 +34,22 @@ If analysis silently never completes locally, check `LLM_BASE_URL` and
 (`os.getenv`), not through Django settings — `settings.LLM_BASE_URL` exists but
 is informational.
 
+## Celery settings
+
+Not environment variables, but worth knowing why they are what they are — they
+are set in [`settings.py`](../chessdotcom_ai_coach/settings.py) and they change
+how the worker behaves under restart:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered. Restarting the worker container puts the in-flight analysis back on the broker and it starts over, instead of vanishing and leaving its `CoachSuggestion` row `RUNNING`. |
+| `CELERY_TASK_REJECT_ON_WORKER_LOST` | `True` | Makes the above cover a worker killed outright (an OOM kill), not just a clean shutdown. |
+| `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. |
+
+The redelivery this enables is why `attempts` is capped: a task that kills its
+worker would otherwise be redelivered for ever. See
+[data-model.md](data-model.md#the-lock-needs-an-expiry).
+
 ## What Docker Compose overrides
 
 [`docker-compose.yaml`](../docker-compose.yaml) passes `.env` through to the

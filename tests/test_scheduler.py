@@ -1,6 +1,8 @@
-"""Unit tests for the scheduler tick body: `sync_current_games` (Chess.com ->
-DB), `enqueue_due_analyses` (DB -> Celery), `backfill_results` (archives -> DB,
-then whole-game analysis) and `requeue_stale_analyses` (reviving lost tasks).
+"""Unit tests for the scheduler job bodies: `sync_current_games` (Chess.com ->
+DB), `enqueue_due_analyses` (DB -> Celery, for the active games),
+`backfill_results` (archives -> DB), `enqueue_finished_game_analyses` (the 10
+minute reconciliation over finished games) and `requeue_stale_analyses` (reviving
+analyses whose worker never came back).
 
 The Celery task and the Chess.com `Client` are mocked, so no broker, worker or
 network is needed.
@@ -12,12 +14,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.utils import timezone
 
-from chessdotcom_ai_coach.models import CoachSuggestion, Game
+from chessdotcom_ai_coach.models import MAX_ANALYSIS_ATTEMPTS, CoachSuggestion, Game
+from chessdotcom_ai_coach.services import analysis as analysis_module
+from chessdotcom_ai_coach.services import board as board_utils
 from chessdotcom_ai_coach.services.scheduler import (
-    MAX_ANALYSIS_ATTEMPTS,
-    STALE_PENDING_AFTER,
+    ANALYSIS_TIMEOUT,
     backfill_results,
     enqueue_due_analyses,
+    enqueue_finished_game_analyses,
     requeue_stale_analyses,
     sync_current_games,
 )
@@ -25,6 +29,9 @@ from chessdotcom_ai_coach.services.scheduler import (
 # White to move (FEN field 2 = "w") vs. black to move.
 WHITE_TO_MOVE = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 BLACK_TO_MOVE = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+
+# Two moves each; the user (White) played e4 and Nf3.
+PGN = '[Event "Test"]\n\n1. e4 e5 2. Nf3 Nc6 *'
 
 
 @pytest.fixture
@@ -114,6 +121,34 @@ class TestEnqueueDueAnalyses:
         assert enqueued == 1
         mock_task.delay.assert_called_once()
 
+    @patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
+    def test_also_enqueues_moves_the_poll_missed(self, mock_backfill_task, mock_task, user):
+        """A 5s poll only sees the position it lands on, so in fast time controls
+        most turns come and go unseen. The already-played moves in the PGN are
+        reconciled on every tick instead of waiting for the game to end."""
+        _game(user, fen=BLACK_TO_MOVE, pgn=PGN)  # opponent to move: no live enqueue
+
+        enqueued = enqueue_due_analyses()
+
+        assert enqueued == 2  # e4 and Nf3
+        assert mock_backfill_task.delay.call_count == 2
+        mock_task.delay.assert_not_called()
+        white_fens = {
+            m["fen_before"]
+            for m in board_utils.moves_from_pgn(PGN)
+            if m["color"] == "white"
+        }
+        rows = CoachSuggestion.objects.filter(user=user, game_id="944768131")
+        assert set(rows.values_list("fen", flat=True)) == white_fens
+
+    @patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
+    def test_missed_moves_are_enqueued_once(self, mock_backfill_task, mock_task, user):
+        _game(user, fen=BLACK_TO_MOVE, pgn=PGN)
+
+        assert enqueue_due_analyses() == 2
+        assert enqueue_due_analyses() == 0
+        assert mock_backfill_task.delay.call_count == 2
+
 
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.services.scheduler.game_store.upsert_current_games")
@@ -197,7 +232,6 @@ class TestSyncCurrentGames:
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler.enqueue_game_analysis")
 @patch("chessdotcom_ai_coach.services.scheduler.game_store.set_result")
 @patch("chessdotcom_ai_coach.services.scheduler.Client")
 class TestBackfillResults:
@@ -209,7 +243,7 @@ class TestBackfillResults:
         )
 
     def test_resolves_unresolved_finished_game(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
+        self, mock_client_cls, mock_set_result, django_user_model
     ):
         user = self._linked_user(django_user_model)
         _game(user, is_active=False)  # finished, result still UNKNOWN
@@ -231,34 +265,8 @@ class TestBackfillResults:
             user, "944768131", "win", "resignation", "1. e4 e5 1-0"
         )
 
-    def test_backfills_every_user_move_of_the_resolved_game(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
-    ):
-        """The live path only analyses positions a 5s poll happens to catch, so the
-        moves it missed are filled in once the game ends and the full PGN is known."""
-        user = self._linked_user(django_user_model)
-        _game(user, is_active=False)
-        mock_client_cls.return_value.finished_game_results.return_value = {
-            "944768131": {"result": "win", "detail": "", "pgn": "1. e4 e5 1-0"}
-        }
-
-        backfill_results()
-
-        mock_enqueue.assert_called_once_with(user, "944768131")
-
-    def test_does_not_backfill_moves_of_an_unresolved_game(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
-    ):
-        user = self._linked_user(django_user_model)
-        _game(user, is_active=False)
-        mock_client_cls.return_value.finished_game_results.return_value = {}
-
-        backfill_results()
-
-        mock_enqueue.assert_not_called()
-
     def test_skips_when_no_unresolved_games(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
+        self, mock_client_cls, mock_set_result, django_user_model
     ):
         user = self._linked_user(django_user_model)
         _game(user, is_active=True)  # still live → not backfilled
@@ -270,7 +278,7 @@ class TestBackfillResults:
         mock_set_result.assert_not_called()
 
     def test_leaves_unmatched_games_unresolved(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
+        self, mock_client_cls, mock_set_result, django_user_model
     ):
         user = self._linked_user(django_user_model)
         _game(user, is_active=False)
@@ -283,7 +291,7 @@ class TestBackfillResults:
         mock_set_result.assert_not_called()
 
     def test_falls_back_to_previous_month_when_not_in_current(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
+        self, mock_client_cls, mock_set_result, django_user_model
     ):
         user = self._linked_user(django_user_model)
         _game(user, is_active=False)
@@ -300,7 +308,7 @@ class TestBackfillResults:
         mock_set_result.assert_called_once_with(user, "944768131", "draw", "", "")
 
     def test_one_users_failure_does_not_block_the_rest(
-        self, mock_client_cls, mock_set_result, mock_enqueue, django_user_model
+        self, mock_client_cls, mock_set_result, django_user_model
     ):
         bad = django_user_model.objects.create_user(
             username="bad_login", password="pw12345!", chessdotcom_username="Bad"
@@ -330,24 +338,131 @@ class TestBackfillResults:
 
 
 @pytest.mark.django_db
+@patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
+class TestEnqueueFinishedGameAnalyses:
+    """The 10 minute scan: every finished game is compared against its rows and the
+    difference is queued, so anything the live path missed is eventually covered."""
+
+    def _linked_user(self, django_user_model):
+        return django_user_model.objects.create_user(
+            username="login_name", password="pw12345!", chessdotcom_username="MyUser"
+        )
+
+    def test_enqueues_the_moves_a_finished_game_is_missing(
+        self, mock_task, django_user_model
+    ):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False, pgn=PGN)
+
+        # White (the user) played two moves; neither has been analysed.
+        assert enqueue_finished_game_analyses() == 2
+        assert mock_task.delay.call_count == 2
+        assert CoachSuggestion.objects.filter(user=user).count() == 2
+
+    def test_does_not_re_enqueue_what_is_already_covered(
+        self, mock_task, django_user_model
+    ):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False, pgn=PGN)
+        enqueue_finished_game_analyses()
+        mock_task.delay.reset_mock()
+
+        # A second run finds nothing left to do — this is what makes it safe to run
+        # every ten minutes for as long as the game is stored.
+        assert enqueue_finished_game_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_covers_a_game_whose_result_never_resolved(
+        self, mock_task, django_user_model
+    ):
+        """The archive backfill gives up after `RESULT_BACKFILL_WINDOW`; the scan
+        reads the stored PGN instead, so such a game is still analysed."""
+        user = self._linked_user(django_user_model)
+        game = _game(user, is_active=False, pgn=PGN, result=Game.Result.UNKNOWN)
+        Game.objects.filter(pk=game.pk).update(
+            updated_at=timezone.now() - timedelta(days=30)
+        )
+
+        assert enqueue_finished_game_analyses() == 2
+
+    def test_skips_active_games(self, mock_task, django_user_model):
+        # Those belong to the 5s tick, which also has the live position to enqueue.
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=True, pgn=PGN)
+
+        assert enqueue_finished_game_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_skips_games_without_a_pgn(self, mock_task, django_user_model):
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False, pgn="")
+
+        assert enqueue_finished_game_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_stops_at_the_per_run_budget(self, mock_task, django_user_model):
+        user = self._linked_user(django_user_model)
+        _game(user, game_id="g1", is_active=False, pgn=PGN)
+        _game(user, game_id="g2", is_active=False, pgn=PGN)
+
+        with patch(
+            "chessdotcom_ai_coach.services.scheduler.ENQUEUE_BUDGET_PER_RUN", 3
+        ):
+            assert enqueue_finished_game_analyses() == 3
+
+        # The fourth analysis waits for the next run rather than piling onto the
+        # worker now.
+        assert mock_task.delay.call_count == 3
+
+    def test_one_users_failure_does_not_block_the_rest(
+        self, mock_task, django_user_model
+    ):
+        bad = self._linked_user(django_user_model)
+        good = django_user_model.objects.create_user(
+            username="good_login", password="pw12345!", chessdotcom_username="Good"
+        )
+        _game(bad, game_id="bad-game", is_active=False, pgn=PGN)
+        _game(good, game_id="good-game", is_active=False, pgn=PGN, white_name="Good")
+
+        real = analysis_module.enqueue_game_analysis
+
+        def _explode(user, game_id, **kwargs):
+            if game_id == "bad-game":
+                raise RuntimeError("boom")
+            return real(user, game_id, **kwargs)
+
+        with patch(
+            "chessdotcom_ai_coach.services.scheduler.enqueue_game_analysis", _explode
+        ):
+            assert enqueue_finished_game_analyses() == 2  # must not raise
+
+        assert CoachSuggestion.objects.filter(user=good).count() == 2
+
+
+@pytest.mark.django_db
 @patch("chessdotcom_ai_coach.services.scheduler.analyze_game_task")
 class TestRequeueStaleAnalyses:
-    """A `CoachSuggestion` row is the in-flight lock, so a task that dies with its
-    worker would otherwise leave the position PENDING — and skipped by every later
-    `get_or_create` — for ever. These cover the expiry that breaks that deadlock."""
+    """A `CoachSuggestion` row is the in-flight lock, so an analysis whose worker
+    never came back would otherwise leave the position RUNNING — and skipped by
+    every later `get_or_create` — for ever. These cover the expiry on that lock.
 
-    def _pending(self, user, age, **kwargs):
-        """A PENDING row whose `updated_at` is forced back by ``age``.
+    Only RUNNING rows are swept: a PENDING row is queued, not stuck, and can
+    legitimately wait far longer than `ANALYSIS_TIMEOUT` while a scan drains.
+    """
+
+    def _running(self, user, age, **kwargs):
+        """A RUNNING row whose `updated_at` is forced back by ``age``.
 
         `updated_at` is `auto_now`, so it can't be set on create — it has to be
-        rewritten with a queryset update, which doesn't re-trigger the field.
+        rewritten with a queryset update, which doesn't re-trigger the field. For a
+        RUNNING row it is the moment the worker started, which is what times out.
         """
         row = CoachSuggestion.objects.create(
             user=user,
             game_id="944768131",
             fen=WHITE_TO_MOVE,
             move_no=1,
-            status=CoachSuggestion.Status.PENDING,
+            status=CoachSuggestion.Status.RUNNING,
             eval_text="",
             analysis="",
             **kwargs,
@@ -358,20 +473,22 @@ class TestRequeueStaleAnalyses:
         row.refresh_from_db()
         return row
 
-    def test_requeues_a_row_stuck_past_the_threshold(self, mock_task, user):
+    def test_requeues_a_row_stuck_past_the_timeout(self, mock_task, user):
         _game(user)
-        row = self._pending(user, STALE_PENDING_AFTER + timedelta(minutes=1), attempts=1)
+        row = self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1), attempts=1)
 
         assert requeue_stale_analyses() == 1
 
         mock_task.delay.assert_called_once()
         row.refresh_from_db()
         assert row.status == CoachSuggestion.Status.PENDING
-        assert row.attempts == 2
+        # The attempt is counted by the worker when it picks the row up, not here,
+        # so a re-queue that turns out to be unnecessary costs nothing.
+        assert row.attempts == 1
 
     def test_passes_the_games_pgn_to_the_task(self, mock_task, user):
         _game(user, pgn="1. e4 e5")
-        self._pending(user, STALE_PENDING_AFTER + timedelta(minutes=1), attempts=1)
+        self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1), attempts=1)
 
         requeue_stale_analyses()
 
@@ -379,16 +496,29 @@ class TestRequeueStaleAnalyses:
             user.id, "944768131", WHITE_TO_MOVE, "1. e4 e5"
         )
 
-    def test_leaves_a_recently_enqueued_row_alone(self, mock_task, user):
+    def test_leaves_an_analysis_within_the_timeout_alone(self, mock_task, user):
         _game(user)
-        self._pending(user, timedelta(minutes=1), attempts=1)
+        self._running(user, timedelta(minutes=1), attempts=1)
+
+        assert requeue_stale_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_ignores_queued_rows(self, mock_task, user):
+        """A PENDING row has no worker on it: it is waiting its turn on the broker,
+        which redelivers it if the worker dies (`task_acks_late`). Timing it out
+        would re-queue healthy work and deepen the very backlog it reacts to."""
+        _game(user)
+        row = self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1))
+        CoachSuggestion.objects.filter(pk=row.pk).update(
+            status=CoachSuggestion.Status.PENDING
+        )
 
         assert requeue_stale_analyses() == 0
         mock_task.delay.assert_not_called()
 
     def test_ignores_completed_rows(self, mock_task, user):
         _game(user)
-        row = self._pending(user, STALE_PENDING_AFTER + timedelta(minutes=1))
+        row = self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1))
         CoachSuggestion.objects.filter(pk=row.pk).update(
             status=CoachSuggestion.Status.DONE
         )
@@ -398,9 +528,9 @@ class TestRequeueStaleAnalyses:
 
     def test_gives_up_after_the_attempt_cap(self, mock_task, user):
         _game(user)
-        row = self._pending(
+        row = self._running(
             user,
-            STALE_PENDING_AFTER + timedelta(minutes=1),
+            ANALYSIS_TIMEOUT + timedelta(minutes=1),
             attempts=MAX_ANALYSIS_ATTEMPTS,
         )
 
@@ -408,15 +538,12 @@ class TestRequeueStaleAnalyses:
 
         mock_task.delay.assert_not_called()
         row.refresh_from_db()
-        # Closed as DONE (not a new status) so the card stops spinning, carrying the
-        # same "unavailable" shape `coach.get_best_move` produces on engine failure.
-        assert row.status == CoachSuggestion.Status.DONE
-        assert row.eval_text == "Analysis unavailable."
-        assert "did not complete" in row.analysis
+        # Retired explicitly, so the card can offer a retry instead of spinning.
+        assert row.status == CoachSuggestion.Status.FAILED
 
     def test_survives_a_row_whose_game_is_gone(self, mock_task, user):
         # No `Game` row: the suggestion is decoupled from Game by design.
-        self._pending(user, STALE_PENDING_AFTER + timedelta(minutes=1), attempts=1)
+        self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1), attempts=1)
 
         assert requeue_stale_analyses() == 1
         mock_task.delay.assert_called_once_with(

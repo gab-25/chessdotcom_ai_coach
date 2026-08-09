@@ -30,7 +30,7 @@ that **never analyses anything**.
 ```bash
 uv run python manage.py runserver                        # 1. the web app
 uv run celery -A chessdotcom_ai_coach worker -l info     # 2. the analysis worker
-uv run python manage.py run_scheduler                    # 3. the APScheduler tick
+uv run python manage.py run_scheduler                    # 3. the APScheduler jobs
                                                          # 4. Redis + Postgres
 ```
 
@@ -39,7 +39,7 @@ Symptoms when one is missing:
 | Missing | What you see |
 | --- | --- |
 | Scheduler | The home page stays empty (or frozen at an old state) — nothing ever syncs from Chess.com. |
-| Celery worker | Games appear, but every analysis sits on **"Analyzing…"** forever. The `CoachSuggestion` row is `PENDING` and nothing consumes the queue. |
+| Celery worker | Games appear, but every analysis sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING` — nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and the scheduler retries it after 10 minutes.) |
 | Redis | The scheduler logs connection errors on every tick. |
 
 ## First run
@@ -82,9 +82,10 @@ uv run python manage.py run_scheduler
 ```
 
 The APScheduler process — **the only scheduling in the project** (there is no
-Celery Beat). Runs one blocking scheduler with a 5-second interval job, and must
-exist exactly once: an in-process scheduler under Gunicorn would start once per
-worker and enqueue duplicates.
+Celery Beat). One blocking scheduler running two interval jobs: the 5-second live
+tick and the 10-minute scan over finished games. It must exist exactly once: an
+in-process scheduler under Gunicorn would start once per worker and enqueue
+duplicates.
 
 ### `analyze_game`
 
@@ -92,11 +93,11 @@ worker and enqueue duplicates.
 uv run python manage.py analyze_game <game_id> [--user <username>]
 ```
 
-A finished game is backfilled automatically (`scheduler.backfill_results` runs
-this once the archive resolves the outcome), so this command is for forcing it:
-a game still in progress, or one the archive never matched — an alias mismatch,
-or an end date outside `RESULT_BACKFILL_WINDOW`. It enqueues analysis for
-**every** move you played in the game.
+The scheduler already reconciles every game towards "every user move analysed",
+so this command is for not waiting on it — or for re-running a game whose
+analyses were retired as `FAILED`, which the scheduler will not pick up again by
+design. It enqueues analysis for **every** move you played in the game and is
+idempotent.
 
 It reads the stored snapshot (no Chess.com call) and is idempotent: moves already
 analysed or queued are skipped, so re-running is safe. `--user` is only needed

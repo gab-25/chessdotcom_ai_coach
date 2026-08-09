@@ -37,7 +37,8 @@ erDiagram
         string game_id "no FK — decoupled from Game"
         string fen "the analysed position = join key"
         int move_no
-        string status "pending|done"
+        string status "pending|running|done|failed"
+        int attempts "worker starts, capped at 3"
         string eval_text
         float eval_cp "White POV, drives the eval bar"
         string best_move_san
@@ -96,6 +97,13 @@ re-fetched forever. At a month boundary the previous month's archive is merged i
 as a fallback, since long daily games routinely end in a different month from the
 one they're queried in.
 
+The backfill also writes the archive's PGN alongside the result: our own snapshot
+stops at the last sync before the game left "current games", so it can be missing
+the closing moves. Note that this window bounds the **Chess.com calls** only.
+Analysis is not enqueued from here — `enqueue_finished_game_analyses` works off
+the stored PGN and has no window, so a game whose result never resolves is still
+analysed in full.
+
 Two helpers make templates readable: `has_result` (is it resolved?) and
 `result_label` (`"Win"` / `"Loss"` / `"Draw"`, or `""` while unknown).
 
@@ -122,58 +130,72 @@ if created:
 ```
 
 Because the unique constraint on `(user, game_id, fen)` makes `get_or_create`
-atomic, `created=True` happens exactly once per position. The scheduler runs this
-every 5 seconds against every active game and enqueues **only** on the tick that
-created the row — a position already pending or done is skipped for free.
-
-The same pattern appears in
-[`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py), which is
-what makes `manage.py analyze_game` safe to re-run.
+atomic, `created=True` happens exactly once per position. Every enqueue path runs
+this — the 5s tick over active games, the 10 minute scan over finished ones,
+`manage.py analyze_game` — and enqueues **only** when it created the row. A
+position already queued, running or done is skipped for free, which is precisely
+what lets those paths be re-run on a schedule instead of being one-shot triggers.
 
 The one place that deliberately bypasses it is the explicit **re-analyze** button
 ([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py)): on `POST`, the
-row is reset to `PENDING` with its fields cleared and re-enqueued whatever state
-it was in, pending included. That's a user asking for a fresh take, not a
-duplicate — and it's the manual way out of the deadlock described next.
+row is reset to `PENDING` with its fields and `attempts` cleared and re-enqueued
+whatever state it was in, in-flight included. That's a user asking for a fresh
+take, not a duplicate — and it's the manual way out of the deadlock described
+next.
 
 ### The lock needs an expiry
 
-Making the row the lock has one failure mode: if the task dies with its worker
-(an OOM kill, say — Celery does not redeliver by default), nothing ever writes
-the row to `DONE`. It stays `PENDING`, every later `get_or_create` finds it and
-enqueues nothing, and the coach card self-polls for ever. The lock is held by a
-task that no longer exists.
+Making the row the lock has one failure mode: if the analysis never completes,
+nothing ever writes the row to `DONE`. It stays in flight, every later
+`get_or_create` finds it and enqueues nothing, and the coach card self-polls for
+ever. The lock is held by a task that no longer exists.
 
-`scheduler.requeue_stale_analyses()` gives it an expiry. A row untouched for
-`STALE_PENDING_AFTER` is handed back to the worker and its `attempts` bumped; the
-save refreshes `updated_at`, which spaces out the next retry. Past
-`MAX_ANALYSIS_ATTEMPTS` the position is retired as `DONE` carrying the same
-"unavailable" shape `coach.get_best_move` produces on engine failure, so the card
-stops spinning without inventing a new status.
+Two mechanisms cover it, and they split along a line worth understanding: **is
+there a worker on this row or not?**
 
-`STALE_PENDING_AFTER` is deliberately generous (30 minutes). It has to exceed the
-worst-case **queue** wait, not the runtime of one analysis: a whole-game backfill
-is ~40 moves × (2s Stockfish + up to 150s LLM), so a task can sit queued far
-longer than it takes to run. Too low a value re-queues tasks that are still alive
-and grows the very backlog it's reacting to. A spurious re-enqueue is wasteful but
-never corrupting — `analyze_game_task` upserts on the same key.
+- **`PENDING` — no worker yet.** The message is on the broker, waiting its turn.
+  It can wait a long time and be perfectly healthy: a scan of a finished game
+  queues ~40 analyses at 2s of Stockfish plus up to 150s of LLM each, so the last
+  one may not start for the better part of an hour. Recovery here is Celery's:
+  `CELERY_TASK_ACKS_LATE` means the task is acknowledged after it ran, so a worker
+  that dies holding it causes the broker to **redeliver** it, and it restarts from
+  the beginning. Nothing in the app has to notice.
+- **`RUNNING` — a worker claimed it.** `analyze_game_task` sets this as it starts
+  and `updated_at` records when. Now there *is* a bound on how long it may take,
+  so `scheduler.requeue_stale_analyses()` sweeps anything older than
+  `ANALYSIS_TIMEOUT` (10 minutes — a wide margin over the ~152s worst case) back
+  to `PENDING` and onto the queue.
+
+Timing out `PENDING` on the same clock would be a bug, not extra safety: it would
+re-queue healthy work that was merely waiting, deepening the very backlog it was
+reacting to, and burn the retry budget of analyses that never failed.
+
+`attempts` is counted by the **worker**, not by whoever enqueued the task, for the
+same reason: a queue wait is not an attempt. The fourth claim on a position
+retires it as `FAILED` instead of running it, which is what stops a task that
+kills its worker from being redelivered for ever. A `FAILED` row renders as a card
+with a "Try again" button rather than a spinner that never resolves.
 
 ### Status lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: scheduler / analyze_game / re-analyze<br/>creates the row
-    PENDING --> DONE: analyze_game_task persists the result
+    [*] --> PENDING: an enqueue path creates the row
+    PENDING --> RUNNING: analyze_game_task claims it<br/>attempts += 1
+    RUNNING --> DONE: the analysis is persisted
+    RUNNING --> FAILED: the engine returned nothing
+    RUNNING --> PENDING: requeue_stale_analyses<br/>past ANALYSIS_TIMEOUT
+    RUNNING --> FAILED: retired at MAX_ANALYSIS_ATTEMPTS
+    PENDING --> PENDING: broker redelivers a lost task
     DONE --> PENDING: user clicks "Re-analyze"
-    PENDING --> PENDING: HTMX self-polls every 2s
-    PENDING --> PENDING: requeue_stale_analyses<br/>revives a lost task
-    PENDING --> DONE: retired after MAX_ANALYSIS_ATTEMPTS
+    FAILED --> PENDING: user clicks "Try again"
 ```
 
-A row stuck at `PENDING` for a few seconds is normal. One that stays there across
-several scheduler ticks *and* is never revived means **no Celery worker is
-running** — the task was enqueued into Redis and nothing consumed it. That is
-exactly the "Analyzing…" symptom described in [development.md](development.md).
+A row in flight for a few seconds is normal. One that stays `PENDING` across many
+ticks and never reaches `RUNNING` means **no Celery worker is running** — the task
+went into Redis and nothing consumed it. That is exactly the "Analyzing…" symptom
+described in [development.md](development.md), and the reason the timeout does not
+apply to `PENDING`: no amount of re-queuing helps when nothing is listening.
 
 ### Duplicate rows for one ply
 
@@ -181,10 +203,12 @@ The unique key is the raw FEN, but the same ply can reach the DB under two
 spellings: the live scheduler stores Chess.com's FEN while
 [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) stores
 python-chess's `board.fen()`, and the two can differ in the halfmove clock or the
-en-passant field. `_ply_already_covered` therefore matches on `(move_no, side to
-move)` — the ply identity `board_utils.annotate_moves` already joins on — before
-creating anything, so the end-of-game backfill doesn't re-analyse every move the
-coach already handled live.
+en-passant field. `_covered_plies` therefore reads the game's existing rows once
+and matches on `(move_no, side to move)` — the ply identity
+`board_utils.annotate_moves` already joins on — before creating anything. Without
+it every reconciliation pass would re-analyse every move the coach already handled
+live; one query per game rather than per move matters because those passes run on
+every active game each tick.
 
 ### Evaluation fields
 
@@ -198,7 +222,9 @@ coach already handled live.
   display, UCI because `views._uci_to_squares` slices it into from/to squares for
   the board arrow overlay.
 - **`analysis`** — the LLM's prose, or the Stockfish-only fallback text when the
-  LLM was unreachable. It's never empty for a `DONE` row.
+  LLM was unreachable. It's never empty for a `DONE` row. On a `FAILED` row it
+  carries the engine error, when there was one — a position retired by the
+  scheduler has no prose at all, and the card supplies the wording.
 
 **Constraints:** unique on `(user, game_id, fen)`; default ordering
 `["move_no", "-updated_at"]`, which is why the analysis-history timeline comes
@@ -206,6 +232,6 @@ out in move order without any explicit sort.
 
 ## Migrations
 
-`migrations/0001` … `0004`, in [`chessdotcom_ai_coach/migrations/`](../chessdotcom_ai_coach/migrations/).
+`migrations/0001` … `0006`, in [`chessdotcom_ai_coach/migrations/`](../chessdotcom_ai_coach/migrations/).
 Applied automatically by [`entrypoint.sh`](../entrypoint.sh) on container start;
 run `uv run python manage.py migrate` by hand for local development.

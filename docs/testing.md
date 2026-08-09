@@ -31,7 +31,7 @@ and `pytest-django`.
 | Module | Covers |
 | --- | --- |
 | [`test_views.py`](../tests/test_views.py) | 64 tests — the largest by far. Grouped into classes per concern: `TestHome`, `TestGameDetail`, `TestAnalyzePosition`, `TestCoachCardModes`, `TestMovesGrid`, `TestLiveMoveSlot`, `TestHistoryList`, … |
-| [`test_scheduler.py`](../tests/test_scheduler.py) | The tick: syncing, result backfill, enqueue deduplication |
+| [`test_scheduler.py`](../tests/test_scheduler.py) | Both jobs: syncing, result backfill, enqueue deduplication, the finished-game scan, and the timeout that revives a stuck analysis |
 | [`test_chess_client.py`](../tests/test_chess_client.py) | Chess.com response parsing, including the archive result codes |
 | [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch and the LLM fallback |
 | [`test_board.py`](../tests/test_board.py) | FEN/PGN expansion |

@@ -140,3 +140,14 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TASK_ALWAYS_EAGER = False
+
+# Acknowledge a task after it ran, not when it was delivered. Restarting the
+# worker container (or an OOM kill) then puts the in-flight analysis back on the
+# broker and it starts over, instead of vanishing and stranding its
+# `CoachSuggestion` row RUNNING until the scheduler's timeout notices.
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+# One task reserved at a time: an analysis takes seconds to minutes, so
+# prefetching a batch would hide those tasks from an idle worker and, with
+# `acks_late`, put the whole batch back on the queue when one worker dies.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1

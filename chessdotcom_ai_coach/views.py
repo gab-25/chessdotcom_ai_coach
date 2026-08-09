@@ -57,19 +57,21 @@ def _arrow(from_sq, to_sq, color, marker, flipped):
     return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "color": color, "marker": marker}
 
 
-def _is_failed(row):
-    """True when a DONE row carries no analysis at all — neither move nor eval.
+def _in_flight(row):
+    """True while the analysis is queued or running — both render as "pending".
 
-    Either the engine errored (``coach.get_best_move`` still returns a row) or the
-    scheduler retired the position after too many lost tasks. The eval check is what
-    separates a failure from a *terminal* position, where Stockfish legitimately has
-    no move to suggest but still scores the position.
+    The two are worth distinguishing in the scheduler (only a RUNNING row can time
+    out) but not on the card: either way the answer isn't there yet and the
+    fragment self-polls until it is.
     """
-    return not row.best_move_san and row.eval_cp is None
+    return row.status in (
+        CoachSuggestion.Status.PENDING,
+        CoachSuggestion.Status.RUNNING,
+    )
 
 
 def _failed_coach(row, san=""):
-    """Card state for a finished analysis that produced nothing.
+    """Card state for a position the coach gave up on.
 
     Rendering a failure through the "analyzed" branch would show an empty
     recommendation and claim the coach preferred nothing, so it gets its own state —
@@ -80,7 +82,11 @@ def _failed_coach(row, san=""):
         "mode": "failed",
         "san": san,
         "fen": row.fen,
-        "reason": row.analysis or row.eval_text or "",
+        # A row retired by the scheduler carries no prose — it never got far enough
+        # to produce any — so say why instead of showing a bare card.
+        "reason": row.analysis
+        or row.eval_text
+        or "The background analysis did not complete.",
     }
 
 
@@ -164,11 +170,11 @@ def _position_context(user, game, sel):
             coach = {"mode": "live_waiting"}
         elif head_row is None:
             coach = {"mode": "live_request", "fen": game.fen}
-        elif head_row.status == CoachSuggestion.Status.PENDING:
-            # Carry the FEN so the card's retry button can re-enqueue a position
-            # whose task was lost, without waiting for the scheduler to notice.
+        elif _in_flight(head_row):
+            # Carry the FEN so a card that comes back FAILED can re-enqueue this
+            # exact position rather than creating a duplicate row.
             coach = {"mode": "live_pending", "fen": head_row.fen}
-        elif _is_failed(head_row):
+        elif head_row.status == CoachSuggestion.Status.FAILED:
             coach = _failed_coach(head_row)
         else:
             fields = _suggestion_fields(head_row)
@@ -184,12 +190,12 @@ def _position_context(user, game, sel):
         s = ply["suggestion"]
         if s is None:
             coach = {"mode": "unanalyzed", "san": ply["san"], "fen": ply["fen_before"]}
-        elif s.status == CoachSuggestion.Status.PENDING:
+        elif _in_flight(s):
             # `s.fen`, not `ply["fen_before"]`: the row was joined on the ply, so it
             # may hold Chess.com's spelling of this position. Posting its own FEN
-            # makes the retry hit the stuck row instead of creating a duplicate.
+            # makes a later retry hit that row instead of creating a duplicate.
             coach = {"mode": "pending", "san": ply["san"], "fen": s.fen}
-        elif _is_failed(s):
+        elif s.status == CoachSuggestion.Status.FAILED:
             coach = _failed_coach(s, san=ply["san"])
         else:
             fields = _suggestion_fields(s)
@@ -215,7 +221,7 @@ def _position_context(user, game, sel):
     for i, m in enumerate(moves, start=1):
         s = m["suggestion"]
         done = m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.DONE
-        pending = m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.PENDING
+        pending = m["color"] == orientation and s is not None and _in_flight(s)
         moves_view.append(
             {
                 "sel": i,
@@ -241,7 +247,7 @@ def _position_context(user, game, sel):
             "sel": live_sel,
             "no": board_utils.fullmove_number(game.fen),
             "color": orientation,
-            "pending": head_row is not None and head_row.status == CoachSuggestion.Status.PENDING,
+            "pending": head_row is not None and _in_flight(head_row),
             "rec_san": (head_row.best_move_san if done else "") or "",
             "selected": at_live_head,
         }
@@ -252,8 +258,6 @@ def _position_context(user, game, sel):
         s = m["suggestion"]
         if m["color"] != orientation or s is None or s.status != CoachSuggestion.Status.DONE:
             continue
-        if _is_failed(s):
-            continue  # a failed analysis is not a suggestion to list
         history_view.append(
             {
                 "sel": i,
@@ -419,17 +423,16 @@ def analyze_position(request, id):
                     fen=fen,
                     status=CoachSuggestion.Status.PENDING,
                     move_no=board_utils.fullmove_number(fen),
-                    attempts=1,
                     eval_text="",
                     analysis="",
                 )
             else:
-                # Re-enqueue whatever state the row is in, PENDING included: a task
-                # lost with its worker leaves the row pending for ever, and an
-                # explicit click is exactly the signal to break that lock. `attempts`
-                # restarts too, so the user's retry isn't spent by earlier failures.
+                # Re-enqueue whatever state the row is in, in-flight ones included:
+                # an explicit click is exactly the signal to break a lock the
+                # scheduler hasn't timed out yet. `attempts` restarts too, so the
+                # user's retry isn't spent by earlier failures.
                 row.status = CoachSuggestion.Status.PENDING
-                row.attempts = 1
+                row.attempts = 0
                 row.eval_text = ""
                 row.eval_cp = None
                 row.best_move_san = None
