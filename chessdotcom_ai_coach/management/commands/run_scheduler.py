@@ -33,6 +33,7 @@ from ...services.scheduler import (
     backfill_results,
     enqueue_due_analyses,
     enqueue_finished_game_analyses,
+    requeue_orphaned_analyses,
     requeue_stale_analyses,
     sync_current_games,
 )
@@ -93,12 +94,19 @@ class Command(BaseCommand):
         except Exception:
             logger.exception("Scheduler tick failed")
         try:
-            # Last: anything still RUNNING well past the analysis timeout lost its
+            # Anything still RUNNING well past the analysis timeout lost its
             # worker, so hand it back to the queue (or retire it) rather than leave
             # the row locking the position for ever.
             requeue_stale_analyses()
         except Exception:
             logger.exception("Stale-analysis requeue failed")
+        try:
+            # Last, the other half of that: a row that lost its *message* rather
+            # than its worker. Runs after the requeue above so a row it just put
+            # back on the queue is not mistaken for an orphan.
+            requeue_orphaned_analyses()
+        except Exception:
+            logger.exception("Orphaned-analysis requeue failed")
 
     def _scan_finished(self):
         try:

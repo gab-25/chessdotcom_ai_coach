@@ -159,9 +159,17 @@ there a worker on this row or not?**
   one may not start for the better part of an hour. Recovery here is Celery's:
   `CELERY_TASK_ACKS_LATE` means the task is acknowledged after it ran, so a worker
   that dies holding it hands the message back (on a graceful stop) or leaves it
-  for the broker's visibility timeout (on a hard kill). Nothing in the app has to
-  notice — and nothing in the app *can* usefully notice, since a queued row looks
-  identical whether its message is alive or stranded.
+  for the broker's visibility timeout (on a hard kill).
+
+  What that does *not* cover is the message going missing altogether — Redis
+  losing the queue, say. The row still reads `PENDING`, so every reconciliation
+  pass finds it and enqueues nothing: the position is locked by work that does
+  not exist. `scheduler.requeue_orphaned_analyses()` is the way out, and it
+  detects the state by comparison rather than by age, because age cannot tell a
+  stranded row from one merely queued behind a long scan. **If the broker's queue
+  is empty and no row is `RUNNING`, then no `PENDING` row can have a message** —
+  whatever its age. That is exact, so it re-enqueues with no false positives and
+  no attempt spent.
 - **`RUNNING` — a worker claimed it.** `analyze_game_task` sets this as it starts
   and `updated_at` records when. Now there *is* a bound on how long it may take,
   so `scheduler.requeue_stale_analyses()` sweeps anything older than
@@ -189,6 +197,7 @@ stateDiagram-v2
     RUNNING --> PENDING: requeue_stale_analyses<br/>past ANALYSIS_TIMEOUT
     RUNNING --> FAILED: retired at MAX_ANALYSIS_ATTEMPTS
     PENDING --> PENDING: broker redelivers a lost task
+    PENDING --> PENDING: requeue_orphaned_analyses<br/>empty queue, nothing running
     DONE --> PENDING: user clicks "Re-analyze"
     FAILED --> PENDING: user clicks "Try again"
 ```

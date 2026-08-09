@@ -15,7 +15,7 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 | --- | --- | --- |
 | `web` | built from [`Dockerfile`](../Dockerfile) | Gunicorn **plus** the APScheduler process, started by [`entrypoint.sh`](../entrypoint.sh). Exposes `8000`. |
 | `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish and calls the LLM. |
-| `redis` | `redis:7-alpine` | Celery broker and result backend. Health-checked with `redis-cli ping`. |
+| `redis` | `redis:7-alpine` | Celery broker and result backend, with append-only persistence on the `redis-data` volume (see [Volumes](#volumes)). Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
 | `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Needs a one-off model pull, see below. |
 
@@ -65,6 +65,12 @@ Once only, per `ollama-data` volume. Details and how to switch model in
 
 - **`postgres-data`** — the database.
 - **`ollama-data`** — the model store. Keep it, or you have to re-pull ~2GB.
+- **`redis-data`** — the task queue, with `--appendonly yes`. Without it a
+  restart of the `redis` container empties the queue, and every analysis waiting
+  in it is orphaned: the `CoachSuggestion` row still reads `PENDING`, so the
+  reconciliation passes skip it as already queued and nothing ever runs it. The
+  scheduler does recover that state (`requeue_orphaned_analyses`), but only once
+  the queue is fully drained — keeping the volume avoids the situation.
 
 ## The container entrypoint
 

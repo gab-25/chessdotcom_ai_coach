@@ -87,6 +87,8 @@ sequenceDiagram
 
     S->>DB: requeue_stale_analyses() — rows RUNNING past ANALYSIS_TIMEOUT
     Note over S,Q: an analysis whose worker never came back goes<br/>back to PENDING, or is retired FAILED after 3 attempts
+    S->>Q: requeue_orphaned_analyses() — queue empty + nothing RUNNING?
+    Note over S,Q: then no PENDING row can still have a message,<br/>so hand them back (Redis lost the queue)
     end
 
     rect rgba(120,160,120,0.10)
@@ -138,7 +140,8 @@ position as FAILED instead of running it again.
 | Component | Entry point | Notes |
 | --- | --- | --- |
 | Scheduler jobs | [`management/commands/run_scheduler.py`](../chessdotcom_ai_coach/management/commands/run_scheduler.py) | Two: `POLL_INTERVAL_SECONDS = 5` (matching the home page's own HTMX cadence) and `FINISHED_SCAN_MINUTES = 10`. Both `max_instances=1` and `coalesce=True`, so a slow run never overlaps the next. |
-| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `backfill_results`, `enqueue_due_analyses`, `requeue_stale_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local enqueue check running. |
+| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `backfill_results`, `enqueue_due_analyses`, `requeue_stale_analyses`, `requeue_orphaned_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local enqueue check running. |
+| Stuck-analysis recovery | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). |
 | Finished-game scan | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `enqueue_finished_game_analyses` — unbounded in time (a game is checked for as long as it is stored, so one whose result never resolved is still covered) and bounded in volume by `ENQUEUE_BUDGET_PER_RUN`. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
 | Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |

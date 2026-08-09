@@ -6,7 +6,8 @@ Two schedules call in here (see `management.commands.run_scheduler`):
 * the 5s tick — `sync_current_games` pulls each linked user's games from
   Chess.com into the local DB, `backfill_results` resolves the outcome of games
   that just ended, `enqueue_due_analyses` enqueues analysis for the active games,
-  and `requeue_stale_analyses` revives analyses that got stuck;
+  and `requeue_stale_analyses` / `requeue_orphaned_analyses` revive analyses that
+  got stuck;
 * the 10 minute scan — `enqueue_finished_game_analyses` reconciles finished
   games towards "every user move analysed".
 
@@ -47,6 +48,10 @@ ANALYSIS_TIMEOUT = timedelta(minutes=10)
 # Cap the rows revived per tick so a large backlog is drained gradually rather
 # than dumped on the worker in one go.
 REQUEUE_BATCH_SIZE = 20
+
+# The queue Celery consumes from, as `requeue_orphaned_analyses` needs to read
+# its depth. `task_default_queue`, which nothing overrides.
+TASK_QUEUE_NAME = "celery"
 
 # Cap the tasks a single scan of the finished games may enqueue. The scan covers
 # the whole history, so the first run after a long outage would otherwise dump
@@ -283,4 +288,67 @@ def requeue_stale_analyses() -> int:
             row.user_id, row.game_id, row.fen, (game.pgn or None) if game else None
         )
         requeued += 1
+    return requeued
+
+
+def _queued_task_count() -> int | None:
+    """How many messages are waiting on the broker, or None if it can't be read.
+
+    Reads the queue Celery actually consumes from. Returning None on any error is
+    deliberate: the one caller treats "unknown" as "assume there is work", so a
+    broker hiccup can never be mistaken for an empty queue.
+    """
+    try:
+        from ..celery import app
+
+        with app.connection_or_acquire() as conn:
+            return conn.default_channel.client.llen(TASK_QUEUE_NAME)
+    except Exception:
+        logger.exception("Could not read the broker queue depth")
+        return None
+
+
+def requeue_orphaned_analyses() -> int:
+    """Re-enqueue PENDING rows that have no message waiting for them.
+
+    `requeue_stale_analyses` covers a row whose *worker* died. This covers the
+    other half: a row whose *message* is gone, which nothing else can recover.
+    The row still says PENDING, so every `get_or_create` in the reconciliation
+    passes finds it and enqueues nothing — the position is locked by work that
+    does not exist, for ever. Redis losing the queue (it holds no volume, so a
+    container restart empties it) is the ordinary way to get there.
+
+    Detection is by comparison rather than by age, because age cannot tell the
+    two apart: draining a whole-game scan legitimately leaves a row queued for
+    hours. But if the broker's queue is empty and no worker is running anything,
+    then no PENDING row can have a message — whatever its age. That is exact, so
+    there are no false positives and recovery takes one tick.
+
+    Deliberately conservative: it does nothing while the queue depth is unknown
+    or non-zero, and no attempt is counted, since nothing was attempted. Returns
+    the number of rows re-enqueued this tick.
+    """
+    if CoachSuggestion.objects.filter(status=CoachSuggestion.Status.RUNNING).exists():
+        return 0  # a worker is busy, so the queue is being served
+
+    depth = _queued_task_count()
+    if depth is None or depth > 0:
+        return 0  # unreadable, or there really is work waiting
+
+    orphaned = CoachSuggestion.objects.filter(
+        status=CoachSuggestion.Status.PENDING
+    ).order_by("updated_at")[:REQUEUE_BATCH_SIZE]
+
+    requeued = 0
+    for row in orphaned:
+        game = Game.objects.filter(user_id=row.user_id, game_id=row.game_id).first()
+        row.save()  # `auto_now` on updated_at: records that we handed it over
+        analyze_game_task.delay(
+            row.user_id, row.game_id, row.fen, (game.pgn or None) if game else None
+        )
+        requeued += 1
+    if requeued:
+        logger.warning(
+            "Re-enqueued %d analyses that were PENDING with an empty queue", requeued
+        )
     return requeued

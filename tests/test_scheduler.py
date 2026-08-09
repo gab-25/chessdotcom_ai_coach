@@ -1,8 +1,9 @@
 """Unit tests for the scheduler job bodies: `sync_current_games` (Chess.com ->
 DB), `enqueue_due_analyses` (DB -> Celery, for the active games),
 `backfill_results` (archives -> DB), `enqueue_finished_game_analyses` (the 10
-minute reconciliation over finished games) and `requeue_stale_analyses` (reviving
-analyses whose worker never came back).
+minute reconciliation over finished games), `requeue_stale_analyses` (reviving
+analyses whose worker never came back) and `requeue_orphaned_analyses` (reviving
+those whose broker message went missing instead).
 
 The Celery task and the Chess.com `Client` are mocked, so no broker, worker or
 network is needed.
@@ -19,9 +20,11 @@ from chessdotcom_ai_coach.services import analysis as analysis_module
 from chessdotcom_ai_coach.services import board as board_utils
 from chessdotcom_ai_coach.services.scheduler import (
     ANALYSIS_TIMEOUT,
+    REQUEUE_BATCH_SIZE,
     backfill_results,
     enqueue_due_analyses,
     enqueue_finished_game_analyses,
+    requeue_orphaned_analyses,
     requeue_stale_analyses,
     sync_current_games,
 )
@@ -549,3 +552,106 @@ class TestRequeueStaleAnalyses:
         mock_task.delay.assert_called_once_with(
             user.id, "944768131", WHITE_TO_MOVE, None
         )
+
+
+@pytest.mark.django_db
+@patch("chessdotcom_ai_coach.services.scheduler._queued_task_count")
+@patch("chessdotcom_ai_coach.services.scheduler.analyze_game_task")
+class TestRequeueOrphanedAnalyses:
+    """The other way a position gets stuck: the row survives but its message
+    doesn't (Redis losing the queue, a bad manual write). Nothing else recovers
+    it — `requeue_stale_analyses` only looks at RUNNING, and every reconciliation
+    pass sees the PENDING row and treats the position as already queued.
+
+    Detection is by comparison, not by age: an empty queue with nothing running
+    means no PENDING row can have a message, whatever its age.
+    """
+
+    def _pending(self, user, **overrides):
+        defaults = {
+            "game_id": "944768131",
+            "fen": WHITE_TO_MOVE,
+            "move_no": 1,
+            "status": CoachSuggestion.Status.PENDING,
+            "eval_text": "",
+            "analysis": "",
+        }
+        defaults.update(overrides)
+        return CoachSuggestion.objects.create(user=user, **defaults)
+
+    def test_requeues_when_the_queue_is_empty(self, mock_task, mock_depth, user):
+        _game(user, pgn="1. e4 e5")
+        row = self._pending(user)
+        mock_depth.return_value = 0
+
+        assert requeue_orphaned_analyses() == 1
+
+        mock_task.delay.assert_called_once_with(
+            user.id, "944768131", WHITE_TO_MOVE, "1. e4 e5"
+        )
+        row.refresh_from_db()
+        # Still PENDING, and no attempt spent: nothing was ever attempted.
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.attempts == 0
+
+    def test_does_nothing_while_work_is_queued(self, mock_task, mock_depth, user):
+        """A deep queue is the normal state during a scan — those rows have
+        messages, they just haven't been reached yet."""
+        _game(user)
+        self._pending(user)
+        mock_depth.return_value = 5
+
+        assert requeue_orphaned_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_does_nothing_while_a_worker_is_running(self, mock_task, mock_depth, user):
+        """The queue empties as the last messages are picked up; a RUNNING row
+        means the worker is mid-drain, not that anything is orphaned."""
+        _game(user)
+        self._pending(user)
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="944768131",
+            fen=BLACK_TO_MOVE,
+            move_no=1,
+            status=CoachSuggestion.Status.RUNNING,
+            eval_text="",
+            analysis="",
+        )
+        mock_depth.return_value = 0
+
+        assert requeue_orphaned_analyses() == 0
+        mock_task.delay.assert_not_called()
+        mock_depth.assert_not_called()  # cheap check first
+
+    def test_does_nothing_when_the_broker_is_unreadable(
+        self, mock_task, mock_depth, user
+    ):
+        """Unknown depth must never be read as an empty queue, or a broker hiccup
+        would duplicate the whole backlog."""
+        _game(user)
+        self._pending(user)
+        mock_depth.return_value = None
+
+        assert requeue_orphaned_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_leaves_settled_rows_alone(self, mock_task, mock_depth, user):
+        _game(user)
+        self._pending(user, status=CoachSuggestion.Status.DONE)
+        self._pending(
+            user, fen=BLACK_TO_MOVE, status=CoachSuggestion.Status.FAILED
+        )
+        mock_depth.return_value = 0
+
+        assert requeue_orphaned_analyses() == 0
+        mock_task.delay.assert_not_called()
+
+    def test_drains_in_batches_oldest_first(self, mock_task, mock_depth, user):
+        _game(user)
+        for i in range(REQUEUE_BATCH_SIZE + 5):
+            self._pending(user, fen=f"{WHITE_TO_MOVE} {i}")
+        mock_depth.return_value = 0
+
+        assert requeue_orphaned_analyses() == REQUEUE_BATCH_SIZE
+        assert mock_task.delay.call_count == REQUEUE_BATCH_SIZE

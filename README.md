@@ -89,51 +89,13 @@ The line to watch for is `Task ... succeeded in Ns`. Reading the log:
 - **`Giving up on analysis ... after 3 attempts`** → that position is `failed`
   and is not retried automatically. Use the card's "Try again", or
   `manage.py analyze_game <game_id>`.
-
-### The queue itself, from Redis
-
-The worker log says what's being worked on; Redis says how much is waiting and
-how much is in flight:
-
-```bash
-docker compose exec redis redis-cli llen celery      # queued, not yet delivered
-docker compose exec redis redis-cli hlen unacked     # delivered, not yet acked
-docker compose exec redis redis-cli dbsize           # + one key per stored result
-```
-
-`unacked` is where `acks_late` lives: a task enters it on delivery and only
-leaves once it has finished. A steadily falling `llen celery` means the backlog
-is draining — expect a move a minute or so, since the analyses are serialised
-behind the LLM.
-
-`unacked` above the worker's `--concurrency` is normal after a worker was killed
-mid-analysis: the messages it was holding are left behind. Their age tells them
-apart from the live ones — anything younger than the worker's uptime is genuinely
-running:
-
-```bash
-docker compose exec redis redis-cli zrange unacked_index 0 -1 WITHSCORES \
-  | paste - - | awk -v now=$(date +%s) '{printf "%s  age=%ds\n", substr($1,1,8), now-$2}'
-```
-
-```
-545272c9  age=535s     <- left by a killed worker
-2aa00083  age=498s     <- left by a killed worker
-6782fed1  age=92s      <- running
-cb959676  age=43s      <- running
-```
-
-Those leftovers are cosmetic, not lost work: the analysis they represent is
-recovered from the app side, where the scheduler returns any row left `running`
-for 10 minutes to the queue. Expect the count to stay stale-ish until then. If
-`llen celery` never falls and nothing succeeds in the worker log, the worker is
-down.
-
-To watch commands flow in real time (noisy, Ctrl-C to stop):
-
-```bash
-docker compose exec redis redis-cli monitor
-```
+- **Silence, with analyses still outstanding** → the queue and the database
+  disagree: rows say `PENDING` but no message is waiting for them, so nothing
+  picks them up. Compare the two, `docker compose exec redis redis-cli llen
+  celery` against the `pending` count. The scheduler repairs this on its own
+  (`Re-enqueued N analyses that were PENDING with an empty queue` in
+  `docker compose logs web`); seeing it repeatedly means the queue is being lost,
+  so check that the `redis-data` volume is mounted.
 
 ## Run locally
 
