@@ -28,18 +28,26 @@ pointless.
 
 Safe to do at any time, including mid-analysis. Tasks are acknowledged after they
 run (`CELERY_TASK_ACKS_LATE`), so anything in flight when the container goes down
-is put back on the broker and **restarts from the beginning** on the new worker:
+**restarts from the beginning** rather than disappearing:
 
 ```bash
 docker compose restart worker
 ```
 
-You'll see the same task re-delivered in the new worker's log. Nothing is lost
-and nothing needs to be re-triggered by hand. Two backstops sit behind it: the
-scheduler returns any row left `RUNNING` for more than 10 minutes to the queue,
-and the 10-minute finished-game scan re-queues analyses that went missing
-entirely. What that buys you is that a redeploy costs at most the analyses that
-were mid-flight, redone — not a gap in the history.
+This is a graceful stop, so Celery hands its un-acked messages back on the way
+out and you'll see the same tasks re-delivered in the new worker's log within
+seconds.
+
+A **hard** kill (OOM, `docker kill`) is different: nothing gets to hand anything
+back, and Redis only re-delivers those messages after kombu's visibility timeout,
+an hour by default. You'll see it as an `unacked` count stuck above the worker's
+concurrency. The recovery there is app-side and takes 10 minutes: the scheduler
+returns any row left `RUNNING` past `ANALYSIS_TIMEOUT` to the queue. Behind that
+sits the 10-minute finished-game scan, which re-queues analyses that went missing
+entirely.
+
+So a redeploy costs at most the mid-flight analyses, redone — never a gap in the
+history — but budget minutes, not seconds, when the worker died badly.
 
 ### After the first start: pull the model
 

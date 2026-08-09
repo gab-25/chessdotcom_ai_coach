@@ -112,16 +112,26 @@ sequenceDiagram
 
 The task is acknowledged after it runs, not when it is delivered
 (`CELERY_TASK_ACKS_LATE` with `CELERY_TASK_REJECT_ON_WORKER_LOST`, in
-[`settings.py`](../chessdotcom_ai_coach/settings.py)). Restart the worker
-container, or let the OOM killer take it, and the broker puts the in-flight
-analysis back on the queue: it starts over from the beginning rather than
-disappearing and leaving its row RUNNING for ever. `requeue_stale_analyses` is
-the backstop for the rarer case where the message itself is gone.
+[`settings.py`](../chessdotcom_ai_coach/settings.py)), so an analysis in flight
+when the worker goes down is not simply lost. How fast it comes back depends on
+*how* the worker died, and the difference is worth knowing:
 
-Because redelivery restarts a task rather than abandoning it, a task that kills
-its worker would loop. That's what `attempts` bounds: the worker counts the
-attempt as it claims the row, and the fourth claim retires the position as
-FAILED instead of running it again.
+- **Graceful stop** (`docker compose restart`/`stop`, a redeploy) — Celery hands
+  its un-acked messages back to the broker on the way out. The analysis is
+  re-delivered within seconds and starts over from the beginning.
+- **Hard kill** (OOM, `docker kill`, a stop that outruns its grace period while
+  an analysis is mid-LLM-call) — nothing gets to hand anything back. The messages
+  sit in Redis' `unacked` set, and kombu only re-delivers them after its
+  visibility timeout, an hour by default.
+
+So the broker is *not* the guarantee in the case that matters most. That is
+`requeue_stale_analyses`, which returns any row left RUNNING for
+`ANALYSIS_TIMEOUT` to the queue — 10 minutes, whatever the broker is doing.
+Treat re-delivery as an optimisation on top of it, not the mechanism.
+
+Either way a task can be run more than once, so `attempts` bounds it: the worker
+counts the attempt as it claims the row, and the fourth claim retires the
+position as FAILED instead of running it again.
 
 ## Component reference
 

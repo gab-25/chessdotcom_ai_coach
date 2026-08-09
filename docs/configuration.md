@@ -42,12 +42,12 @@ how the worker behaves under restart:
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered. Restarting the worker container puts the in-flight analysis back on the broker and it starts over, instead of vanishing and leaving its `CoachSuggestion` row `RUNNING`. |
+| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `requeue_stale_analyses` is the guarantee that actually holds. |
 | `CELERY_TASK_REJECT_ON_WORKER_LOST` | `True` | Makes the above cover a worker killed outright (an OOM kill), not just a clean shutdown. |
 | `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. |
 
-The redelivery this enables is why `attempts` is capped: a task that kills its
-worker would otherwise be redelivered for ever. See
+Because a task can therefore run more than once, `attempts` is capped: one that
+kills its worker would otherwise be retried for ever. See
 [data-model.md](data-model.md#the-lock-needs-an-expiry).
 
 ## What Docker Compose overrides

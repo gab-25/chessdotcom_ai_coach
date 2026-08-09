@@ -158,8 +158,10 @@ there a worker on this row or not?**
   queues ~40 analyses at 2s of Stockfish plus up to 150s of LLM each, so the last
   one may not start for the better part of an hour. Recovery here is Celery's:
   `CELERY_TASK_ACKS_LATE` means the task is acknowledged after it ran, so a worker
-  that dies holding it causes the broker to **redeliver** it, and it restarts from
-  the beginning. Nothing in the app has to notice.
+  that dies holding it hands the message back (on a graceful stop) or leaves it
+  for the broker's visibility timeout (on a hard kill). Nothing in the app has to
+  notice — and nothing in the app *can* usefully notice, since a queued row looks
+  identical whether its message is alive or stranded.
 - **`RUNNING` — a worker claimed it.** `analyze_game_task` sets this as it starts
   and `updated_at` records when. Now there *is* a bound on how long it may take,
   so `scheduler.requeue_stale_analyses()` sweeps anything older than

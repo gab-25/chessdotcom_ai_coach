@@ -141,10 +141,16 @@ CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TASK_ALWAYS_EAGER = False
 
-# Acknowledge a task after it ran, not when it was delivered. Restarting the
-# worker container (or an OOM kill) then puts the in-flight analysis back on the
-# broker and it starts over, instead of vanishing and stranding its
-# `CoachSuggestion` row RUNNING until the scheduler's timeout notices.
+# Acknowledge a task after it ran, not when it was delivered, so an analysis in
+# flight when the worker goes down is not simply lost. On a graceful stop
+# (`docker compose restart/stop`) Celery hands its un-acked messages straight
+# back and the analysis starts over immediately.
+#
+# A *hard* kill is slower to recover, not faster: the messages sit in Redis'
+# `unacked` set, and kombu only re-delivers them after its visibility timeout
+# (an hour by default). The guarantee that actually holds in that case is
+# app-side — `scheduler.requeue_stale_analyses` returns any row left RUNNING for
+# `ANALYSIS_TIMEOUT` to the queue. Don't rely on the broker for it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 # One task reserved at a time: an analysis takes seconds to minutes, so
