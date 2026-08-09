@@ -70,6 +70,32 @@ different model.
 
 Then create a user (see [First run](#first-run) below).
 
+## Monitoring the analyses
+
+Analyses are queued, so a game fills in over minutes rather than all at once.
+To follow what the worker is doing:
+
+```bash
+docker compose logs -f worker                                       # live task log
+docker compose exec worker celery -A chessdotcom_ai_coach status    # is the worker alive?
+docker compose exec worker celery -A chessdotcom_ai_coach inspect stats \
+  | grep -E "max-concurrency|total"                                 # pool size, totals
+```
+
+The log line to watch for is `Task ... succeeded in Ns`. Reading it:
+
+- **Nothing but `received`, never `succeeded`** → tasks are arriving but not
+  finishing. Check the LLM: `docker compose logs ollama`.
+- **`LLM Error` followed by a task that still succeeds** → the analysis fell back
+  to Stockfish-only text. If those come in bursts, the worker is outrunning
+  Ollama — see the `--concurrency` note in `docker-compose.yaml`.
+- **`Giving up on analysis ... after 3 attempts`** → that position is `failed`
+  and is not retried automatically. Use the card's "Try again", or
+  `manage.py analyze_game <game_id>`.
+
+(`celery inspect active` also works, but the task carries the whole PGN in its
+arguments, so the output is unreadable.)
+
 ## Run locally
 
 Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), and a running PostgreSQL

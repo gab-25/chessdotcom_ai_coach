@@ -142,18 +142,25 @@ Instructions:
             # after an idle gap the request also pays for reloading the model that
             # OLLAMA_KEEP_ALIVE unloaded, so allow a generous timeout; on failure
             # we fall back to engine-only text.
-            client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=150.0)
-            response = await client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert chess coach analyzing games in real-time. Never end your reply with a question or a call to respond; the user has no way to answer back.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7,
-            )
+            # `async with`: the client owns an httpx connection pool that must be
+            # closed on this event loop. `async_to_sync` (how the Celery task calls
+            # us) closes the loop as soon as we return, so a client left to its
+            # finalizer tries to close its socket on a dead loop and logs
+            # "RuntimeError: Event loop is closed" after an otherwise fine analysis.
+            async with AsyncOpenAI(
+                base_url=LLM_BASE_URL, api_key="not-needed", timeout=150.0
+            ) as client:
+                response = await client.chat.completions.create(
+                    model=LLM_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert chess coach analyzing games in real-time. Never end your reply with a question or a call to respond; the user has no way to answer back.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.7,
+                )
             content = response.choices[0].message.content
             analysis = content.strip() if content else eval_text
             return _suggestion(

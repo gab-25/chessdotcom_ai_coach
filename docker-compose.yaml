@@ -30,7 +30,13 @@ services:
       - LLM_MODEL=llama3.2:3b
       - REDIS_URL=redis://redis:6379/0
       - STOCKFISH_PATH=stockfish
-    command: celery -A chessdotcom_ai_coach worker -l info
+    # --concurrency=2, not Celery's default of one process per CPU core. Ollama
+    # serves ONE request at a time (OLLAMA_NUM_PARALLEL=1, a single slot), so
+    # extra parallel analyses don't run in parallel — they queue behind that slot
+    # until they blow the coach's 150s client timeout and come back as a 500.
+    # Two keeps both halves busy: one generating on the LLM, one on its ~2s of
+    # Stockfish. Raise this only alongside OLLAMA_NUM_PARALLEL and a GPU.
+    command: celery -A chessdotcom_ai_coach worker -l info --concurrency=2
     depends_on:
       postgres:
         condition: service_healthy

@@ -150,4 +150,11 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 # One task reserved at a time: an analysis takes seconds to minutes, so
 # prefetching a batch would hide those tasks from an idle worker and, with
 # `acks_late`, put the whole batch back on the queue when one worker dies.
+#
+# This bounds what a worker *reserves*, not what it *runs*: concurrency is a
+# separate knob, and Celery defaults it to one process per CPU core. That
+# default is wrong here — Ollama serves one request at a time, so parallel
+# analyses queue behind it until they exceed the coach's 150s timeout. The cap
+# lives with the worker command in `docker-compose.yaml` (`--concurrency=2`),
+# since it depends on the machine and the LLM runtime rather than on the app.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
