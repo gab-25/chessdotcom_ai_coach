@@ -331,12 +331,14 @@ def home(request):
 
 @login_required
 def game_list(request):
-    """HTMX endpoint: current games + past-games history fragment for polling."""
+    """HTMX endpoint: current games + past-games history fragment, on demand."""
     username = request.user.chess_username
     games = _decorate_games(game_store.current_games(request.user), username)
     past = _decorate_games(game_store.past_games(request.user), username)
     return render(
-        request, "partials/game_list.html", {"games": games, "past_games": past}
+        request,
+        "partials/game_list.html",
+        {"games": games, "past_games": past, "oob": True},
     )
 
 

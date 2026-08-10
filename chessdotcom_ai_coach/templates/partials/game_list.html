@@ -1,4 +1,6 @@
 {% load static %}
+{# On a manual refresh the game count lives outside this fragment, so update it out of band. #}
+{% if oob %}{% include "partials/home_count.html" %}{% endif %}
 <div class="games-grid">
   {% if not games %}
   <div class="empty">

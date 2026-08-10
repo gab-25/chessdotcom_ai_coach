@@ -7,7 +7,7 @@ duplicates.
 
 Two jobs run at very different cadences, because they answer to different clocks:
 
-* every 5s — the live tick, matching the home page's own HTMX poll, so nothing
+* every 5s — the live tick, matching the detail page's own HTMX poll, so nothing
   needs data fresher than that. It syncs each linked user's current games from
   Chess.com into the local DB (`sync_current_games`), resolves the outcome of
   games that just ended from the archives (`backfill_results`), enqueues the
