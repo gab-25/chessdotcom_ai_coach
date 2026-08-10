@@ -62,7 +62,7 @@ From [`urls.py`](../chessdotcom_ai_coach/urls.py):
 | Route | View | Kind |
 | --- | --- | --- |
 | `/` | `home` | Full page — current games + past-games history |
-| `/games` | `game_list` | **HTMX fragment**, polled every 5s |
+| `/games` | `game_list` | **HTMX fragment**, fetched on demand by the home Refresh button |
 | `/game/<id>` | `game_detail` | Full page — the review/live board |
 | `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N` |
 | `/game/<id>/live` | `game_live` | **HTMX poll** every 5s — returns **204** when `head` is unchanged |

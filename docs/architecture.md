@@ -32,7 +32,7 @@ graph TD
         LLM["Ollama<br/><i>OpenAI-compatible</i>"]
     end
 
-    Browser -->|"poll every 5s / 2s"| Web
+    Browser -->|"detail-page poll every 5s / 2s<br/>home refresh on demand"| Web
     Web --> PG
     Sched -->|"read current games + archives"| ChessCom
     Sched --> PG
@@ -199,7 +199,10 @@ value forward across un-analysed plies so it never snaps back to 50%.
 
 There is no custom JavaScript. Everything is a fragment swap:
 
-- **Home** (`home.html`) polls `/games` `every 5s` — a plain DB read.
+- **Home** (`home.html`) does not poll. Its **Refresh** button fetches `/games`
+  on demand — a plain DB read — and swaps the game grid in place; the fragment
+  also carries an `hx-swap-oob` copy of the in-progress count that lives outside
+  the swapped container.
 - **Detail** (`partials/position.html`) polls `/game/<id>/live` `every 5s`,
   sending its current `sel` and the `head` it already knows; the view returns
   **204 No Content** when nothing changed, so an idle game costs almost nothing.

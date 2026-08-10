@@ -98,6 +98,32 @@ class TestHome:
         assert response.status_code == 302
         assert "/login" in response["Location"]
 
+    def test_has_refresh_button(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/")
+
+        assert b'id="game-list"' in response.content
+        assert b'hx-target="#game-list"' in response.content
+        assert b'hx-get="/games"' in response.content
+
+    def test_has_no_auto_refresh(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/")
+
+        assert b"every 5s" not in response.content
+        assert b"AUTO-REFRESH" not in response.content
+
+    def test_shows_game_count_once(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/")
+
+        assert response.content.count(b'id="home-count"') == 1
+        assert b"1 game in progress" in response.content
+        assert b"hx-swap-oob" not in response.content
+
 
 @pytest.mark.django_db
 class TestGameList:
@@ -127,6 +153,15 @@ class TestGameList:
         response = auth_client.get("/games")
 
         assert b'href="/game/old1"' in response.content
+
+    def test_updates_game_count_out_of_band(self, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.get("/games")
+
+        assert b'id="home-count"' in response.content
+        assert b'hx-swap-oob="true"' in response.content
+        assert b"1 game in progress" in response.content
 
 
 @pytest.mark.django_db
