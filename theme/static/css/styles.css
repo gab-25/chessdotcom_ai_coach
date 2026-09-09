@@ -120,9 +120,13 @@ input {
   max-width: 1300px;
   margin: 0 auto;
   padding: 0 28px;
-  height: 64px;
+  /* min-height, not height: a fixed height cannot contain a row that wraps. */
+  min-height: 64px;
   display: flex;
   align-items: center;
+  /* Safety net: if the labels still do not fit at some font size, the row breaks
+     onto a second line instead of overflowing the viewport. */
+  flex-wrap: wrap;
   gap: 20px;
 }
 
@@ -171,6 +175,7 @@ input {
 
 .back-link {
   margin-left: 6px;
+  white-space: nowrap;
   font-size: 14px;
   color: #b0a48f;
   display: flex;
@@ -192,6 +197,7 @@ input {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   gap: 7px;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -450,7 +456,9 @@ input {
 
 .games-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(292px, 1fr));
+  /* min(292px, 100%) so the last track can shrink below its floor rather than
+     overflow the viewport on a 320px phone. */
+  grid-template-columns: repeat(auto-fill, minmax(min(292px, 100%), 1fr));
   gap: 22px;
 }
 
@@ -1651,6 +1659,50 @@ input {
   }
   .coach__move {
     font-size: 44px;
+  }
+}
+
+/* The header is a single non-wrapping row whose natural width is ~430px, so
+   below that it must shed labels rather than overflow and drag the whole
+   document into horizontal scroll. */
+@media (max-width: 440px) {
+  .app-header__inner {
+    gap: 10px;
+    min-height: 56px;
+  }
+  .app-header__right {
+    gap: 12px;
+  }
+  .brand__sub,
+  .brand__version {
+    display: none;
+  }
+  .status-pill {
+    padding: 6px;
+    gap: 0;
+  }
+  /* The arrow and the pulsing dot already carry the meaning visually; keep the
+     wording for screen readers instead of hiding it outright. */
+  .back-link__label,
+  .status-pill__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .login__aside,
+  .login__form {
+    padding: 32px 22px;
+  }
+  .login__stats {
+    gap: 16px;
+  }
+  .login__title {
+    font-size: 30px;
   }
 }
 

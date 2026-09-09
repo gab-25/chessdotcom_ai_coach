@@ -5,7 +5,7 @@
 {% endcomment %}
 {% if request.htmx %}
 <span id="gr-pill" hx-swap-oob="true" class="status-pill{% if is_live %} status-pill--watch{% endif %}">
-  <span class="status-pill__dot"></span>{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}
+  <span class="status-pill__dot"></span><span class="status-pill__label">{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}</span>
 </span>
 {% endif %}
 <div id="gr-view">
