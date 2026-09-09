@@ -629,6 +629,9 @@ input {
 }
 .board-stage__board {
   flex: 1;
+  /* Without this the flex item keeps its automatic min-width and can floor the
+     column at the board's min-content instead of shrinking with the viewport. */
+  min-width: 0;
   display: flex;
   justify-content: center;
 }
@@ -669,6 +672,10 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* The nav buttons are a fixed 154px that cannot compress, so on narrow screens
+     they must wrap to a second row rather than widen the whole column. */
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 14px;
   padding: 10px 14px;
   background: var(--paper);
@@ -1326,7 +1333,9 @@ input {
 /* Played-vs-coach comparison */
 .gr-compare {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* min(140px, 100%) so the two cells collapse to one column on narrow screens
+     instead of flooring the track above the available width. */
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: 10px;
   margin-top: 14px;
 }
@@ -1355,6 +1364,8 @@ input {
 .gr-compare__val {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
 }
 .gr-compare__san {
@@ -1605,7 +1616,10 @@ input {
 /* ===================== Responsive ===================== */
 @media (max-width: 860px) {
   .game-layout {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr), not a bare 1fr: `1fr` means minmax(auto, 1fr), which floors
+       the track at its items' min-content. The board is sized at 100% of this
+       track, so that floor is what pushes it past the viewport on phones. */
+    grid-template-columns: minmax(0, 1fr);
   }
   .board--lg {
     --board-size: 100%;
