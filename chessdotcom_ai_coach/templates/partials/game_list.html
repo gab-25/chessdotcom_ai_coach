@@ -1,7 +1,9 @@
 {% load static %}
-{# The home grid: finished games only — a game in progress has nothing to review
-   yet, so it is not listed. On a manual refresh the game count lives outside this
-   fragment, so update it out of band. #}
+{% comment %}
+  The home grid: finished games only — a game in progress has nothing to review
+  yet, so it is not listed. On a manual refresh the game count lives outside this
+  fragment, so update it out of band.
+{% endcomment %}
 {% if oob %}{% include "partials/home_count.html" %}{% endif %}
 <div class="games-grid">
   {% if not games %}

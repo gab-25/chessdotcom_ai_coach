@@ -898,6 +898,49 @@ class TestGameListStates:
 
 
 @pytest.mark.django_db
+class TestTemplateSyntaxNeverLeaks:
+    """No raw template markup in a rendered page.
+
+    Django's `{# ... #}` is single-line only: spread it over two lines and the
+    whole thing is emitted as text instead of being stripped. That reads as a
+    normal comment in the source, so it is caught here rather than by eye.
+    """
+
+    LEAKS = ("{#", "{%", "{{")
+
+    def _assert_clean(self, response):
+        body = response.content.decode()
+        for marker in self.LEAKS:
+            assert marker not in body, f"unrendered template markup {marker!r} in output"
+
+    def test_home_is_clean(self, auth_client, user):
+        _make_game(user)
+
+        self._assert_clean(auth_client.get("/"))
+
+    def test_empty_home_is_clean(self, auth_client):
+        self._assert_clean(auth_client.get("/"))
+
+    def test_game_list_fragment_is_clean(self, auth_client, user):
+        _make_game(user)
+
+        self._assert_clean(auth_client.get("/games"))
+
+    def test_detail_page_is_clean(self, auth_client, user):
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(2))
+
+        self._assert_clean(auth_client.get("/game/944768131"))
+        self._assert_clean(auth_client.get("/game/944768131/view", {"sel": "3"}))
+        self._assert_clean(auth_client.get("/game/944768131/analyze", {"sel": "3"}))
+
+    def test_error_page_is_clean(self, auth_client, user):
+        _make_game(user, is_active=True)
+
+        self._assert_clean(auth_client.get("/game/944768131"))
+
+
+@pytest.mark.django_db
 class TestEvalBar:
     """The eval bar fill (_eval_fill / partials/_evalfill.html)."""
 
