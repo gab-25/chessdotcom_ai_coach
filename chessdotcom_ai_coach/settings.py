@@ -136,7 +136,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 # --- Celery ----------------------------------------------------------------
 # Redis is the broker and result backend. Both of the app's background jobs are
 # enqueued from the request path — `analyze_game_task` when the user asks for an
-# analysis, `sync_user_task` when a page load claims the user's archive sync —
+# analysis, `sync_user_task` when a Refresh claims the user's archive sync —
 # and a dedicated worker executes them out of it. Nothing is scheduled.
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_BROKER_URL = REDIS_URL

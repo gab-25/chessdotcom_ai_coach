@@ -60,9 +60,9 @@ TASK_QUEUE_NAME = "celery"
 
 # How long a user's archive sync claim holds. An incremental sync is two HTTP
 # requests (the archive index plus the current month), and it is now paid only
-# while somebody is actually looking at the app — an idle deployment makes no
-# requests at all, where the old 10-minute scheduler tick polled every linked
-# user around the clock.
+# when somebody presses Refresh — an idle deployment makes no requests at all,
+# where the old 10-minute scheduler tick polled every linked user around the
+# clock, and merely opening a page no longer costs a fetch either.
 SYNC_COOLDOWN = timedelta(seconds=settings.SYNC_COOLDOWN_SECONDS)
 
 # How often the recovery sweeps may run in one web process. The coach card polls
@@ -85,7 +85,7 @@ def is_linked(user) -> bool:
     exists so the board can be oriented for a user who never set the field
     (`views._position_context`); it is not a claim that their app username is a
     real Chess.com account. Treating it as one here would mean a lookup for a
-    probably-nonexistent player on every page load.
+    probably-nonexistent player every time somebody presses Refresh.
     """
     return bool(user.chessdotcom_username)
 
@@ -196,8 +196,9 @@ def request_sync(user) -> bool:
     """Claim this user's archive sync and hand it to the worker.
 
     Returns True when *this* request won the claim and queued the work, which is
-    also the signal the home page uses to decide whether to refresh itself once
-    the games have had time to land.
+    also the signal the games fragment uses to re-fetch itself once, six seconds
+    later, by which time the import has had a moment to land. Only `views.game_list`
+    calls this: the home page starts nothing.
 
     The claim is a conditional UPDATE on `last_synced_at` rather than a cache
     key. One statement, atomic in Postgres and in the SQLite the tests use, so N
@@ -235,7 +236,7 @@ def request_sync(user) -> bool:
             "Could not enqueue the archive sync for user %s", user.pk, exc_info=True
         )
         # The claim is kept, not released: one publish attempt per cooldown is
-        # the right rate while the broker is down, rather than one per page load.
+        # the right rate while the broker is down, rather than one per Refresh.
         return False
     return True
 

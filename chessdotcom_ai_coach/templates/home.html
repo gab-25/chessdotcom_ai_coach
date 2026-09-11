@@ -9,22 +9,17 @@
       {% include "partials/home_count.html" %}
     </div>
     <div class="home__filters">
-      <button type="button" class="btn btn--ghost btn--sm"
-              hx-get="{% url 'game_list' %}?time_class={{ time_class }}"
-              hx-target="#game-list"
-              hx-swap="innerHTML">
-        <i class="fa-solid fa-arrows-rotate"></i>Refresh
-      </button>
+      {% include "partials/refresh_button.html" %}
     </div>
   </div>
 
   {% comment %}
-    `syncing` is set only when this request actually claimed the archive sync, so
-    the trigger appears once and then not again until the cooldown lapses. It sits
-    on the wrapper, which game_list.html never replaces (it swaps innerHTML), so it
-    fires once and cannot turn into a poll.
+    The wrapper carries no behaviour of its own. This page is a plain DB read —
+    it claims no sync, so there is nothing for it to wait on — and every control
+    that swaps the grid either lives inside the fragment or is swapped back in
+    out of band.
   {% endcomment %}
-  <div id="game-list"{% if syncing %} hx-get="{% url 'game_list' %}?time_class={{ time_class }}" hx-trigger="load delay:6s" hx-swap="innerHTML"{% endif %}>
+  <div id="game-list">
     {% include "partials/game_list.html" %}
   </div>
 </div>

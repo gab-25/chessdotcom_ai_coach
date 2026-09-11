@@ -115,9 +115,9 @@ def analyze_game_task(user_id: int, game_id: str, fen: str, pgn: str | None = No
 def sync_user_task(user_id: int):
     """Import one user's due Chess.com archive months.
 
-    Queued by `services.sync.request_sync` when a page load takes the user's sync
+    Queued by `services.sync.request_sync` when a Refresh takes the user's sync
     claim. Nothing schedules it, and nothing else enqueues it, so a user who never
-    opens the app costs no Chess.com traffic at all.
+    presses Refresh costs no Chess.com traffic at all.
 
     `soft_time_limit` bounds a first import, which walks the whole history: being
     cut short is safe rather than destructive, because `sync._due_months` reads

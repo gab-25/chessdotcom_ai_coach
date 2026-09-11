@@ -7,10 +7,35 @@
 
   Every control here targets #game-list and carries the *other* control's state in
   its query string (the filter keeps no page, the pager keeps the filter), so the
-  two never cancel each other out. The count line lives outside this fragment, so
-  it is swapped back in out of band.
+  two never cancel each other out. Two head elements live outside this fragment
+  and are swapped back in out of band: the count line and the Refresh button.
+
+  Refresh is the sync trigger; the filter and the pager merely share its endpoint
+  and are DB reads, which is why only a request that actually claimed the sync
+  (`sync_started`) renders the one-shot re-fetch below.
 {% endcomment %}
-{% if oob %}{% include "partials/home_count.html" %}{% endif %}
+{% if oob %}{% include "partials/home_count.html" %}{% include "partials/refresh_button.html" %}{% endif %}
+
+{% if sync_started %}
+{% comment %}
+  One shot, never a poll. `sync_started` is set only when this request won the
+  per-user claim, and the request this element makes names itself with
+  `after_sync`, which `views.game_list` never lets claim — so the fragment that
+  comes back cannot contain this element and the chain is two requests long by
+  construction. htmx helps twice more: `load` fires once per node, and a request
+  from a node that has left the DOM is dropped, so a filter or a page pressed in
+  the meantime cancels the pending re-fetch instead of being overwritten by it.
+
+  hx-target and hx-swap are required here, unlike the wrapper-based trigger this
+  replaced: the element sits *inside* #game-list, so the default target would be
+  itself and the fragment would nest.
+{% endcomment %}
+<div hidden
+     hx-get="{% url 'game_list' %}?after_sync=1&amp;page={{ page.number }}&amp;time_class={{ time_class }}"
+     hx-trigger="load delay:6s"
+     hx-target="#game-list"
+     hx-swap="innerHTML"></div>
+{% endif %}
 
 {% if time_classes %}
 <div class="filters" role="group" aria-label="Filter by time control">
@@ -30,12 +55,20 @@
     <div>
       <h3>No games to review</h3>
       <p>
+        {% comment %}
+          "Being imported" is only true of a request that took the claim, so it is
+          `sync_started` that gates it, not merely having an account linked. The
+          fallback says "look again" rather than "import your archive", which
+          within the cooldown would be a promise this request did not keep.
+        {% endcomment %}
         {% if time_class %}
           No finished {{ time_class }} games. Try another time control.
         {% elif not user.chessdotcom_username %}
           No Chess.com account is linked to this profile, so there is no archive to import.
+        {% elif sync_started %}
+          Your archive is being imported — this may take a few minutes the first time. This list will look again in a few seconds.
         {% else %}
-          None of your Chess.com games are here yet. Your archive is being imported — this may take a few minutes the first time.
+          None of your Chess.com games are here yet. Refresh to look again.
         {% endif %}
       </p>
     </div>

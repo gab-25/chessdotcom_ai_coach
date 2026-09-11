@@ -319,26 +319,37 @@ def _games_page(request):
 def home(request):
     """Home page: the user's finished games, the ones there is something to review.
 
-    Also where the archive import is started. There is no scheduler: opening the
-    page is what asks for the user's games to be brought up to date, and
-    `sync.request_sync` both rate-limits that and hands the actual work to the
-    worker, so this stays a plain DB read. It returns True only when this request
-    won the claim, which the template uses to refresh itself once the games have
-    had a moment to land.
+    A plain DB read. It starts nothing: the archive import is claimed by the
+    Refresh button (`game_list`), because that is the one control whose meaning is
+    "fetch my games". Opening a page used to claim it too, which made every return
+    to the home page a potential Chess.com fetch and left the empty state
+    announcing an import that a cooled-down load had not actually queued.
     """
-    context = _games_page(request)
-    context["syncing"] = sync.request_sync(request.user)
-    return render(request, "home.html", context)
+    return render(request, "home.html", _games_page(request))
 
 
 @login_required
 def game_list(request):
-    """HTMX endpoint: the finished-games fragment — refresh, paging and filtering."""
-    # The Refresh button should mean "fetch my games", not just "re-read the DB".
-    # Whether it does is `request_sync`'s call, not ours: paging and filtering come
-    # through here too, and they hit the cooldown and enqueue nothing.
-    sync.request_sync(request.user)
+    """HTMX endpoint: the finished-games fragment — refresh, paging and filtering.
+
+    Also the app's only sync trigger. `request_sync` rate-limits the claim and
+    hands the work to the worker, so this stays a DB read; its return value is
+    what puts the single delayed re-fetch in the fragment, six seconds later,
+    by which time the import has had a moment to land.
+
+    Paging and filtering arrive here too and will normally lose the claim. When
+    one of them wins it — the cooldown has lapsed — it gets the same one-shot
+    re-fetch, which is right rather than a leak: the re-fetch reproduces the very
+    view the user is looking at.
+    """
+    # `after_sync` is that re-fetch identifying itself, and it must never claim.
+    # Otherwise a deployment with SYNC_COOLDOWN_SECONDS under 6 would turn one
+    # re-fetch into a 6-second poll *and* a 6-second re-import. The cooldown makes
+    # that impossible today; this makes it impossible by construction, which is
+    # what the old trigger got from sitting on a wrapper the swap never replaced.
+    after_sync = bool(request.GET.get("after_sync"))
     context = _games_page(request)
+    context["sync_started"] = False if after_sync else sync.request_sync(request.user)
     context["oob"] = True
     return render(request, "partials/game_list.html", context)
 

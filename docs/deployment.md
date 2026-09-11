@@ -92,7 +92,7 @@ Note what is *not* here: no background process. The archive import is claimed
 from the request path (`services.sync.request_sync`) and executed by the worker,
 so `web` holds no state of its own and `docker compose up --scale web=3` is
 safe — the claim is a conditional `UPDATE` on `User.last_synced_at`, so three
-replicas racing on the same page load still produce one import.
+replicas racing on the same user still produce one import.
 
 **`worker` is the one to keep at a single replica**, and not because of the
 import: Ollama serves one request at a time, so parallel analyses queue behind it

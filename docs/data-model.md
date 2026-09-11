@@ -76,7 +76,7 @@ Django's `AbstractUser` plus two fields:
 - **`last_synced_at`** — when an archive sync was last *claimed*, not when one
   completed. This is the lock that replaces the old scheduler process:
   `sync.request_sync` takes it with a single conditional `UPDATE`, so several web
-  replicas handling the same user's page load still start one import, and the
+  replicas handling the same user's Refresh still start one import, and the
   import re-stamps it after each month so a long backfill keeps its claim.
 - **`chess_username`** (property) — the username to actually query, falling back
   to the Django login name when the field is blank. Always use this property when

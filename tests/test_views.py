@@ -8,8 +8,9 @@ so these tests just seed the DB. The Celery task is mocked where analysis is
 enqueued.
 
 The ``user`` fixture links no Chess.com account, so `sync.request_sync` returns
-early and no view here reaches the broker. The one exception is the coach card's
-poll, which runs the recovery sweeps — patched out in `_no_recovery_sweep`.
+early and no view here reaches the broker — which matters for ``/games``, the one
+endpoint that still calls it. The other exception is the coach card's poll, which
+runs the recovery sweeps — patched out in `_no_recovery_sweep`.
 """
 
 from datetime import timedelta
@@ -121,23 +122,37 @@ class TestHome:
         assert "/login" in response["Location"]
 
     def test_has_refresh_button(self, auth_client, user):
+        """The button, not the "All" filter chip: both point at /games, so this
+        asserts on the id the head control carries and the chips do not."""
         _make_game(user)
 
         response = auth_client.get("/")
 
         assert b'id="game-list"' in response.content
         assert b'hx-target="#game-list"' in response.content
-        assert b'hx-get="/games"' in response.content
+        assert response.content.count(b'id="home-refresh"') == 1
+        assert b'hx-get="/games?time_class="' in response.content
 
-    def test_has_no_auto_refresh(self, auth_client, user):
-        """The home grid never polls. It may refresh itself *once* after claiming
-        a sync (see TestHomeSync), which is why this asserts on `every `."""
+    def test_the_home_page_neither_polls_nor_refreshes_itself(self, auth_client, user):
+        """The grid used to refresh itself once when a page load claimed the sync.
+        A page load claims nothing now, so the home page carries no timed trigger
+        of any kind — neither a poll nor a one-shot."""
         _make_game(user)
 
         response = auth_client.get("/")
 
         assert b"every " not in response.content
+        assert b"load delay:6s" not in response.content
         assert b"AUTO-REFRESH" not in response.content
+
+    def test_the_home_page_does_not_start_a_sync(self, auth_client, user):
+        """The home page is a plain DB read. The Refresh button is what fetches."""
+        _make_game(user)
+
+        with patch("chessdotcom_ai_coach.views.sync.request_sync") as mock_sync:
+            auth_client.get("/")
+
+        mock_sync.assert_not_called()
 
     def test_shows_game_count_once(self, auth_client, user):
         _make_game(user)
@@ -161,12 +176,13 @@ class TestHome:
 
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.tasks.sync_user_task")
-class TestHomeSync:
-    """Opening the app is what asks for the archive to be imported.
+class TestGameListSync:
+    """Pressing Refresh is what asks for the archive to be imported.
 
-    There is no scheduler, so the home page carries the trigger — rate-limited by
-    the per-user claim, and visible to the user as a single delayed refresh once
-    the games have had a moment to land.
+    There is no scheduler and the home page starts nothing, so this endpoint
+    carries the only trigger — rate-limited by the per-user claim, and visible to
+    the user as a single delayed re-fetch of the fragment once the games have had
+    a moment to land.
     """
 
     @pytest.fixture
@@ -177,39 +193,76 @@ class TestHomeSync:
         client.force_login(user)
         return client, user
 
-    def test_queues_the_import_and_refreshes_once(self, mock_task, linked_client):
-        client, user = linked_client
+    def test_pressing_refresh_queues_the_import_and_re_fetches_once(
+        self, mock_task, linked_client
+    ):
+        client, _user = linked_client
 
-        response = client.get("/")
+        response = client.get("/games")
 
         mock_task.apply_async.assert_called_once()
         assert b"load delay:6s" in response.content
         assert response.content.count(b"load delay:6s") == 1
 
-    def test_a_second_load_neither_queues_nor_refreshes(self, mock_task, linked_client):
-        client, _user = linked_client
-        client.get("/")
-        mock_task.apply_async.reset_mock()
+    def test_opening_the_home_page_queues_nothing(self, mock_task, linked_client):
+        """The inversion of the test above: a page load is a pure DB read, so it
+        does not even take the claim."""
+        client, user = linked_client
 
         response = client.get("/")
 
         mock_task.apply_async.assert_not_called()
+        user.refresh_from_db()
+        assert user.last_synced_at is None
         assert b"load delay:6s" not in response.content
 
-    def test_an_unlinked_user_queues_nothing(self, mock_task, auth_client, user):
-        """The default `user` fixture has no Chess.com account."""
-        response = auth_client.get("/")
+    def test_a_second_refresh_within_the_cooldown_neither_queues_nor_re_fetches(
+        self, mock_task, linked_client
+    ):
+        client, _user = linked_client
+        client.get("/games")
+        mock_task.apply_async.reset_mock()
+
+        response = client.get("/games")
 
         mock_task.apply_async.assert_not_called()
         assert b"load delay:6s" not in response.content
 
-    def test_the_refresh_endpoint_also_claims(self, mock_task, linked_client):
-        """The Refresh button should mean "fetch my games", not just re-read the DB."""
+    def test_the_re_fetch_six_seconds_later_asks_for_nothing_further(
+        self, mock_task, linked_client
+    ):
+        """The chain is two requests long by construction: the re-fetch names
+        itself with `after_sync`, and a request carrying it never claims, so the
+        fragment it gets back cannot contain another one. Without this the
+        invariant would rest on SYNC_COOLDOWN merely being longer than 6s."""
         client, _user = linked_client
+        first = client.get("/games")
+        assert b"load delay:6s" in first.content
+        mock_task.apply_async.reset_mock()
 
-        client.get("/games")
+        second = client.get("/games", {"after_sync": "1"})
 
-        mock_task.apply_async.assert_called_once()
+        mock_task.apply_async.assert_not_called()
+        assert b"load delay:6s" not in second.content
+
+    def test_the_re_fetch_keeps_the_filter_and_the_page(self, mock_task, linked_client):
+        """Its job is to reproduce the view already on screen, unlike the Refresh
+        button, which means "show me the newest" and so drops the page."""
+        client, user = linked_client
+        for i in range(GAMES_PER_PAGE + 1):
+            _make_game(user, game_id=f"g{i}", time_class="rapid")
+
+        response = client.get("/games", {"page": "2", "time_class": "rapid"})
+
+        assert b"load delay:6s" in response.content
+        assert b"after_sync=1&amp;page=2&amp;time_class=rapid" in response.content
+
+    def test_an_unlinked_user_queues_nothing(self, mock_task, auth_client, user):
+        """The default `user` fixture has no Chess.com account."""
+        response = auth_client.get("/games")
+
+        mock_task.apply_async.assert_not_called()
+        assert b"load delay:6s" not in response.content
 
     def test_the_empty_state_says_why_there_is_nothing_yet(
         self, mock_task, linked_client
@@ -218,19 +271,32 @@ class TestHomeSync:
         needs a username, a linked one just needs to wait for the import."""
         client, _user = linked_client
 
-        assert b"Your archive is being imported" in client.get("/").content
+        assert b"Your archive is being imported" in client.get("/games").content
+
+    def test_the_empty_state_does_not_claim_an_import_that_was_never_queued(
+        self, mock_task, linked_client
+    ):
+        """"Being imported" is true only of a request that took the claim. A page
+        load takes none, and a second Refresh inside the cooldown takes none."""
+        client, _user = linked_client
+
+        assert b"being imported" not in client.get("/").content
+        client.get("/games")
+        assert b"being imported" not in client.get("/games").content
 
     def test_the_empty_state_asks_an_unlinked_user_to_link(
         self, mock_task, auth_client, user
     ):
         assert b"No Chess.com account is linked" in auth_client.get("/").content
 
-    def test_a_broker_outage_still_renders_the_home_page(self, mock_task, linked_client):
+    def test_a_broker_outage_still_renders_the_games_fragment(
+        self, mock_task, linked_client
+    ):
         """Nothing in a request may depend on Redis being up."""
         client, _user = linked_client
         mock_task.apply_async.side_effect = RuntimeError("broker down")
 
-        response = client.get("/")
+        response = client.get("/games")
 
         assert response.status_code == 200
         assert b"load delay:6s" not in response.content
@@ -284,6 +350,30 @@ class TestGameList:
         assert b'id="home-count"' in response.content
         assert b'hx-swap-oob="true"' in response.content
         assert b"of 1 finished game" in response.content
+
+    def test_swaps_the_refresh_button_back_in_with_the_active_filter(
+        self, auth_client, user
+    ):
+        """The button lives outside #game-list, so without this its time_class
+        would stay frozen at whatever the page was first loaded with and pressing
+        Refresh would silently drop the filter. Asserted as one string because the
+        "rapid" filter chip renders the same hx-get."""
+        _make_game(user)
+
+        response = auth_client.get("/games", {"time_class": "rapid"})
+
+        assert (
+            b'id="home-refresh" hx-swap-oob="true" hx-get="/games?time_class=rapid"'
+            in response.content
+        )
+
+    def test_the_re_fetch_is_absent_when_nothing_was_queued(self, auth_client, user):
+        """The `user` fixture links no account, so the fragment claims nothing."""
+        _make_game(user)
+
+        response = auth_client.get("/games")
+
+        assert b"load delay:6s" not in response.content
 
 
 @pytest.mark.django_db

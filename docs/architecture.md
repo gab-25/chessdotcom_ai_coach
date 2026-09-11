@@ -53,7 +53,7 @@ graph TD
 
     Browser -->|"navigation, paging, analyse request<br/>pending card poll every 2s"| Web
     Web --> PG
-    Web -->|"enqueue analysis <i>when you ask</i><br/>enqueue sync <i>when you open the app</i>"| Redis
+    Web -->|"enqueue analysis <i>when you ask</i><br/>enqueue sync <i>when you press Refresh</i>"| Redis
     Redis --> Worker
     Worker -->|"monthly archives"| ChessCom
     Worker --> SF
@@ -80,10 +80,11 @@ in sequence newest-first — Chess.com tolerates that far better than parallel
 fetches — and `ArchiveImport` records each month as it lands, so a run cut short
 resumes at the months it never reached rather than starting over.
 
-**The import is started by you opening the app.** `sync.request_sync` claims the
-user's sync with one conditional `UPDATE` on `last_synced_at` — atomic, so N web
-replicas racing on the same page load produce exactly one import — and hands it
-to the worker. A user who never opens the app costs no Chess.com traffic at all.
+**The import is started by you pressing Refresh.** `sync.request_sync` claims
+the user's sync with one conditional `UPDATE` on `last_synced_at` — atomic, so N
+web replicas racing on the same user produce exactly one import — and hands it to
+the worker. Opening a page claims nothing: the home page is a plain DB read, so a
+user who never presses Refresh costs no Chess.com traffic at all.
 
 **Analysis is requested, never scheduled.** An imported archive is thousands of
 games; at dozens of analyses each, and up to 152s apiece, no schedule could drain
@@ -103,12 +104,12 @@ sequenceDiagram
     participant E as Stockfish + LLM
 
     rect rgba(120,140,180,0.10)
-    Note over B,W: opening the app — the archive import (enqueues no analysis)
-    B->>Web: GET /
+    Note over B,W: pressing Refresh — the archive import (enqueues no analysis)
+    B->>Web: GET /games
     Web->>DB: claim the sync: UPDATE last_synced_at WHERE it has lapsed
     Note over Web,DB: 0 rows updated ⇒ someone claimed it already ⇒ stop here
     Web->>Q: sync_user_task(user_id), retry=False
-    Web-->>B: the page, from the DB alone
+    Web-->>B: the grid, from the DB alone, plus a single re-fetch 6s later
     Q->>W: sync_user_task
     W->>C: archive_months()
     C-->>W: one URL per month the player was active
@@ -208,7 +209,7 @@ position as FAILED instead of running it again.
 
 | Component | Entry point | Notes |
 | --- | --- | --- |
-| Sync claim | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `request_sync` — called from `views.home` and `views.game_list`. One conditional `UPDATE` on `User.last_synced_at`, so N web replicas produce one import per `SYNC_COOLDOWN`. Publishes with `retry=False`: nothing in a request may wait on the broker. **Enqueues no analysis.** |
+| Sync claim | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `request_sync` — called from `views.game_list` only; `views.home` starts nothing. One conditional `UPDATE` on `User.last_synced_at`, so N web replicas produce one import per `SYNC_COOLDOWN`. Publishes with `retry=False`: nothing in a request may wait on the broker. **Enqueues no analysis.** |
 | Archive import | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `sync_user` — where games come from, run in the worker as `tasks.sync_user_task`. `_due_months` asks for every month with no `ArchiveImport` row plus the current one, so a first sync reads the whole history and an interrupted one resumes at the gaps. `import_all_archives` re-reads regardless, behind `manage.py import_archives`. |
 | Stuck-analysis recovery | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `recover_stuck_analyses`, called from the pending card's poll at most every `RECOVERY_INTERVAL`. Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). Never raises. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
@@ -270,12 +271,15 @@ analysed value forward across un-analysed plies so it never snaps back to 50%.
 
 There is no custom JavaScript. Everything is a fragment swap:
 
-- **Home** (`home.html`) does not poll. Its **Refresh** button, the time-control
-  filter and the pager all fetch `/games` — a plain DB read — and swap the grid in
-  place; the fragment also carries an `hx-swap-oob` copy of the count line that
-  lives outside the swapped container. Each control carries the *other*'s state in
-  its query string (the filter drops the page, the pager keeps the filter), so
-  they never cancel out.
+- **Home** (`home.html`) does not poll, and starts nothing of its own. Its
+  **Refresh** button, the time-control filter and the pager all fetch `/games` and
+  swap the grid in place; the fragment carries `hx-swap-oob` copies of the two
+  head elements that live outside the swapped container, the count line and the
+  Refresh button itself — which is what keeps the button's `time_class` in step
+  with the active filter. Each control carries the *other*'s state in its query
+  string (the filter drops the page, the pager keeps the filter), so they never
+  cancel out. Refresh differs from the other two in one way: it is the request
+  that claims the sync.
 - **Detail** (`partials/position.html`) does not poll either. A finished game does
   not change, so navigation is the only thing that swaps `#gr-view` — that, and
   the **Analyse this game** POST, which re-renders it with the plies now pending.
@@ -285,9 +289,12 @@ There is no custom JavaScript. Everything is a fragment swap:
   sweeps, not to someone waiting for an answer. That poll is also what *drives*
   those sweeps: it only exists while something is in flight, so the check runs
   exactly when something might need rescuing.
-- **The home grid** refreshes itself **once**, six seconds after a load that
-  claimed the sync (`hx-trigger="load delay:6s"` on the `#game-list` wrapper,
-  which `game_list` never replaces). It is not a poll: no claim, no attribute.
+- **The games fragment** re-fetches itself **once**, six seconds after a request
+  that claimed the sync (`hx-trigger="load delay:6s"` on a hidden element inside
+  `game_list.html`), so a just-queued import lands on screen. It is not a poll: no
+  claim, no element — and the re-fetch names itself with `after_sync`, which
+  `views.game_list` never lets claim, so the chain is two requests long by
+  construction rather than by the cooldown merely outlasting the delay.
 - **Keyboard navigation** is done with HTMX triggers, not JS:
   `hx-trigger="click, keydown[key=='ArrowLeft'] from:body"`.
 - The coach card uses `hx-swap-oob` to update the eval bar, board arrows, moves

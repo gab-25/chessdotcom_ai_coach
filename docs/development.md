@@ -33,15 +33,16 @@ uv run celery -A chessdotcom_ai_coach worker -l info     # 2. analysis + archive
                                                          # 3. Redis + Postgres
 ```
 
-There is no fourth process. Nothing is scheduled: opening the home page claims
-the archive import and hands it to the same worker that runs the analyses.
+There is no fourth process. Nothing is scheduled: pressing **Refresh** on the
+home page claims the archive import and hands it to the same worker that runs the
+analyses.
 
 Symptoms when one is missing:
 
 | Missing | What you see |
 | --- | --- |
-| Celery worker | The home page stays empty — nothing imports from Chess.com — and every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING`, because nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and reopening that position re-queues it after 10 minutes.) |
-| Redis | Pressing **Analyse this game** errors. The home page still renders — `request_sync` publishes with `retry=False` and logs a warning — but no import is ever queued. |
+| Celery worker | The home page stays empty however often you press **Refresh** — nothing imports from Chess.com — and every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING`, because nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and reopening that position re-queues it after 10 minutes.) |
+| Redis | Pressing **Analyse this game** errors. The home page and the games fragment still render — `request_sync` publishes with `retry=False` and logs a warning — but no import is ever queued. |
 
 ## First run
 
@@ -50,12 +51,14 @@ Symptoms when one is missing:
    **`chessdotcom_username`** to your Chess.com account. It falls back to the
    Django login name if left blank — but only a non-empty field counts as a
    linked account, so set it explicitly.
-3. Reload the home page. That claims the sync and queues `sync_user_task`, which
-   reads your **whole** archive — a few minutes on a multi-year account. The page
-   refreshes itself once after six seconds; reload again for the rest.
+3. Open the home page — it will be empty, because a page load reads the DB and
+   nothing else — and press **Refresh**. That claims the sync and queues
+   `sync_user_task`, which reads your **whole** archive: a few minutes on a
+   multi-year account. The grid re-fetches itself once after six seconds; press
+   Refresh again for the rest.
 
 If nothing appears, check the **worker's** output: that is where the import runs,
-and a bad username surfaces there. Note the claim — a second reload within
+and a bad username surfaces there. Note the claim — a second **Refresh** within
 `SYNC_COOLDOWN_SECONDS` (5 minutes) deliberately queues nothing, so clear
 `last_synced_at` on your user if you want to retry at once.
 
@@ -85,8 +88,8 @@ belonging to another user reads as not found.
 uv run python manage.py import_archives [--user <username>] [--months N]
 ```
 
-Ordinary imports need no command — opening the app claims a sync and the worker
-reads whatever months are missing. This is the **override**: it ignores
+Ordinary imports need no command — pressing **Refresh** claims a sync and the
+worker reads whatever months are missing. This is the **override**: it ignores
 `ArchiveImport` entirely and re-reads every monthly archive in sequence, newest
 first, which is what you want for a history imported by an older version or rows
 that claim more than the database holds. `--months` caps it to the most recent N

@@ -12,8 +12,9 @@ class User(AbstractUser):
     chessdotcom_username = models.CharField(max_length=255, blank=True, null=True)
 
     # When an archive sync was last *claimed* — not when one completed. There is
-    # no scheduler: a sync is started from the request path, and this column is
-    # the claim that keeps every web replica from starting the same one.
+    # no scheduler: a sync is started by the request the Refresh button makes, and
+    # this column is the claim that keeps every web replica from starting the same
+    # one.
     # `services.sync.request_sync` stamps it with a conditional UPDATE (atomic in
     # Postgres and in the SQLite the tests use), and the import loop re-stamps it
     # after each month so a long backfill holds the claim for its whole run
