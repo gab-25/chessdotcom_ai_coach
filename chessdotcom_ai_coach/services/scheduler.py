@@ -1,28 +1,25 @@
 """Scheduler job bodies, split into steps so each is unit-testable without a
 running APScheduler.
 
-Two schedules call in here (see `management.commands.run_scheduler`):
+One schedule calls in here (see `management.commands.run_scheduler`):
 
-* the 5s tick — `sync_current_games` pulls each linked user's games from
-  Chess.com into the local DB, `backfill_results` resolves the outcome of games
-  that just ended, and `requeue_stale_analyses` / `requeue_orphaned_analyses`
-  revive analyses that got stuck. It enqueues no analysis of its own;
-* the 10 minute scan — `enqueue_finished_game_analyses` reconciles finished
-  games towards "every user move analysed". This is the *only* path that
-  enqueues work.
+* `import_archive_month` pulls one month of each linked user's Chess.com archive
+  into the local DB — every finished game, live and daily alike. This is where
+  the app's games come from.
+* `sync_current_games` covers the one gap the archive leaves: a daily game still
+  being played is not in it, and this is what notices when such a game ends.
+* `requeue_stale_analyses` / `requeue_orphaned_analyses` revive analyses that got
+  stuck.
 
-A game is analysed once it is over, never while it is being played: the coach
-comments on moves you have played, and a position you have not played yet is not
-analysed at all. The 5s tick still has to run, though — Chess.com only serves the
-PGN of games that are still "current", so `sync_current_games` is the one chance
-to snapshot a game before it disappears, and without it there would be nothing
-left to analyse afterwards.
+**Nothing here enqueues analysis.** A full archive is thousands of games at
+dozens of analyses each, which no worker is going to finish, so the user asks for
+a game to be analysed and `analysis.enqueue_game_analysis` is called from the
+view. These jobs only gather games and unstick work that was already requested.
 
-The enqueue step is a reconciliation pass, not a one-shot trigger: it compares
-what the PGN says the user played against the `CoachSuggestion` rows that exist
-and queues the difference. Anything missed — because a task was lost, because the
-worker was down — is therefore picked up on a later run rather than being gone
-for good.
+The import is deliberately paced at **one month per user per run**: Chess.com
+does not take kindly to bursts, and a multi-year account is dozens of monthly
+archives. `ArchiveImport` records how far each user has got, so a run picks up
+where the last one stopped instead of starting over.
 """
 
 import logging
@@ -30,19 +27,12 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from ..models import MAX_ANALYSIS_ATTEMPTS, CoachSuggestion, Game, User
+from ..models import MAX_ANALYSIS_ATTEMPTS, ArchiveImport, CoachSuggestion, Game, User
 from ..tasks import analyze_game_task
 from . import game_store
-from .analysis import enqueue_game_analysis
 from .chess_client import Client
 
 logger = logging.getLogger(__name__)
-
-# Only games that ended within this window are retried against the archives, so a
-# game that never resolves (e.g. played under a different alias) is not re-fetched
-# on every tick forever. It bounds the Chess.com calls only — the analysis scan
-# below deliberately has no such window.
-RESULT_BACKFILL_WINDOW = timedelta(days=3)
 
 # How long an analysis may stay RUNNING before it's assumed dead. This bounds a
 # *single* analysis, not a queue wait: `coach.get_best_move` is capped at 2s of
@@ -59,15 +49,13 @@ REQUEUE_BATCH_SIZE = 20
 # its depth. `task_default_queue`, which nothing overrides.
 TASK_QUEUE_NAME = "celery"
 
-# Cap the tasks a single scan of the finished games may enqueue. The scan covers
-# the whole history, so the first run after a long outage would otherwise dump
-# thousands of analyses on the worker at once; the leftovers are picked up ten
-# minutes later, since the scan is a reconciliation and not a one-shot trigger.
-ENQUEUE_BUDGET_PER_RUN = 200
 
+def linked_users():
+    """Active users who linked a Chess.com account (the ones worth polling).
 
-def _linked_users():
-    """Active users who linked a Chess.com account (the ones worth polling)."""
+    Public because `manage.py import_archives` needs the same set: a user without
+    a linked account has no archive to read.
+    """
     return (
         User.objects.filter(is_active=True)
         .exclude(chessdotcom_username__isnull=True)
@@ -78,19 +66,17 @@ def _linked_users():
 def sync_current_games() -> None:
     """Refresh linked users' current games from Chess.com into the local DB.
 
-    Do not be fooled by the app never showing a game in progress: this job is
-    load-bearing precisely *because* of that. Chess.com serves the PGN only for
-    games that are still "current", so this is the one chance to snapshot a game
-    at all — and it is also what flips `is_active` to False once a game vanishes
-    from that endpoint, which is the event `enqueue_finished_game_analyses` waits
-    for. Without it nothing would ever enter the DB, and nothing would ever be
-    analysed.
+    Narrow job, easy to over-read: the endpoint behind it is **daily-only and
+    in-progress-only**, so it is not how games get here — `import_archive_month`
+    is. What it does is flip `is_active` to False when a daily game disappears
+    from the current-games list, which is what stops a finished game being hidden
+    as "still in progress" until the next archive read catches up.
 
     Only users who explicitly linked a Chess.com account are synced. A per-user
     failure (bad username, transient network error) is logged and skipped so it
     doesn't block the rest of the batch.
     """
-    for user in _linked_users():
+    for user in linked_users():
         try:
             games = Client(username=user.chess_username).my_current_games()
             game_store.upsert_current_games(user, games)
@@ -98,106 +84,102 @@ def sync_current_games() -> None:
             logger.exception("Chess.com sync failed for user %s", user.chess_username)
 
 
-def backfill_results() -> int:
-    """Resolve the outcome of recently-ended games from the Chess.com archives.
+def _months_to_import(user, months: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Which archive months this run should read for `user`, at most two.
 
-    A game only leaves Chess.com's "current games" once it's over, and the snapshot
-    we kept has a PGN with Result "*", so the outcome must be fetched separately.
-    For each linked user with finished-but-unresolved games in the backfill window,
-    pull the current month's archive (falling back to the previous month for games
-    not found there, to cover month boundaries) and persist each match. A per-user
-    failure is logged and skipped so one bad account doesn't block the batch.
-    Returns the number of games resolved this tick.
+    The **current month is always read**: it keeps growing as the user plays, so
+    a game finished minutes ago is in it and nowhere else. That is what makes a
+    finished game show up without any other mechanism watching for it.
 
-    The archive's PGN is written along with the result: our own snapshot stops at
-    the last sync before the game left "current games", so it can be missing the
-    closing moves. That refreshed movetext is what lets
-    `enqueue_finished_game_analyses` see the full move list — but the analysis
-    itself is not enqueued here. A game whose result never resolves (played under
-    a different alias, say) would then never be analysed at all; the scan runs off
-    the stored PGN instead and covers it regardless.
+    On top of that, one month of backlog is taken per run — the newest not yet
+    imported, so a fresh account fills in with recent games first and works
+    backwards, instead of making the user wait while years of history scroll by.
+    Two requests per run while there is history left, one once there isn't.
     """
-    updated = 0
-    since = timezone.now() - RESULT_BACKFILL_WINDOW
-    for user in _linked_users():
+    if not months:
+        return []
+
+    now = timezone.now()
+    current = (now.year, now.month)
+    due = [current] if current in months else []
+
+    done = {(row.year, row.month) for row in ArchiveImport.objects.filter(user=user)}
+    backlog = [m for m in months if m not in done and m != current]
+    if backlog:
+        due.append(backlog[-1])  # `months` is ascending, so this is the newest
+    return due
+
+
+def import_archive_month() -> int:
+    """Import due archive months for every linked user. Returns games added.
+
+    This is where the app's games come from: the monthly archive is the only
+    endpoint that carries live games (bullet, blitz, rapid) at all, and it also
+    holds finished daily games with their final PGN and result.
+
+    Paced at one backlog month per run on purpose. A five-year account is ~60
+    monthly archives; fetching them in one go would both hammer Chess.com and
+    write thousands of rows at once. `ArchiveImport` records what has been read,
+    so successive runs walk backwards through the history and then settle into
+    re-reading just the current month. See `_months_to_import`.
+
+    A per-user failure (bad username, transient network error) is logged and
+    skipped so one bad account doesn't block the batch.
+    """
+    added = 0
+    for user in linked_users():
         try:
-            pending = game_store.unresolved_past_games(user, since)
-            if not pending:
-                continue
             client = Client(username=user.chess_username)
-            results = client.finished_game_results()  # current month
-            if any(game.game_id not in results for game in pending):
-                # Some games ended in a prior month (e.g. long daily games): merge
-                # in last month's archive, keeping the current month's entries.
-                prev_month_end = timezone.now().replace(day=1) - timedelta(days=1)
-                results = {
-                    **client.finished_game_results(
-                        prev_month_end.year, prev_month_end.month
-                    ),
-                    **results,
-                }
-            for game in pending:
-                match = results.get(game.game_id)
-                if match:
-                    game_store.set_result(
-                        user,
-                        game.game_id,
-                        match["result"],
-                        match["detail"],
-                        match.get("pgn", ""),
-                    )
-                    updated += 1
+            for year, month in _months_to_import(user, client.archive_months()):
+                games = client.finished_games(year, month)
+                added += game_store.upsert_finished_games(user, games)
+                ArchiveImport.objects.update_or_create(
+                    user=user,
+                    year=year,
+                    month=month,
+                    defaults={"game_count": len(games)},
+                )
+                logger.info(
+                    "Imported %d games for %s from %04d-%02d",
+                    len(games),
+                    user.chess_username,
+                    year,
+                    month,
+                )
         except Exception:
-            logger.exception(
-                "Result backfill failed for user %s", user.chess_username
-            )
-    return updated
+            logger.exception("Archive import failed for user %s", user.chess_username)
+    return added
 
 
-def enqueue_finished_game_analyses() -> int:
-    """Enqueue the analyses still missing from finished games.
+def import_all_archives(user, months: int | None = None) -> int:
+    """Read a user's whole archive in one go. Returns the number of games added.
 
-    The only path that enqueues work. A game is analysed once it is over, so
-    nothing is queued while it is being played: every finished game is compared
-    against its `CoachSuggestion` rows and the difference is queued. It runs on
-    its own 10 minute schedule rather than on the 5s tick because it reads every
-    stored game, and nothing about a finished game changes fast enough to need
-    more — the cost is that analysis starts up to ten minutes after the last move.
-
-    Being a reconciliation rather than a one-shot trigger is what makes that safe.
-    A game whose closing moves only arrived with the archive's PGN (our snapshot
-    stops at the last sync before it left "current games"), one whose task was
-    lost to a worker restart, one that was already over when the account was
-    linked — each is picked up on a later run instead of being missed for good.
-
-    Deliberately unbounded in time: a game is checked for as long as it is stored,
-    so one whose result never resolved from the archives still gets analysed.
-    `ENQUEUE_BUDGET_PER_RUN` bounds the work instead — the leftovers come back on
-    the next run. A per-user failure is logged and skipped. Returns the number of
-    tasks enqueued this run.
+    The bulk catch-up behind `manage.py import_archives`, for when waiting for
+    the scheduler to walk a month per run is not worth it. Requests are made one
+    month at a time in sequence — Chess.com tolerates that far better than
+    parallel fetches. ``months`` caps how many of the most recent months are
+    read; None means the whole history.
     """
-    enqueued = 0
-    for user in _linked_users():
-        try:
-            for game in game_store.past_games(user):
-                if not game.pgn:
-                    continue  # nothing to reconcile against
-                budget = ENQUEUE_BUDGET_PER_RUN - enqueued
-                if budget <= 0:
-                    logger.info(
-                        "Finished-game scan hit its budget of %d tasks; "
-                        "the rest follows on the next run",
-                        ENQUEUE_BUDGET_PER_RUN,
-                    )
-                    return enqueued
-                result = enqueue_game_analysis(user, game.game_id, limit=budget)
-                if result:
-                    enqueued += result["enqueued"]
-        except Exception:
-            logger.exception(
-                "Finished-game analysis scan failed for user %s", user.chess_username
-            )
-    return enqueued
+    client = Client(username=user.chess_username)
+    wanted = client.archive_months()
+    if months is not None:
+        wanted = wanted[-months:]
+
+    added = 0
+    for year, mm in reversed(wanted):  # newest first: recent games show up first
+        games = client.finished_games(year, mm)
+        added += game_store.upsert_finished_games(user, games)
+        ArchiveImport.objects.update_or_create(
+            user=user, year=year, month=mm, defaults={"game_count": len(games)}
+        )
+        logger.info(
+            "Imported %d games for %s from %04d-%02d",
+            len(games),
+            user.chess_username,
+            year,
+            mm,
+        )
+    return added
 
 
 def requeue_stale_analyses() -> int:

@@ -1,30 +1,27 @@
-"""Run the APScheduler that syncs games from Chess.com and enqueues analysis.
+"""Run the APScheduler that gathers games from Chess.com and unsticks analyses.
 
 This is the single source of scheduling in the project (there is no Celery Beat).
 Run it as its own process/service so exactly one scheduler instance exists — an
-in-process scheduler under gunicorn would start once per worker and enqueue
-duplicates.
+in-process scheduler under gunicorn would start once per worker and duplicate
+every archive fetch.
 
-Two jobs run at very different cadences, because they answer to different clocks:
+One job, on a slow cadence, because nothing it does needs to be fresh by the
+second:
 
-* every 5s — the sync tick. It snapshots each linked user's current games from
-  Chess.com into the local DB (`sync_current_games`), resolves the outcome of
-  games that just ended from the archives (`backfill_results`), and revives
-  analyses whose worker or whose broker message never came back
-  (`requeue_stale_analyses`, `requeue_orphaned_analyses`). It enqueues **no**
-  analysis: a game is analysed once it is over.
-* every 10 minutes — the reconciliation scan over finished games
-  (`enqueue_finished_game_analyses`), and the only job that enqueues work. It
-  reads the whole stored history, and a finished game changes only when something
-  else failed, so there is nothing to gain from running it on the sync tick.
+* `import_archive_month` — one month of each linked user's archive per run. This
+  is where the app's games come from, live and daily alike.
+* `sync_current_games` — the daily-only, in-progress-only endpoint, used to flip
+  a daily game to finished as soon as it ends rather than waiting for the next
+  archive read.
+* `requeue_stale_analyses` / `requeue_orphaned_analyses` — revive analyses whose
+  worker, or whose broker message, never came back.
 
-The sync tick stays at 5s even though nothing on screen needs data that fresh:
-Chess.com serves the PGN only for games that are still "current", so a game
-missed there is gone, along with the moves that would have been analysed.
+**No job enqueues analysis.** A full archive is thousands of games at dozens of
+analyses each, so a game is analysed when the user asks for it, from the detail
+page or `manage.py analyze_game`.
 
-Within each job the steps run in separate try/except blocks so a Chess.com outage
-doesn't stop the local enqueue checks from still running against whatever `Game`
-rows exist.
+The steps run in separate try/except blocks so a Chess.com outage doesn't stop
+the local recovery checks from running against whatever `Game` rows exist.
 """
 
 import logging
@@ -33,8 +30,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from django.core.management.base import BaseCommand
 
 from ...services.scheduler import (
-    backfill_results,
-    enqueue_finished_game_analyses,
+    import_archive_month,
     requeue_orphaned_analyses,
     requeue_stale_analyses,
     sync_current_games,
@@ -42,15 +38,13 @@ from ...services.scheduler import (
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 5
-FINISHED_SCAN_MINUTES = 10
+TICK_INTERVAL_MINUTES = 10
 
 
 class Command(BaseCommand):
     help = (
-        "Every 5s, sync games from Chess.com, backfill finished-game results and "
-        "revive stuck analyses; every 10min, scan finished games for moves that "
-        "were never analysed and enqueue them."
+        "Every 10min, import a month of each linked user's Chess.com archive, "
+        "mark finished daily games, and revive stuck analyses."
     )
 
     def handle(self, *args, **options):
@@ -58,21 +52,13 @@ class Command(BaseCommand):
         scheduler.add_job(
             self._tick,
             "interval",
-            seconds=POLL_INTERVAL_SECONDS,
+            minutes=TICK_INTERVAL_MINUTES,
             max_instances=1,  # never overlap a slow tick with the next
             coalesce=True,  # collapse missed runs into one
         )
-        scheduler.add_job(
-            self._scan_finished,
-            "interval",
-            minutes=FINISHED_SCAN_MINUTES,
-            max_instances=1,
-            coalesce=True,
-        )
         self.stdout.write(
             self.style.SUCCESS(
-                f"Scheduler started ({POLL_INTERVAL_SECONDS}s poll, "
-                f"{FINISHED_SCAN_MINUTES}min finished-game scan)."
+                f"Scheduler started ({TICK_INTERVAL_MINUTES}min tick)."
             )
         )
         try:
@@ -86,11 +72,11 @@ class Command(BaseCommand):
         except Exception:  # a bad tick must not kill the scheduler
             logger.exception("Chess.com sync failed")
         try:
-            # After the sync: games that just ended are now is_active=False, so
-            # resolve their outcome from the archives.
-            backfill_results()
+            # After the sync: a daily game that just ended is already is_active
+            # False, so this run's read of the current month picks it up complete.
+            import_archive_month()
         except Exception:
-            logger.exception("Result backfill failed")
+            logger.exception("Archive import failed")
         try:
             # Anything still RUNNING well past the analysis timeout lost its
             # worker, so hand it back to the queue (or retire it) rather than leave
@@ -105,9 +91,3 @@ class Command(BaseCommand):
             requeue_orphaned_analyses()
         except Exception:
             logger.exception("Orphaned-analysis requeue failed")
-
-    def _scan_finished(self):
-        try:
-            enqueue_finished_game_analyses()
-        except Exception:
-            logger.exception("Finished-game analysis scan failed")

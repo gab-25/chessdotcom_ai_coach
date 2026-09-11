@@ -1,13 +1,14 @@
 # chessdotcom_ai_coach
 
-Chess Coach AI — a **Django** web app that mirrors your Chess.com games and, once
-a game is over, replays it move by move: for every move you played it renders the
-board and asks Stockfish and a local LLM what it would have played instead, like
-a grandmaster coach going over the game with you.
+Chess Coach AI — a **Django** web app that mirrors your whole Chess.com archive
+locally, **every finished game, live and daily**, and replays any of them move by
+move. Ask it to analyse a game and, for each move you played, it renders the board
+and asks Stockfish and a local LLM what it would have played instead, like a
+grandmaster coach going over the game with you.
 
-It reviews, it does not watch. A game still in progress is snapshotted (that is
-the only chance to capture its PGN) but never shown, and a move you have not
-played yet is never analysed.
+It reviews, it does not watch. A game still in progress is recorded but never
+shown, a move you have not played yet is never analysed, and nothing is analysed
+until you ask — a full archive is more games than any worker would get through.
 
 ## Stack
 
@@ -23,13 +24,11 @@ played yet is never analysed.
 - **Celery + Redis** — analysis runs out-of-band: a task is enqueued
   (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend, and
   a hidden HTMX poller reveals the result once the worker finishes
-- **APScheduler** — background scheduler (`manage.py run_scheduler`) with two
-  jobs (`chessdotcom_ai_coach/services/scheduler.py`): every 5 seconds it syncs
-  each linked user's current games from Chess.com into the local DB, and every 10
-  minutes it sweeps the finished ones and enqueues the analyses they are missing.
-  Only the second job enqueues anything — a game is analysed once it is over. The
-  5 second sync is still load-bearing: Chess.com serves the PGN only while a game
-  is current, so a game missed there is gone.
+- **APScheduler** — background scheduler (`manage.py run_scheduler`,
+  `chessdotcom_ai_coach/services/scheduler.py`). Every 10 minutes it reads a month
+  of each linked user's Chess.com archive — the current one, plus one month of
+  backlog — so a multi-year account mirrors itself over a few hours rather than in
+  one burst Chess.com would rate-limit. It enqueues no analysis.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
   `django-htmx`: the home refresh, move-by-move navigation and the coach card are
   all fragment swaps, with no custom JavaScript
@@ -137,23 +136,27 @@ uv run python manage.py run_scheduler                    # the APScheduler proce
 Open http://localhost:8000, sign in, then set your **Chess.com username** on the
 user via the admin at http://localhost:8000/admin/ (field `chessdotcom_username`;
 it falls back to the login username if left blank, but the scheduler only polls
-users whose field is non-empty). Games appear on the home page as they finish —
-a game still in progress is being recorded, but there is nothing to review yet.
+users whose field is non-empty). Your games appear on the home page as the archive
+is imported, a month per tick. To pull the whole history at once instead of
+waiting:
+
+```bash
+uv run python manage.py import_archives [--user <username>] [--months N]
+```
 
 ## Analysing a whole game
 
-Every move you played gets its own analysis, and you don't have to ask for it.
-Analysis starts when the game ends: the 10 minute scan compares each finished
-game's PGN against the analyses already stored and queues the difference. Because
-it is a comparison and not a one-off trigger, it keeps working — closing moves
-that only arrived with the archive's PGN, a task lost to a worker restart, a game
-that was already over when you linked the account are all picked up on a later
-run, for as long as the game is stored.
+Open a game and press **Analyse this game**: every move you played is queued, one
+analysis each. Nothing is analysed until you ask, because a full archive is
+thousands of games at dozens of analyses apiece — no worker would ever finish
+that queue, and the games you actually want to review would sit behind years of
+ones you don't.
 
-Two waits stack up, so expect a finished game to fill in gradually rather than at
-once: up to 10 minutes before the scan notices, then the queue itself — a whole
-game is dozens of analyses, each a few seconds of Stockfish plus an LLM call. To
-skip the wait for one game, or to retry one whose analyses were given up on:
+Expect a game to fill in gradually rather than at once: a whole game is dozens of
+analyses, each a few seconds of Stockfish plus an LLM call, so the card for each
+move turns from pending to answered as the worker gets to it. Pressing the button
+again costs nothing — the enqueue is idempotent. The command-line equivalent, and
+the way to retry a game whose analyses were given up on:
 
 ```bash
 uv run python manage.py analyze_game <game_id> [--user <username>]

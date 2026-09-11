@@ -20,10 +20,11 @@ class User(AbstractUser):
 class Game(models.Model):
     """Persisted snapshot of a Chess.com game; the PGN is the source of the moves.
 
-    Chess.com only exposes games that are still "current", so once a game ends it
-    disappears from the API. Snapshotting it here (from the scheduler's 5s sync)
-    keeps the game — and its move list — browsable afterwards. That is also why a
-    game in progress is stored but never shown: the snapshot is taken for the
+    Rows come from two places. The **monthly archives** are the main source: every
+    finished game, live and daily alike, with its final PGN and result. The
+    *current games* endpoint fills the one gap the archives leave — it is daily-only
+    and in-progress-only, and is what lets the app notice a daily game has ended.
+    A game in progress is therefore stored but never shown: it is recorded for the
     review that follows, not for watching along.
     """
 
@@ -37,8 +38,13 @@ class Game(models.Model):
     white_rating = models.CharField(max_length=16, blank=True)
     black_rating = models.CharField(max_length=16, blank=True)
     time_class = models.CharField(max_length=32, blank=True)
-    pgn = models.TextField(blank=True)  # snapshot: the source of the move history
-    fen = models.CharField(max_length=100, blank=True)  # last position snapshotted
+    pgn = models.TextField(blank=True)  # the source of the move history
+    fen = models.CharField(max_length=100, blank=True)  # final/last known position
+    # When the game ended, from the archive. Indexed because it orders the home
+    # page: an imported archive arrives in bulk, so `updated_at` says when we
+    # fetched a game, never when it was played. Null for a game we have only ever
+    # seen as "current" (still in progress) and for rows predating the import.
+    end_time = models.DateTimeField(null=True, blank=True, db_index=True)
     # True while Chess.com still lists the game as current. Flipping to False is
     # what makes the game visible in the app and eligible for analysis.
     is_active = models.BooleanField(default=True)
@@ -49,10 +55,10 @@ class Game(models.Model):
         DRAW = "draw", "Draw"
         UNKNOWN = "unknown", "Unknown"
 
-    # Outcome relative to this row's user. Snapshots taken while the game is still
-    # "current" carry a PGN with Result "*", so the result is not known from the
-    # snapshot itself — the scheduler backfills it from the Chess.com monthly
-    # archives once the game ends (see services.scheduler.backfill_results).
+    # Outcome relative to this row's user, straight from the archive. Stays
+    # UNKNOWN only for a row that never came from there: a daily game still in
+    # progress, snapshotted from a PGN whose Result tag is "*". It resolves itself
+    # the next time the archive is read.
     result = models.CharField(
         max_length=8, choices=Result.choices, default=Result.UNKNOWN
     )
@@ -63,7 +69,10 @@ class Game(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-updated_at"]
+        # Newest game first. `-updated_at` breaks the tie so rows without an
+        # end_time (games in progress, pre-import rows) stay in a stable order
+        # instead of drifting between queries.
+        ordering = ["-end_time", "-updated_at"]
         constraints = [
             models.UniqueConstraint(fields=["user", "game_id"], name="uniq_user_game")
         ]
@@ -82,6 +91,40 @@ class Game(models.Model):
         return f"{self.white_name} vs {self.black_name} ({self.game_id})"
 
 
+class ArchiveImport(models.Model):
+    """One month of a user's Chess.com archive, already read.
+
+    The archive job imports **one month per run** so the first pass over a
+    multi-year account neither hammers the API nor dumps thousands of rows at
+    once; this table is how it remembers where it got to. Without it every run
+    would start again from the oldest month.
+
+    The current month is the exception: it keeps growing as the user plays, so it
+    is re-read on every run and this row is refreshed rather than treated as
+    done. `game_count` is what was seen on the last read, kept for the log and
+    for telling "no games that month" apart from "never looked".
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="archive_imports"
+    )
+    year = models.PositiveSmallIntegerField()
+    month = models.PositiveSmallIntegerField()
+    game_count = models.PositiveIntegerField(default=0)
+    imported_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-year", "-month"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "year", "month"], name="uniq_user_archive_month"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} {self.year}-{self.month:02d} ({self.game_count} games)"
+
+
 # How many times a worker may start on the same position before it is retired as
 # FAILED. Lives here rather than in `services.scheduler` because both the worker
 # (`tasks.analyze_game_task`, which counts the attempts) and the scheduler (which
@@ -97,10 +140,10 @@ class CoachSuggestion(models.Model):
     existing row, and every move keeps a single, latest analysis rather than an
     ever-growing pile of duplicates.
 
-    Rows are only ever created for moves the user actually played, and only once
-    the game is over (`services.analysis.enqueue_game_analysis`, driven by
-    `services.scheduler.enqueue_finished_game_analyses`). Older rows written for a
-    position that was never played still exist; they are simply never rendered,
+    Rows are only ever created for moves the user actually played, and only when
+    someone asks (`services.analysis.enqueue_game_analysis`, driven by the
+    "Analyse this game" button) — no schedule creates any. Older rows written for
+    a position that was never played still exist; they are simply never rendered,
     because the templates join suggestions onto the plies in the PGN.
     """
 

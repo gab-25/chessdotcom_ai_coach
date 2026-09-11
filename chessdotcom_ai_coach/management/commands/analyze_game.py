@@ -1,11 +1,10 @@
 """Enqueue coach analysis for every one of a user's moves in a single game.
 
-The scheduler already reconciles every game towards "every user move analysed" —
-active ones each 5s tick, finished ones every 10 minutes — so this is the
-"don't wait for it" trigger, and the way to re-run a game whose analyses were
-retired as FAILED. Reads the stored snapshot and enqueues the same Celery tasks
-the app uses — no Chess.com call. Idempotent: already-analysed (or already-queued)
-moves are skipped, so it's safe to re-run.
+Analysis is on demand — nothing analyses a game until it is asked to — so this
+is the command-line half of the "Analyse this game" button, and the way to re-run
+a game whose analyses were retired as FAILED. Reads the stored game and enqueues
+the same Celery tasks the app uses — no Chess.com call. Idempotent:
+already-analysed (or already-queued) moves are skipped, so it's safe to re-run.
 
     python manage.py analyze_game <game_id> [--user <username>]
 

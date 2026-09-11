@@ -1,4 +1,11 @@
+{% comment %}
+  The line under the home title. Lives outside #game-list, so game_list.html
+  swaps it back in out of band whenever the grid is refreshed, paged or filtered.
+{% endcomment %}
 <p class="home__sub" id="home-count"{% if oob %} hx-swap-oob="true"{% endif %}>
-  {{ games|length }} finished game{{ games|length|pluralize }} to review. A game
-  appears here once it ends.
+  {% if total %}
+    Showing {{ page.start_index }}–{{ page.end_index }} of {{ total }} finished game{{ total|pluralize }}{% if time_class %} ({{ time_class }}){% endif %}.
+  {% else %}
+    No finished games{% if time_class %} in {{ time_class }}{% endif %} yet.
+  {% endif %}
 </p>

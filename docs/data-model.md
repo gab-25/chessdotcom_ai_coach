@@ -1,15 +1,17 @@
 # Data model
 
-Three models, all in [`models.py`](../chessdotcom_ai_coach/models.py). Two of
-them exist because of the same constraint: **Chess.com only serves games that are
-still in progress.** The moment a game ends it disappears from the `current`
-endpoint, so if the app didn't snapshot it, the game — and its whole move list —
-would be gone.
+Four models, all in [`models.py`](../chessdotcom_ai_coach/models.py). The shape
+follows from where games come from: the **monthly archives**, which hold every
+finished game (live and daily) but are served a month at a time, dozens of months
+per account. `Game` mirrors them locally, `ArchiveImport` remembers how far the
+mirroring has got, and `CoachSuggestion` holds what the coach made of a position
+once someone asked.
 
 ```mermaid
 erDiagram
     USER ||--o{ GAME : "plays"
     USER ||--o{ COACHSUGGESTION : "requests"
+    USER ||--o{ ARCHIVEIMPORT : "mirrored from"
 
     USER {
         int id PK
@@ -27,8 +29,19 @@ erDiagram
         string white_name
         string black_name
         bool is_active "seen in the latest fetch"
+        string time_class "bullet|blitz|rapid|daily"
+        datetime end_time "when it was played — orders the home page"
         string result "win|loss|draw|unknown"
         string result_detail "checkmate, resignation, timeout, ..."
+    }
+
+    ARCHIVEIMPORT {
+        int id PK
+        int user_id FK
+        int year
+        int month
+        int game_count "seen on the last read"
+        datetime imported_at
     }
 
     COACHSUGGESTION {
@@ -60,52 +73,74 @@ Django's `AbstractUser` plus one field:
   the scheduler, views and analysis code all do.
 
 Only users with `is_active=True` **and** a non-empty `chessdotcom_username` are
-polled (`scheduler._linked_users`). A user who never set the field is invisible
+polled (`scheduler.linked_users`). A user who never set the field is invisible
 to the scheduler — this is the most common reason for "nothing shows up on the
 home page".
 
 ## `Game`
 
-A snapshot, not a live view. Fields worth calling out:
+A local mirror of the archive, not a live view. Fields worth calling out:
 
 | Field | Meaning |
 | --- | --- |
 | `game_id` | The last segment of the Chess.com URL (e.g. `944768131` from `https://www.chess.com/game/daily/944768131`). Not globally unique across users in this table — see the constraint below. |
 | `pgn` | The move history. Everything the review page shows is derived from this. |
+| `time_class` | `bullet` / `blitz` / `rapid` / `daily` — Chess.com's own value, and what the home filter offers. |
+| `end_time` | When the game was played, from the archive. Indexed, and the home page's sort key: an archive arrives in bulk, so `updated_at` records when we *fetched* a game, never when it was played. Null for a game only ever seen as "current". |
 | `fen` | The last position snapshotted before the game left "current games". Used for the home card's mini-board; the analysis works off `pgn` instead. |
 | `is_active` | `True` = seen in the most recent `current games` fetch. `upsert_current_games` flips to `False` every row it *didn't* just see. **That flip is the app's "the game is over" event**: it is what makes a game visible at all and what makes it eligible for analysis. |
 | `result` / `result_detail` | The outcome relative to **this row's user**, plus how it ended. |
 
-**Constraints:** unique on `(user, game_id)`; default ordering `-updated_at`.
+**Constraints:** unique on `(user, game_id)`; default ordering
+`["-end_time", "-updated_at"]` — newest game first, with `updated_at` breaking
+the tie so rows without an `end_time` keep a stable order rather than drifting
+between queries.
+
+`game_id` is the last segment of the game URL, which is why a live game and a
+daily game are keyed the same way. The archive also carries a globally unique
+`uuid`; the URL segment is kept because existing rows and `manage.py
+analyze_game` both use it, and a collision between the two id spaces for one user
+has not been observed.
 The same Chess.com game can therefore be stored twice if both players use the
 app — one row each, with opposite `result` values. This is why the `analyze_game`
 management command takes an optional `--user`.
 
-### Why `result` starts as `unknown`
+### Why a row can have `result` `unknown`
 
-A snapshot taken while the game is still current carries a PGN whose `Result` tag
-is `*` — the outcome simply isn't in the data. It's resolved afterwards by
-`scheduler.backfill_results()`, which reads the **monthly archives** (a different
-Chess.com endpoint, where each side carries a `result` code) and calls
-`game_store.set_result()`.
+A game written by `upsert_finished_games` always carries its outcome: the archive
+states it per side, and `chess_client._outcome` maps that to win/loss/draw plus
+the reason (which always lives on the *losing* side — the winner simply reads
+"win").
 
-The backfill is bounded by `RESULT_BACKFILL_WINDOW` (3 days, in
-[`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py)): only
-games that ended recently are retried, so a game that can never be resolved — for
-instance one played under an alias the archive doesn't match — stops being
-re-fetched forever. At a month boundary the previous month's archive is merged in
-as a fallback, since long daily games routinely end in a different month from the
-one they're queried in.
+`unknown` therefore means the row did **not** come from the archive. That is the
+case for a daily game still in progress, snapshotted by `upsert_current_games`
+from a PGN whose `Result` tag is `*`. It resolves itself the next time the
+archive is read, because a finished game appears there and the upsert overwrites
+the row in place.
 
-The backfill also writes the archive's PGN alongside the result: our own snapshot
-stops at the last sync before the game left "current games", so it can be missing
-the closing moves. Note that this window bounds the **Chess.com calls** only.
-Analysis is not enqueued from here — `enqueue_finished_game_analyses` works off
-the stored PGN and has no window, so a game whose result never resolves is still
-analysed in full.
+A row can stay `unknown` indefinitely in one case: a game played under an alias
+the archive does not attribute to this user (`finished_games` skips those). It
+remains browsable and analysable — everything else is derived from the stored
+PGN — it just never gets a result badge.
 
 Two helpers make templates readable: `has_result` (is it resolved?) and
 `result_label` (`"Win"` / `"Loss"` / `"Draw"`, or `""` while unknown).
+
+## `ArchiveImport`
+
+One row per month of a user's archive already read: `(user, year, month)` unique,
+plus the `game_count` seen on the last read.
+
+It exists because the import is **paced**. Chess.com serves one month per request
+and does not welcome bursts, so `import_archive_month` takes the current month
+plus one backlog month per run; without a record of what has been read, every run
+would start again from the oldest month and the history would never advance.
+
+The **current month is never treated as done**. It keeps growing as the user
+plays, so it is re-read every run and its row refreshed — that is the mechanism
+by which a game you finished minutes ago turns up, with no separate watcher.
+`game_count` is kept mostly so "no games that month" can be told apart from
+"never looked".
 
 ## `CoachSuggestion`
 
@@ -116,12 +151,12 @@ reviewed — `fen_before` of a ply in the PGN. Re-analysing the same position
 overwrites the row, so each move keeps a single latest analysis instead of
 accumulating duplicates.
 
-Rows are created only for moves the user actually played, and only once the game
-has ended. Earlier versions of the app also analysed the position you were about
-to play, and **those rows are still in the database**. They are harmless: nothing
-renders them, because the templates join suggestions onto the plies in the PGN
-and an unplayed position has no ply. Once you did play that move, the row simply
-becomes its analysis — the FEN is the same.
+Rows are created only for moves the user actually played, and only when someone
+asks — no schedule creates any. Earlier versions of the app also analysed the
+position you were about to play, and **those rows are still in the database**.
+They are harmless: nothing renders them, because the templates join suggestions
+onto the plies in the PGN and an unplayed position has no ply. Once you did play
+that move, the row simply becomes its analysis — the FEN is the same.
 
 ### The row is the lock
 
@@ -139,11 +174,10 @@ if created:
 
 Because the unique constraint on `(user, game_id, fen)` makes `get_or_create`
 atomic, `created=True` happens exactly once per position. Both enqueue paths run
-this — the 10 minute scan over finished games and `manage.py analyze_game` — and
+this — the **Analyse this game** button and `manage.py analyze_game` — and
 enqueue **only** when they created the row. A position already queued, running or
-done is skipped for free, which is precisely what lets the scan be re-run every
-ten minutes for as long as the game is stored instead of being a one-shot
-trigger.
+done is skipped for free, which is what makes a second press of the button cost
+nothing and removes any need to guard against a double click.
 
 The one place that deliberately bypasses it is the explicit **re-analyze** button
 ([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py)): on `POST`, the
@@ -163,9 +197,9 @@ Two mechanisms cover it, and they split along a line worth understanding: **is
 there a worker on this row or not?**
 
 - **`PENDING` — no worker yet.** The message is on the broker, waiting its turn.
-  It can wait a long time and be perfectly healthy: a scan of a finished game
-  queues ~40 analyses at 2s of Stockfish plus up to 150s of LLM each, so the last
-  one may not start for the better part of an hour. Recovery here is Celery's:
+  It can wait a long time and be perfectly healthy: one press of **Analyse this
+  game** queues ~40 analyses at 2s of Stockfish plus up to 150s of LLM each, so
+  the last one may not start for the better part of an hour. Recovery here is Celery's:
   `CELERY_TASK_ACKS_LATE` means the task is acknowledged after it ran, so a worker
   that dies holding it hands the message back (on a graceful stop) or leaves it
   for the broker's visibility timeout (on a hard kill).
@@ -226,9 +260,8 @@ path hold Chess.com's spelling of the same position, and the two can differ in
 the halfmove clock or the en-passant field. `_covered_plies` therefore reads the
 game's existing rows once and matches on `(move_no, side to move)` — the ply
 identity `board_utils.annotate_moves` already joins on — before creating
-anything. Without it the scan would re-analyse every move that already has a row
-under the other spelling; one query per game rather than per move matters because
-the scan sweeps the whole stored history.
+anything. Without it a second request would re-analyse every move that already
+has a row under the other spelling.
 
 ### Evaluation fields
 
@@ -252,6 +285,6 @@ out in move order without any explicit sort.
 
 ## Migrations
 
-`migrations/0001` … `0006`, in [`chessdotcom_ai_coach/migrations/`](../chessdotcom_ai_coach/migrations/).
+`migrations/0001` … `0007`, in [`chessdotcom_ai_coach/migrations/`](../chessdotcom_ai_coach/migrations/).
 Applied automatically by [`entrypoint.sh`](../entrypoint.sh) on container start;
 run `uv run python manage.py migrate` by hand for local development.

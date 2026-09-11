@@ -10,7 +10,7 @@
     </div>
     <div class="home__filters">
       <button type="button" class="btn btn--ghost btn--sm"
-              hx-get="{% url 'game_list' %}"
+              hx-get="{% url 'game_list' %}?time_class={{ time_class }}"
               hx-target="#game-list"
               hx-swap="innerHTML">
         <i class="fa-solid fa-arrows-rotate"></i>Refresh

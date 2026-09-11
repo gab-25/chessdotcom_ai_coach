@@ -65,6 +65,33 @@
         <div class="coach__body" id="gr-coach">{% include "partials/coach_card.html" %}</div>
       </div>
 
+      {% comment %}
+        Whole-game analysis. Nothing queues analysis on a schedule — an imported
+        archive is far more games than a worker could ever get through — so this
+        is where it starts. The POST is idempotent (`enqueue_game_analysis` skips
+        what is already queued or done), so a second press costs nothing.
+      {% endcomment %}
+      {% if analysis_total %}
+      <div class="gr-analyse">
+        <div class="gr-analyse__state">
+          {% if analysis_complete %}
+            <i class="fa-solid fa-circle-check"></i> All {{ analysis_total }} of your moves analysed
+          {% elif analysis_pending %}
+            <span class="spinner"></span> {{ analysis_done }} of {{ analysis_total }} analysed · {{ analysis_pending }} queued
+          {% else %}
+            {{ analysis_done }} of {{ analysis_total }} of your moves analysed
+          {% endif %}
+        </div>
+        {% if not analysis_complete %}
+        <button type="button" class="btn btn--accent btn--sm"
+                hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
+                hx-target="#gr-view" hx-swap="outerHTML">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
+        </button>
+        {% endif %}
+      </div>
+      {% endif %}
+
       {% include "partials/history_list.html" %}
     </div>
   </div>

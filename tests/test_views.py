@@ -8,12 +8,15 @@ so these tests just seed the DB. The Celery task is mocked where analysis is
 enqueued.
 """
 
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from django.conf import settings
+from django.utils import timezone
 
 from chessdotcom_ai_coach.models import CoachSuggestion, Game
+from chessdotcom_ai_coach.views import GAMES_PER_PAGE
 from chessdotcom_ai_coach.services import board as board_utils
 
 FEN_START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -124,7 +127,7 @@ class TestHome:
         response = auth_client.get("/")
 
         assert response.content.count(b'id="home-count"') == 1
-        assert b"1 finished game to review" in response.content
+        assert b"of 1 finished game" in response.content
         assert b"hx-swap-oob" not in response.content
 
     def test_does_not_list_a_game_in_progress(self, auth_client, user):
@@ -185,7 +188,7 @@ class TestGameList:
 
         assert b'id="home-count"' in response.content
         assert b'hx-swap-oob="true"' in response.content
-        assert b"1 finished game to review" in response.content
+        assert b"of 1 finished game" in response.content
 
 
 @pytest.mark.django_db
@@ -895,6 +898,142 @@ class TestGameListStates:
         # Nothing that would advertise a game in progress.
         assert "LIVE" not in body
         assert "Your turn" not in body
+
+
+@pytest.mark.django_db
+class TestHomePaging:
+    """An imported archive is thousands of rows, so the grid is paged and filtered."""
+
+    def _make_games(self, user, count, **overrides):
+        now = timezone.now()
+        for i in range(count):
+            _make_game(
+                user,
+                game_id=f"g{i:03d}",
+                end_time=now - timedelta(days=i),
+                **overrides,
+            )
+
+    def test_first_page_is_capped(self, auth_client, user):
+        self._make_games(user, GAMES_PER_PAGE + 5)
+
+        response = auth_client.get("/")
+
+        assert len(response.context["games"]) == GAMES_PER_PAGE
+        assert response.context["total"] == GAMES_PER_PAGE + 5
+
+    def test_second_page_holds_the_remainder(self, auth_client, user):
+        self._make_games(user, GAMES_PER_PAGE + 5)
+
+        response = auth_client.get("/games", {"page": "2"})
+
+        assert len(response.context["games"]) == 5
+        assert response.context["page"].number == 2
+
+    def test_an_out_of_range_page_lands_on_a_real_one(self, auth_client, user):
+        """The page number is in a URL, so junk must not 500."""
+        self._make_games(user, 3)
+
+        assert auth_client.get("/games", {"page": "99"}).status_code == 200
+        assert auth_client.get("/games", {"page": "nope"}).status_code == 200
+
+    def test_newest_game_first(self, auth_client, user):
+        now = timezone.now()
+        _make_game(user, game_id="older", end_time=now - timedelta(days=2))
+        _make_game(user, game_id="newer", end_time=now)
+
+        response = auth_client.get("/")
+
+        assert [g.game_id for g in response.context["games"]] == ["newer", "older"]
+
+    def test_filters_by_time_class(self, auth_client, user):
+        _make_game(user, game_id="b", time_class="blitz")
+        _make_game(user, game_id="d", time_class="daily")
+
+        response = auth_client.get("/games", {"time_class": "blitz"})
+
+        assert [g.game_id for g in response.context["games"]] == ["b"]
+        assert response.context["time_class"] == "blitz"
+
+    def test_offers_only_the_time_classes_present(self, auth_client, user):
+        _make_game(user, game_id="b", time_class="blitz")
+        _make_game(user, game_id="d", time_class="daily")
+
+        response = auth_client.get("/")
+
+        assert response.context["time_classes"] == ["blitz", "daily"]
+
+    def test_paging_keeps_the_filter(self, auth_client, user):
+        """The pager and the filter must not cancel each other out."""
+        self._make_games(user, GAMES_PER_PAGE + 2, time_class="blitz")
+        _make_game(user, game_id="daily1", time_class="daily")
+
+        response = auth_client.get("/games", {"time_class": "blitz"})
+        body = response.content.decode()
+
+        assert "page=2&amp;time_class=blitz" in body
+
+    def test_empty_filter_result_says_so(self, auth_client, user):
+        _make_game(user, game_id="b", time_class="blitz")
+
+        response = auth_client.get("/games", {"time_class": "daily"})
+
+        assert b"No finished daily games" in response.content
+
+
+@pytest.mark.django_db
+@patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
+class TestAnalyzeWholeGame:
+    """Analysis is on demand: nothing queues a game until the user asks."""
+
+    def test_post_queues_every_move_the_user_played(self, mock_task, auth_client, user):
+        _make_game(user)
+
+        response = auth_client.post("/game/944768131/analyze-game")
+
+        assert response.status_code == 200
+        # PGN is 1. e4 e5 2. Nf3 Nc6 — the user is White, so two moves.
+        assert mock_task.delay.call_count == 2
+        assert CoachSuggestion.objects.filter(user=user).count() == 2
+
+    def test_post_twice_queues_nothing_extra(self, mock_task, auth_client, user):
+        _make_game(user)
+
+        auth_client.post("/game/944768131/analyze-game")
+        auth_client.post("/game/944768131/analyze-game")
+
+        assert mock_task.delay.call_count == 2  # idempotent: a double click is free
+
+    def test_refuses_a_game_in_progress(self, mock_task, auth_client, user):
+        _make_game(user, is_active=True)
+
+        response = auth_client.post("/game/944768131/analyze-game")
+
+        assert response.status_code == 404
+        mock_task.delay.assert_not_called()
+
+    def test_progress_is_shown_on_the_page(self, mock_task, auth_client, user):
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(0))
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.context["analysis_total"] == 2
+        assert response.context["analysis_done"] == 1
+        assert response.context["analysis_complete"] is False
+        assert b"Analyse this game" in response.content
+
+    def test_the_button_goes_away_once_the_game_is_done(
+        self, mock_task, auth_client, user
+    ):
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(0))
+        _make_suggestion(user, _ply_fen(2))
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.context["analysis_complete"] is True
+        assert b"Analyse this game" not in response.content
 
 
 @pytest.mark.django_db

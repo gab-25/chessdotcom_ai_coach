@@ -1,22 +1,27 @@
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 
 from .models import CoachSuggestion
+from .services import analysis as analysis_service
 from .services import board as board_utils
 from .services import game_store
 from .tasks import analyze_game_task
 
 _START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
+# Games per page on the home grid. An imported archive runs to thousands of rows,
+# so the list is paged rather than rendered whole.
+GAMES_PER_PAGE = 24
+
 
 def _decorate_games(games):
     """Attach the mini-board cells and the move number to `Game` rows.
 
-    Used by the home page's game grid (a plain DB read). Both are derived from the
-    stored FEN, which for a finished game is the last position we snapshotted
-    before it left Chess.com's "current games".
+    Used by the home page's game grid (a plain DB read). Both come from the stored
+    FEN, which for an imported game is the final position from the archive.
     """
     for game in games:
         game.cells = board_utils.fen_to_cells(game.fen)
@@ -198,6 +203,12 @@ def _position_context(user, game, sel):
             }
         )
 
+    # Whole-game analysis progress, for the "Analyse this game" control. Counted
+    # off `moves_view` rather than re-queried: it already holds the per-ply state.
+    analysis_total = sum(1 for m in moves if m["color"] == orientation)
+    analysis_done = sum(1 for m in moves_view if m["analyzed"])
+    analysis_pending = sum(1 for m in moves_view if m["pending"])
+
     # Analysis-history timeline (analysed user moves, in order).
     history_view = []
     for i, m in enumerate(moves, start=1):
@@ -251,6 +262,10 @@ def _position_context(user, game, sel):
         "last_move": last_move,
         "sel_text": sel_text,
         "move_label": move_label,
+        "analysis_total": analysis_total,
+        "analysis_done": analysis_done,
+        "analysis_pending": analysis_pending,
+        "analysis_complete": analysis_total > 0 and analysis_done >= analysis_total,
     }
 
 
@@ -275,18 +290,42 @@ def _reviewable_game(user, game_id):
     return game, None
 
 
+def _games_page(request):
+    """The home grid's context: one page of finished games, plus its controls.
+
+    Paging and filtering are done by the database (`game_store.past_games`
+    returns a queryset), because a fully imported archive is thousands of rows
+    and rendering or counting them in Python would not survive it.
+    """
+    time_class = request.GET.get("time_class", "")
+    games = game_store.past_games(request.user, time_class=time_class)
+    paginator = Paginator(games, GAMES_PER_PAGE)
+    # `get_page` clamps: a junk or out-of-range page number lands on a real page
+    # instead of raising, which matters because the page number is in a URL.
+    page = paginator.get_page(request.GET.get("page"))
+
+    _decorate_games(page.object_list)
+    return {
+        "games": page.object_list,
+        "page": page,
+        "total": paginator.count,
+        "time_class": time_class,
+        "time_classes": game_store.time_classes(request.user),
+    }
+
+
 @login_required
 def home(request):
     """Home page: the user's finished games, the ones there is something to review."""
-    games = _decorate_games(game_store.past_games(request.user))
-    return render(request, "home.html", {"games": games})
+    return render(request, "home.html", _games_page(request))
 
 
 @login_required
 def game_list(request):
-    """HTMX endpoint: the finished-games fragment, on demand."""
-    games = _decorate_games(game_store.past_games(request.user))
-    return render(request, "partials/game_list.html", {"games": games, "oob": True})
+    """HTMX endpoint: the finished-games fragment — refresh, paging and filtering."""
+    context = _games_page(request)
+    context["oob"] = True
+    return render(request, "partials/game_list.html", context)
 
 
 @login_required
@@ -312,6 +351,29 @@ def game_position(request, id):
         return HttpResponse(status=404)
     sel = _int(request.GET.get("sel"), 0)
     return render(request, "partials/position.html", _position_context(request.user, game, sel))
+
+
+@login_required
+def analyze_game(request, id):
+    """HTMX endpoint: queue the coach on every move the user played in this game.
+
+    Analysis is on demand — no schedule queues any — so this is the control that
+    starts it. `analysis.enqueue_game_analysis` is idempotent, so pressing it
+    twice queues nothing the second time and there is no need to guard against a
+    double click. Returns the position fragment, which re-renders with the plies
+    now showing as pending.
+    """
+    game, _message = _reviewable_game(request.user, id)
+    if game is None:
+        return HttpResponse(status=404)
+
+    if request.method == "POST":
+        analysis_service.enqueue_game_analysis(request.user, id)
+
+    sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
+    return render(
+        request, "partials/position.html", _position_context(request.user, game, sel)
+    )
 
 
 @login_required

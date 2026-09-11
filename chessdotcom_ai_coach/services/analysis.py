@@ -7,10 +7,10 @@ analyse it against.
 
 It is written to be run repeatedly rather than once: enqueuing is idempotent, so
 the same call reconciles a game towards "every user move analysed" no matter how
-much of it is already done. That is what
-``scheduler.enqueue_finished_game_analyses`` uses it for on every finished game
-each 10 minutes, alongside the manual ``analyze_game`` management command. Reads
-the stored ``Game`` snapshot only — no Chess.com call.
+much of it is already done. That is what lets ``views.analyze_game`` sit behind a
+button nobody has to press carefully — a second press queues nothing — and what
+makes the ``analyze_game`` management command safe to re-run. Reads the stored
+``Game`` row only, never Chess.com.
 """
 
 from __future__ import annotations
@@ -29,15 +29,14 @@ def _covered_plies(user, game_id: str) -> set[tuple[int, str]]:
     """The plies already carrying a row, as ``{(move_no, side to move)}``.
 
     The unique key is the raw FEN, but the same ply can be stored under two
-    spellings: the live scheduler saves Chess.com's FEN while this module saves
-    python-chess's ``board.fen()``, and the two can differ in the halfmove clock
-    or the en-passant field. Matching on ``(move_no, side to move)`` — the ply
-    identity ``board_utils.annotate_moves`` already joins on — keeps a rescan
-    from re-analysing every move the coach handled live.
+    spellings: this module saves python-chess's ``board.fen()``, while rows left
+    over from the app's earlier live path hold Chess.com's spelling of the same
+    position, and the two can differ in the halfmove clock or the en-passant
+    field. Matching on ``(move_no, side to move)`` — the ply identity
+    ``board_utils.annotate_moves`` already joins on — stops a second request
+    re-analysing a move that already has a row.
 
-    Built in one query for the whole game: this runs on every active game each
-    5s tick and on every finished game every 10 minutes, so a per-move lookup
-    would be the dominant cost of both.
+    Built in one query for the whole game rather than one per move.
     """
     covered: set[tuple[int, str]] = set()
     rows = CoachSuggestion.objects.filter(user=user, game_id=game_id).only(
@@ -51,19 +50,15 @@ def _covered_plies(user, game_id: str) -> set[tuple[int, str]]:
     return covered
 
 
-def enqueue_game_analysis(user, game_id: str, limit: int | None = None):
+def enqueue_game_analysis(user, game_id: str):
     """Queue analysis for every un-analysed move the user played in ``game_id``.
 
-    For each of the user's moves we enqueue the same Celery task the live coach
-    uses, keyed by the position the user was about to play (``fen_before``). It is
-    idempotent on two levels: ``_covered_plies`` skips a move already analysed
-    under a different FEN spelling, and ``get_or_create`` on
-    ``(user, game_id, fen)`` leaves an existing row alone — so re-running is safe
-    and cheap, which is what lets the scheduler use this as a reconciliation pass.
-    ``limit`` caps how many tasks a single call may enqueue, so a caller sweeping
-    many games can spread a large backlog over several runs. Returns
-    ``{"enqueued", "total", "game"}`` or ``None`` when the game isn't stored for
-    the user.
+    One Celery task per move, keyed by the position the user was about to play
+    (``fen_before``). Idempotent on two levels: ``_covered_plies`` skips a move
+    already analysed under a different FEN spelling, and ``get_or_create`` on
+    ``(user, game_id, fen)`` leaves an existing row alone. Returns
+    ``{"enqueued", "total", "game"}`` — the counts the caller shows as progress —
+    or ``None`` when the game isn't stored for the user.
     """
     game = game_store.stored_game(user, game_id)
     if game is None:
@@ -75,8 +70,6 @@ def enqueue_game_analysis(user, game_id: str, limit: int | None = None):
 
     enqueued = 0
     for move in user_moves:
-        if limit is not None and enqueued >= limit:
-            break
         fen = move["fen_before"]
         move_no = board_utils.fullmove_number(fen)
         if (move_no, board_utils.active_color(fen)) in covered:

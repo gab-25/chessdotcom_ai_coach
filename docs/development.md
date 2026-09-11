@@ -24,8 +24,8 @@ uv run python manage.py createsuperuser
 
 ## Running: you need four processes
 
-This is the part that trips people up. `runserver` alone gives you a working UI
-that **never analyses anything**.
+This is the part that trips people up. `runserver` alone gives you a UI with
+**no games in it and nothing that can analyse them**.
 
 ```bash
 uv run python manage.py runserver                        # 1. the web app
@@ -38,9 +38,9 @@ Symptoms when one is missing:
 
 | Missing | What you see |
 | --- | --- |
-| Scheduler | The home page stays empty (or frozen at an old state) — nothing ever syncs from Chess.com. |
-| Celery worker | Games appear, but every analysis sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING` — nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and the scheduler retries it after 10 minutes.) |
-| Redis | The scheduler logs connection errors on every tick. |
+| Scheduler | The home page stays empty (or frozen at an old state) — nothing ever imports from Chess.com. `manage.py import_archives` fills it in without one. |
+| Celery worker | Games appear, but every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING` — nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and the scheduler retries it after 10 minutes.) |
+| Redis | Pressing **Analyse this game** errors, and the scheduler logs connection errors on every tick. |
 
 ## First run
 
@@ -49,8 +49,9 @@ Symptoms when one is missing:
    **`chessdotcom_username`** to your Chess.com account. It falls back to the
    Django login name if left blank — but the scheduler only polls users whose
    field is non-empty, so set it explicitly.
-3. Within 5 seconds the scheduler picks up your current games and the home page
-   poll reveals them.
+3. Within 10 minutes the scheduler imports the current month of your archive and
+   the games show up on the home page. To not wait, run
+   `uv run python manage.py import_archives --months 1`.
 
 If nothing appears, check the scheduler's output — a bad username is logged and
 skipped rather than raised, so it fails quietly by design.
@@ -61,11 +62,12 @@ From [`urls.py`](../chessdotcom_ai_coach/urls.py):
 
 | Route | View | Kind |
 | --- | --- | --- |
-| `/` | `home` | Full page — the finished games available to review |
-| `/games` | `game_list` | **HTMX fragment**, fetched on demand by the home Refresh button |
+| `/` | `home` | Full page — a page of the finished games available to review |
+| `/games` | `game_list` | **HTMX fragment** — the game grid, for the Refresh button, the time-control filter (`?time_class=`) and the pager (`?page=`) |
 | `/game/<id>` | `game_detail` | Full page — the review board. **404** for a game still in progress |
 | `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N` |
-| `/game/<id>/analyze` | `analyze_position` | **HTMX fragment** — `GET` is the pending self-poll (2s), `POST` requests analysis |
+| `/game/<id>/analyze` | `analyze_position` | **HTMX fragment** — `GET` is the pending self-poll (2s), `POST` requests analysis of one move |
+| `/game/<id>/analyze-game` | `analyze_game` | **HTMX fragment** — `POST` queues every move you played in the game |
 | `/login`, `/logout` | Django `LoginView`, `logout_view` | Session auth |
 | `/admin/` | Django admin | Where you link the Chess.com account |
 
@@ -81,10 +83,24 @@ uv run python manage.py run_scheduler
 ```
 
 The APScheduler process — **the only scheduling in the project** (there is no
-Celery Beat). One blocking scheduler running two interval jobs: the 5-second live
-tick and the 10-minute scan over finished games. It must exist exactly once: an
-in-process scheduler under Gunicorn would start once per worker and enqueue
-duplicates.
+Celery Beat). One blocking scheduler running one 10-minute job: import a month of
+each linked user's archive, mark finished daily games, revive stuck analyses. It
+must exist exactly once: an in-process scheduler under Gunicorn would start once
+per worker and duplicate every archive fetch.
+
+It enqueues no analysis — that is on demand, from the detail page.
+
+### `import_archives`
+
+```bash
+uv run python manage.py import_archives [--user <username>] [--months N]
+```
+
+The scheduler mirrors your archive a month per tick, which takes hours on a
+multi-year account. This reads every monthly archive in sequence instead, newest
+first. `--months` caps it to the most recent N months for a quick partial
+catch-up; without `--user` every linked user is imported. Idempotent: a game
+already stored is updated in place, so re-running adds nothing.
 
 ### `analyze_game`
 
@@ -92,13 +108,11 @@ duplicates.
 uv run python manage.py analyze_game <game_id> [--user <username>]
 ```
 
-The scheduler already reconciles every game towards "every user move analysed",
-so this command is for not waiting on it — or for re-running a game whose
-analyses were retired as `FAILED`, which the scheduler will not pick up again by
-design. It enqueues analysis for **every** move you played in the game and is
-idempotent.
+The command-line half of the **Analyse this game** button: it enqueues analysis
+for **every** move you played in the game. Also the way to re-run a game whose
+analyses were retired as `FAILED`.
 
-It reads the stored snapshot (no Chess.com call) and is idempotent: moves already
+It reads the stored game (no Chess.com call) and is idempotent: moves already
 analysed or queued are skipped, so re-running is safe. `--user` is only needed
 when the same game id is stored for more than one user, which happens when both
 players use the app. A Celery worker must be running; results appear on the
@@ -113,7 +127,7 @@ follows consistently, not enforced rules.
   the non-manifest WhiteNoise backend, why a file-backed SQLite in tests, why
   `--timeout 180`). Keep that habit: the *what* is readable from the code.
 - **Private helpers are `_`-prefixed** (`_position_context`, `_suggestion`,
-  `_linked_users`), and so are private template partials (`_evalfill.html`,
+  `_months_to_import`), and so are private template partials (`_evalfill.html`,
   `_arrows_svg.html`).
 - **Module docstrings state the module's job and its boundary** — see
   [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) for
