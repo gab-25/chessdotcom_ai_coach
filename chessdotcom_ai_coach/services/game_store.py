@@ -36,10 +36,16 @@ def time_classes(user) -> List[str]:
 
     Read from the data rather than hard-coded, so the filter never offers a
     choice that would come back empty.
+
+    ``order_by()`` clears the model's default ordering on purpose: Django adds
+    the ordering columns to the SELECT, so DISTINCT would run over
+    ``(time_class, end_time, updated_at)`` and hand back one row per game
+    instead of one per time control.
     """
     return sorted(
         tc
         for tc in Game.objects.filter(user=user, is_active=False)
+        .order_by()
         .values_list("time_class", flat=True)
         .distinct()
         if tc

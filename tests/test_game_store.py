@@ -136,3 +136,24 @@ class TestPastGamesFiltering:
         Game.objects.create(user=user, game_id="a", is_active=True, time_class="daily")
 
         assert game_store.time_classes(user) == ["blitz", "rapid"]
+
+    def test_time_classes_lists_each_one_once(self, user):
+        """One chip per time control, however many games share it.
+
+        The model orders by ``-end_time, -updated_at``; those columns must not
+        leak into the SELECT, or DISTINCT would run over them too and return a
+        row per game.
+        """
+        now = timezone.now()
+        Game.objects.create(
+            user=user, game_id="d1", is_active=False, time_class="daily", end_time=now
+        )
+        Game.objects.create(
+            user=user,
+            game_id="d2",
+            is_active=False,
+            time_class="daily",
+            end_time=now - timedelta(days=1),
+        )
+
+        assert game_store.time_classes(user) == ["daily"]
