@@ -1207,8 +1207,48 @@ class TestAnalyzeWholeGame:
         assert response.context["analysis_done"] == 1
         assert response.context["analysis_complete"] is False
         assert b"Analyse this game" in response.content
+        assert b'hx-select="#gr-analyse"' not in response.content
 
-    def test_the_button_goes_away_once_the_game_is_done(
+    def test_progress_polls_itself_while_moves_are_queued(
+        self, mock_task, auth_client, user
+    ):
+        """The progress block is the only thing that knows the queue is draining.
+
+        It is not among the fragments the coach card swaps out-of-band, and the
+        card does not poll at all on an un-analysed ply, so without a poll of its
+        own the counter would sit frozen until the user navigated."""
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(0))
+        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
+
+        response = auth_client.get("/game/944768131")
+
+        assert response.context["analysis_pending"] == 1
+        assert b'id="gr-analyse"' in response.content
+        assert b'hx-select="#gr-analyse"' in response.content
+        # No control to press while the queue drains — pressing it would queue
+        # nothing anyway, since every ply already has a row.
+        assert b"Analyse this game" not in response.content
+        assert b"Analysing" in response.content
+
+    def test_the_progress_poll_also_refreshes_the_history_and_the_grid(
+        self, mock_task, auth_client, user
+    ):
+        """The counter must not run ahead of the timeline it is counting.
+
+        `hx-select` swaps the progress block alone, so without `hx-select-oob` the
+        analysis history and the move badges would sit at their old state while
+        the counter climbed — and the coach card, which owns those fragments'
+        out-of-band swaps, does not poll unless the *selected* ply is in flight."""
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(0))
+        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
+
+        content = auth_client.get("/game/944768131").content
+
+        assert b'hx-select-oob="#gr-history,#gr-moves-panel,#gr-evalfill"' in content
+
+    def test_progress_stops_polling_once_the_queue_is_empty(
         self, mock_task, auth_client, user
     ):
         _make_game(user)
@@ -1217,8 +1257,46 @@ class TestAnalyzeWholeGame:
 
         response = auth_client.get("/game/944768131")
 
+        assert response.context["analysis_pending"] == 0
+        assert b'hx-select="#gr-analyse"' not in response.content
+
+    def test_a_finished_game_offers_a_re_analysis(self, mock_task, auth_client, user):
+        """A fully analysed game is not a dead end: the button becomes a re-run."""
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(0))
+        _make_suggestion(user, _ply_fen(2))
+
+        response = auth_client.get("/game/944768131")
+
         assert response.context["analysis_complete"] is True
-        assert b"Analyse this game" not in response.content
+        assert b"Re-analyse this game" in response.content
+        assert b"force=1" in response.content
+
+    def test_force_re_queues_a_fully_analysed_game(self, mock_task, auth_client, user):
+        _make_game(user)
+        rows = [_make_suggestion(user, _ply_fen(0)), _make_suggestion(user, _ply_fen(2))]
+
+        response = auth_client.post("/game/944768131/analyze-game?force=1")
+
+        assert response.status_code == 200
+        assert mock_task.delay.call_count == 2
+        # Re-analysed in place: no second row for a ply that already had one.
+        assert CoachSuggestion.objects.filter(user=user).count() == 2
+        for row in rows:
+            row.refresh_from_db()
+            assert row.status == CoachSuggestion.Status.PENDING
+            assert row.analysis == ""
+
+    def test_without_force_a_fully_analysed_game_queues_nothing(
+        self, mock_task, auth_client, user
+    ):
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(0))
+        _make_suggestion(user, _ply_fen(2))
+
+        auth_client.post("/game/944768131/analyze-game")
+
+        mock_task.delay.assert_not_called()
 
 
 @pytest.mark.django_db

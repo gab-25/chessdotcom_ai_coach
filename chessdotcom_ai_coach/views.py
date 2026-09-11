@@ -388,13 +388,20 @@ def analyze_game(request, id):
     twice queues nothing the second time and there is no need to guard against a
     double click. Returns the position fragment, which re-renders with the plies
     now showing as pending.
+
+    `force` is the other half of that: it is what the "Re-analyse this game"
+    button sends, and it asks for every move to be queued again, overwriting the
+    analyses already on record. Without it a finished game would be a dead end.
     """
     game, _message = _reviewable_game(request.user, id)
     if game is None:
         return HttpResponse(status=404)
 
     if request.method == "POST":
-        analysis_service.enqueue_game_analysis(request.user, id)
+        # htmx posts the button's parameters in the query string, so read `force`
+        # the way `sel` is read below.
+        force = bool(request.GET.get("force") or request.POST.get("force"))
+        analysis_service.enqueue_game_analysis(request.user, id, force=force)
 
     sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
     return render(
@@ -448,16 +455,9 @@ def analyze_position(request, id):
             else:
                 # Re-enqueue whatever state the row is in, in-flight ones included:
                 # an explicit click is exactly the signal to break a lock that
-                # `sync.ANALYSIS_TIMEOUT` hasn't expired yet. `attempts` restarts
-                # too, so the user's retry isn't spent by earlier failures.
-                row.status = CoachSuggestion.Status.PENDING
-                row.attempts = 0
-                row.eval_text = ""
-                row.eval_cp = None
-                row.best_move_san = None
-                row.best_move_uci = None
-                row.analysis = ""
-                row.save()
+                # `sync.ANALYSIS_TIMEOUT` hasn't expired yet. Shared with the
+                # whole-game re-analysis, which resets the same fields.
+                analysis_service.reset_for_reanalysis(row)
             analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
             context = _position_context(request.user, game, sel)
 

@@ -189,12 +189,20 @@ enqueue **only** when they created the row. A position already queued, running o
 done is skipped for free, which is what makes a second press of the button cost
 nothing and removes any need to guard against a double click.
 
-The one place that deliberately bypasses it is the explicit **re-analyze** button
-([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py)): on `POST`, the
-row is reset to `PENDING` with its fields and `attempts` cleared and re-enqueued
-whatever state it was in, in-flight included. That's a user asking for a fresh
-take, not a duplicate — and it's the manual way out of the deadlock described
-next.
+What deliberately bypasses it is an explicit request for a fresh take: the
+per-move **re-analyze** button ([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py))
+and the whole-game **Re-analyse this game** button, which posts the same
+`analyze-game` endpoint with `force=1`. Both go through
+[`analysis.reset_for_reanalysis`](../chessdotcom_ai_coach/services/analysis.py):
+the row is reset to `PENDING` with its fields and `attempts` cleared and
+re-enqueued whatever state it was in, in-flight included. That's a user asking
+for a new answer, not a duplicate — and it's the manual way out of the deadlock
+described next.
+
+The forced whole-game path resets each row **under the FEN the row is keyed on**
+rather than the one derived from the PGN. The two can differ (see
+`_rows_by_ply`), and creating a second row for one ply would leave two rows
+competing for the single slot `annotate_moves` joins them into.
 
 ### The lock needs an expiry
 

@@ -70,9 +70,32 @@
         archive is far more games than a worker could ever get through — so this
         is where it starts. The POST is idempotent (`enqueue_game_analysis` skips
         what is already queued or done), so a second press costs nothing.
+
+        Once every move is analysed the button turns into a re-run: the same
+        endpoint with `force=1`, which queues every move again and overwrites the
+        analyses on record. That is the one thing the idempotent POST cannot do,
+        and without it a finished game has nothing left to offer.
+
+        While the queue drains this block polls itself. It has to: the coach card
+        is what normally refreshes the page's fragments, and it does not poll at
+        all unless the *selected* ply is in flight — press "Analyse this game"
+        from the starting position and nothing would ever move.
+
+        `hx-select` picks this block back out of the full position view, and
+        `hx-select-oob` takes with it the three fragments a completed analysis
+        also changes: the history gets its new entry, the grid its badge, the bar
+        its eval. Without them the counter would climb while the timeline it is
+        counting stayed empty. Everything else — board, coach card, nav — is left
+        alone, so the card's own 2s poll is not disturbed and nothing the user is
+        looking at is replaced under them. The replacement markup carries the
+        trigger only while something is still queued, so the poll stops by itself.
       {% endcomment %}
       {% if analysis_total %}
-      <div class="gr-analyse">
+      <div class="gr-analyse" id="gr-analyse"
+           {% if analysis_pending %}hx-get="{% url 'game_position' id %}?sel={{ sel }}"
+           hx-trigger="every 3s" hx-select="#gr-analyse"
+           hx-select-oob="#gr-history,#gr-moves-panel,#gr-evalfill"
+           hx-target="#gr-analyse" hx-swap="outerHTML"{% endif %}>
         <div class="gr-analyse__state">
           {% if analysis_complete %}
             <i class="fa-solid fa-circle-check"></i> All {{ analysis_total }} of your moves analysed
@@ -82,7 +105,22 @@
             {{ analysis_done }} of {{ analysis_total }} of your moves analysed
           {% endif %}
         </div>
-        {% if not analysis_complete %}
+        {% if analysis_complete %}
+        <button type="button" class="btn btn--ghost btn--sm"
+                hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
+                hx-target="#gr-view" hx-swap="outerHTML">
+          <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
+        </button>
+        {% elif analysis_pending %}
+        {% comment %}
+          Nothing to press while the queue drains: every remaining ply already has
+          a row, so the POST would queue nothing. The state line beside it carries
+          the spinner and the count.
+        {% endcomment %}
+        <button type="button" class="btn btn--ghost btn--sm" disabled>
+          <i class="fa-solid fa-hourglass-half"></i> Analysing…
+        </button>
+        {% else %}
         <button type="button" class="btn btn--accent btn--sm"
                 hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
                 hx-target="#gr-view" hx-swap="outerHTML">

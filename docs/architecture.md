@@ -90,7 +90,10 @@ user who never presses Sync costs no Chess.com traffic at all.
 games; at dozens of analyses each, and up to 152s apiece, no schedule could drain
 that queue. So the coach runs when you press **Analyse this game** (or ask for a
 single move), and `enqueue_game_analysis` — idempotent, as ever — turns that into
-one task per move you played.
+one task per move you played. Once the game is fully analysed that button becomes
+**Re-analyse this game**, the one call that is *not* idempotent: it queues every
+move again and overwrites the analyses on record, which is how you get a second
+opinion after a prompt or model change.
 
 ```mermaid
 sequenceDiagram
