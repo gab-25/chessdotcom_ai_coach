@@ -30,7 +30,7 @@ This is the part that trips people up. `runserver` alone gives you a UI with
 ```bash
 uv run python manage.py runserver                        # 1. the web app
 uv run celery -A chessdotcom_ai_coach worker -l info     # 2. the analysis worker
-uv run python manage.py run_scheduler                    # 3. the APScheduler jobs
+uv run python manage.py run_scheduler                    # 3. the archive importer
                                                          # 4. Redis + Postgres
 ```
 

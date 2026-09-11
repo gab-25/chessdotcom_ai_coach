@@ -1,10 +1,8 @@
 """Persistence for the game history.
 
-Games arrive from two directions and each has its own writer. The monthly
-archives bring in every finished game, live and daily, through
-``upsert_finished_games``; the *current games* endpoint brings in daily games
-still being played through ``upsert_current_games``, whose real job is to notice
-when one of them ends. ``past_games`` is what the app actually shows.
+One writer, ``upsert_finished_games``: every game comes from the monthly
+archives, already finished. ``past_games`` is what the app shows, as a queryset,
+because a fully imported archive is thousands of rows.
 
 Kept separate from the Chess.com ``Client`` (which does pure IO) and from the
 views (which stay thin).
@@ -17,49 +15,6 @@ from typing import List
 from django.db.models import QuerySet
 
 from ..models import Game
-
-
-def _player(game: dict, color: str) -> dict:
-    """Return the ``{username, rating}`` sub-dict the Client attaches per side."""
-    value = game.get(color)
-    return value if isinstance(value, dict) else {}
-
-
-def upsert_current_games(user, games: List[dict]) -> None:
-    """Snapshot the user's current games and retire the ones that vanished.
-
-    Each game (as shaped by ``Client.my_current_games``) is written to a ``Game``
-    row keyed by ``(user, game_id)``. Games no longer in the current set are marked
-    ``is_active=False`` so they move to the "past games" history.
-    """
-    seen: List[str] = []
-    for game in games:
-        game_id = game.get("game_id")
-        if not game_id:
-            continue
-        white = _player(game, "white")
-        black = _player(game, "black")
-        Game.objects.update_or_create(
-            user=user,
-            game_id=game_id,
-            defaults={
-                "url": game.get("url", ""),
-                "white_name": white.get("username", ""),
-                "black_name": black.get("username", ""),
-                "white_rating": str(white.get("rating", "")),
-                "black_rating": str(black.get("rating", "")),
-                "time_class": game.get("time_class", ""),
-                "pgn": game.get("pgn", ""),
-                "fen": game.get("fen", ""),
-                "is_active": True,
-            },
-        )
-        seen.append(game_id)
-
-    # Everything we didn't just see is no longer a current game.
-    Game.objects.filter(user=user, is_active=True).exclude(game_id__in=seen).update(
-        is_active=False
-    )
 
 
 def past_games(user, time_class: str = "") -> QuerySet[Game]:
@@ -98,9 +53,9 @@ def upsert_finished_games(user, games: List[dict]) -> int:
     invariants matter here:
 
     * **``is_active`` is always False.** An archived game is finished by
-      definition, so this must never resurrect a row that
-      ``upsert_current_games`` retired — that flag is what decides whether a game
-      is shown at all.
+      definition. Writing the flag explicitly is what closes out rows left
+      ``True`` by older versions of the app, which used to snapshot games while
+      they were still being played.
     * **an empty PGN never overwrites a stored one.** The archive is normally the
       better copy (ours stops at the last sync before the game left "current
       games"), but a blank one carries no moves and would destroy the only record

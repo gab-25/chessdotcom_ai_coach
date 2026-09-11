@@ -6,8 +6,8 @@ move. Ask it to analyse a game and, for each move you played, it renders the boa
 and asks Stockfish and a local LLM what it would have played instead, like a
 grandmaster coach going over the game with you.
 
-It reviews, it does not watch. A game still in progress is recorded but never
-shown, a move you have not played yet is never analysed, and nothing is analysed
+It reviews, it does not watch. A game you are still playing does not appear until
+it ends, a move you have not played yet is never analysed, and nothing is analysed
 until you ask — a full archive is more games than any worker would get through.
 
 ## Stack
@@ -25,10 +25,11 @@ until you ask — a full archive is more games than any worker would get through
   (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend, and
   a hidden HTMX poller reveals the result once the worker finishes
 - **APScheduler** — background scheduler (`manage.py run_scheduler`,
-  `chessdotcom_ai_coach/services/scheduler.py`). Every 10 minutes it reads a month
-  of each linked user's Chess.com archive — the current one, plus one month of
-  backlog — so a multi-year account mirrors itself over a few hours rather than in
-  one burst Chess.com would rate-limit. It enqueues no analysis.
+  `chessdotcom_ai_coach/services/scheduler.py`), which exists for one job: every
+  10 minutes it reads a month of each linked user's Chess.com archive — the
+  current one, plus one month of backlog — so a multi-year account mirrors itself
+  over a few hours rather than in one burst Chess.com would rate-limit. It
+  enqueues no analysis.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
   `django-htmx`: the home refresh, move-by-move navigation and the coach card are
   all fragment swaps, with no custom JavaScript
@@ -162,7 +163,7 @@ the way to retry a game whose analyses were given up on:
 uv run python manage.py analyze_game <game_id> [--user <username>]
 ```
 
-It reads the stored snapshot (no Chess.com call) and is idempotent, so it's safe
+It reads the stored game (no Chess.com call) and is idempotent, so it's safe
 to re-run. A Celery worker must be running.
 
 ## Tests

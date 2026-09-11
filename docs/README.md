@@ -5,9 +5,9 @@ finished game, live and daily** — and replays any of them move by move. Ask it
 analyse a game and, for each move you played, it runs Stockfish and a local LLM
 to produce a grandmaster-style comment on the position you faced.
 
-It is a review tool, not a live assistant: a game in progress is recorded but
-never shown, a move you have not played is never analysed, and nothing is
-analysed until you ask. There is no client-side JavaScript framework: every
+It is a review tool, not a live assistant: a game you are still playing does not
+appear until it ends, a move you have not played is never analysed, and nothing
+is analysed until you ask. There is no client-side JavaScript framework: every
 screen is a server-rendered HTML fragment swapped in by HTMX.
 
 For a "clone and run" quickstart, see the [root README](../README.md). These

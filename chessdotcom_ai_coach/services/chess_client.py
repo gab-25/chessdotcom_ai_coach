@@ -1,17 +1,18 @@
 """Chess.com IO: pure HTTP + shape normalisation, no DB and no Django models.
 
-Two endpoints matter, and the split between them is the whole reason this module
-looks the way it does:
+Everything comes from the monthly archives:
 
-* ``/player/{u}/games`` (``my_current_games``) — **Daily Chess only**, and only
-  games still being played. Live games (bullet, blitz, rapid) are real-time and
-  never appear here. It is used to notice when a daily game ends.
-* ``/player/{u}/games/{yyyy}/{mm}`` (``finished_games``) — the monthly archive:
-  *every* finished game, live and daily alike, with its final PGN and result.
-  This is where the app's games actually come from.
+* ``/player/{u}/games/archives`` (``archive_months``) — one URL per month the
+  player was active, which is how far back an account goes.
+* ``/player/{u}/games/{yyyy}/{mm}`` (``finished_games``) — every finished game of
+  that month, live and daily alike, with its final PGN and result.
+
+Notably *not* used: ``/player/{u}/games``, the endpoint most Chess.com
+integrations start from. It serves "Daily Chess games that a player is currently
+playing" — no live games, and nothing finished — so it can neither list a
+player's games nor complete one. The archives can do both.
 """
 
-import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -100,57 +101,6 @@ class Client:
         )
         self.username = username
 
-    def my_current_games(self) -> List:
-        """
-        Returns the current games for the authenticated user.
-        """
-        response = self._chessdotcomclient.get_player_current_games(self.username)  # pyright: ignore[reportAttributeAccessIssue]
-        # The chessdotcom library returns an object with a .json attribute (property or dictionary)
-        games_data = response.json
-        raw_games = games_data.get("games", []) if isinstance(games_data, dict) else []
-
-        processed_games = []
-        for game in raw_games:
-            pgn = game.get("pgn", "")
-
-            # Extract White and Black info from PGN
-            white_match = re.search(r'\[White "(.*?)"\]', pgn)
-            black_match = re.search(r'\[Black "(.*?)"\]', pgn)
-            white_elo_match = re.search(r'\[WhiteElo "(.*?)"\]', pgn)
-            black_elo_match = re.search(r'\[BlackElo "(.*?)"\]', pgn)
-
-            # Fallback to URL if PGN parsing fails for username
-            white_user = "Unknown"
-            if white_match:
-                white_user = white_match.group(1)
-            elif "white" in game and isinstance(game["white"], str):
-                white_user = game["white"].split("/")[-1]
-
-            black_user = "Unknown"
-            if black_match:
-                black_user = black_match.group(1)
-            elif "black" in game and isinstance(game["black"], str):
-                black_user = game["black"].split("/")[-1]
-
-            game["white"] = {
-                "username": white_user,
-                "rating": white_elo_match.group(1) if white_elo_match else "?",
-            }
-            game["black"] = {
-                "username": black_user,
-                "rating": black_elo_match.group(1) if black_elo_match else "?",
-            }
-            game["is_my_turn"] = game.get("turn", "").lower() == (
-                "white" if white_user.lower() == self.username.lower() else "black"
-            )
-
-            # Example URL: https://www.chess.com/game/daily/944768131
-            game["game_id"] = _game_id(game.get("url", ""))
-
-            processed_games.append(game)
-
-        return processed_games
-
     def archive_months(self) -> List[Tuple[int, int]]:
         """Every month the player has an archive for, oldest first.
 
@@ -178,9 +128,7 @@ class Client:
     def finished_games(self, year: int, month: int) -> List[Dict]:
         """The user's finished games for one month, ready to be stored.
 
-        The archive is the only endpoint that carries live games, so this is the
-        app's real source of games — ``my_current_games`` only ever sees daily
-        ones still in progress. Each entry is normalised into the shape a
+        The app's only source of games. Each entry is normalised into the shape a
         ``Game`` row is written from: ``game_id``, ``url``, ``pgn`` (the *final*
         movetext), ``fen`` (the final position), ``time_class``, ``end_time``,
         ``white``/``black`` as ``{username, rating}`` dicts, plus ``result`` and

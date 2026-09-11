@@ -1,9 +1,7 @@
 """Unit tests for the scheduler job bodies: `import_archive_month` (the monthly
-archive -> DB, and where the app's games come from), `sync_current_games` (the
-daily-only current-games endpoint, used to notice a game has ended),
-`requeue_stale_analyses` (reviving analyses whose worker never came back) and
-`requeue_orphaned_analyses` (reviving those whose broker message went missing
-instead).
+archive -> DB, and where the app's games come from), `requeue_stale_analyses`
+(reviving analyses whose worker never came back) and `requeue_orphaned_analyses`
+(reviving those whose broker message went missing instead).
 
 **No job enqueues analysis** — that is on demand now, from the detail page.
 `TestImportArchiveMonth.test_never_enqueues_analysis` pins it down.
@@ -31,7 +29,6 @@ from chessdotcom_ai_coach.services.scheduler import (
     import_archive_month,
     requeue_orphaned_analyses,
     requeue_stale_analyses,
-    sync_current_games,
 )
 
 # White to move (FEN field 2 = "w") vs. black to move.
@@ -57,87 +54,6 @@ def _game(user, **kwargs):
     }
     defaults.update(kwargs)
     return Game.objects.create(user=user, **defaults)
-
-
-@pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler.game_store.upsert_current_games")
-@patch("chessdotcom_ai_coach.services.scheduler.Client")
-class TestSyncCurrentGames:
-    def test_syncs_user_with_linked_chess_username(
-        self, mock_client_cls, mock_upsert, django_user_model
-    ):
-        user = django_user_model.objects.create_user(
-            username="login_name",
-            password="pw12345!",
-            chessdotcom_username="ChessHandle",
-        )
-        mock_client_cls.return_value.my_current_games.return_value = ["game-dict"]
-
-        sync_current_games()
-
-        mock_client_cls.assert_called_once_with(username="ChessHandle")
-        mock_upsert.assert_called_once_with(user, ["game-dict"])
-
-    def test_skips_user_without_linked_username(
-        self, mock_client_cls, mock_upsert, django_user_model
-    ):
-        # No chessdotcom_username set: chess_username would fall back to the
-        # login username, but this user is intentionally not synced.
-        django_user_model.objects.create_user(username="login_name", password="pw12345!")
-
-        sync_current_games()
-
-        mock_client_cls.assert_not_called()
-        mock_upsert.assert_not_called()
-
-    def test_skips_user_with_blank_linked_username(
-        self, mock_client_cls, mock_upsert, django_user_model
-    ):
-        django_user_model.objects.create_user(
-            username="login_name", password="pw12345!", chessdotcom_username=""
-        )
-
-        sync_current_games()
-
-        mock_client_cls.assert_not_called()
-        mock_upsert.assert_not_called()
-
-    def test_skips_inactive_user(self, mock_client_cls, mock_upsert, django_user_model):
-        django_user_model.objects.create_user(
-            username="login_name",
-            password="pw12345!",
-            chessdotcom_username="ChessHandle",
-            is_active=False,
-        )
-
-        sync_current_games()
-
-        mock_client_cls.assert_not_called()
-        mock_upsert.assert_not_called()
-
-    def test_one_users_failure_does_not_block_the_rest(
-        self, mock_client_cls, mock_upsert, django_user_model
-    ):
-        django_user_model.objects.create_user(
-            username="bad_login", password="pw12345!", chessdotcom_username="Bad"
-        )
-        good_user = django_user_model.objects.create_user(
-            username="good_login", password="pw12345!", chessdotcom_username="Good"
-        )
-
-        def _client_for(username):
-            client = MagicMock()
-            if username == "Bad":
-                client.my_current_games.side_effect = Exception("boom")
-            else:
-                client.my_current_games.return_value = ["ok"]
-            return client
-
-        mock_client_cls.side_effect = _client_for
-
-        sync_current_games()  # must not raise
-
-        mock_upsert.assert_called_once_with(good_user, ["ok"])
 
 
 def _archive_game(game_id="944768131", **overrides):
@@ -257,9 +173,10 @@ class TestImportArchiveMonth:
         assert client.finished_games.call_count == 1
         assert client.finished_games.call_args[0] == current
 
-    def test_never_resurrects_a_game_in_progress(self, mock_client_cls):
-        """A daily game still being played is not in the archive; the row that
-        `sync_current_games` created for it must be left alone."""
+    def test_leaves_a_legacy_in_progress_row_alone(self, mock_client_cls):
+        """Older versions snapshotted games while they were being played. Such a
+        row is not in the archive, so the import must not touch it — it closes
+        itself out once that game is covered."""
         current = self._now_month()
         Game.objects.create(
             user=self.user, game_id="running", is_active=True, pgn=PGN
@@ -269,6 +186,24 @@ class TestImportArchiveMonth:
         import_archive_month()
 
         assert Game.objects.get(game_id="running").is_active is True
+
+    def test_closes_out_a_legacy_row_once_the_archive_covers_it(
+        self, mock_client_cls
+    ):
+        """The same row, updated in place: finished, with the archive's full PGN."""
+        current = self._now_month()
+        Game.objects.create(
+            user=self.user, game_id="944768131", is_active=True, pgn='[Event "T"]\n\n1. e4 *'
+        )
+        _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
+
+        import_archive_month()
+
+        game = Game.objects.get(game_id="944768131")
+        assert Game.objects.count() == 1  # updated, not duplicated
+        assert game.is_active is False
+        assert game.pgn == PGN
+        assert game.result == "win"
 
     @patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
     def test_never_enqueues_analysis(self, mock_task, mock_client_cls):

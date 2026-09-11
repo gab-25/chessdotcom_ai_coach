@@ -47,7 +47,7 @@ graph TD
 
     Browser -->|"navigation, paging, analyse request<br/>pending card poll every 2s"| Web
     Web --> PG
-    Sched -->|"monthly archives<br/>+ current games"| ChessCom
+    Sched -->|"monthly archives"| ChessCom
     Sched --> PG
     Web -->|"enqueue task<br/><i>when you ask</i>"| Redis
     Redis --> Worker
@@ -70,9 +70,9 @@ Two separate stories, and keeping them apart is the key to the codebase.
 only Chess.com endpoint that carries live games at all — the current-games
 endpoint everyone reaches for first is documented as *"Daily Chess games that a
 player is currently playing"*, which is why the app saw nothing but daily games
-before. The import walks the archive list a month at a time, so a five-year
-account fills in over a few hours rather than in one burst that Chess.com would
-rate-limit.
+before, and why it is not used any more. The import walks the archive list a
+month at a time, so a five-year account fills in over a few hours rather than in
+one burst that Chess.com would rate-limit.
 
 **Analysis is requested, never scheduled.** An imported archive is thousands of
 games; at dozens of analyses each, and up to 152s apiece, no schedule could drain
@@ -92,11 +92,7 @@ sequenceDiagram
     participant E as Stockfish + LLM
 
     rect rgba(120,140,180,0.10)
-    Note over S,DB: every 10min — the sync tick (enqueues nothing)
-    S->>C: my_current_games() per linked user
-    Note over S,C: daily-only, in-progress-only
-    S->>DB: upsert_current_games() — mark every game<br/>that vanished as is_active=False
-
+    Note over S,DB: every 10min — the import tick (enqueues nothing)
     S->>C: archive_months()
     C-->>S: one URL per month the player was active
     S->>C: finished_games(yyyy, mm) — the current month,<br/>plus one backlog month per run
@@ -142,9 +138,20 @@ appear without anything watching for it, and what lets a game whose closing move
 were still settling be corrected later. Re-running the import — on a schedule, or
 by hand with `manage.py import_archives` — adds nothing the second time.
 
-`sync_current_games` survives alongside it for one narrow job: a daily game still
-being played is in no archive, so without it a game you just finished would keep
-showing as "still in progress" until the next archive read caught up.
+### Why games in progress are not tracked at all
+
+Earlier versions snapshotted daily games while they were being played, on the
+belief — written into the models and the docs — that *"Chess.com only serves games
+that are still current, so if the app didn't snapshot it, the game would be
+gone"*. The archives disprove it: they carry every finished game with its final
+PGN, which is strictly more than a mid-game snapshot ever held. The snapshot was
+an incomplete copy of something that arrives anyway.
+
+So there is no current-games poll, and a daily game you are playing simply does
+not exist locally until it ends — at which point it appears complete. `is_active`
+survives on `Game` only for rows left behind by those older versions; the import
+writes it `False`, so such a row closes itself out the next time the archive
+covers that game.
 
 ### Surviving a worker restart
 
@@ -176,13 +183,13 @@ position as FAILED instead of running it again.
 | Component | Entry point | Notes |
 | --- | --- | --- |
 | Scheduler job | [`management/commands/run_scheduler.py`](../chessdotcom_ai_coach/management/commands/run_scheduler.py) | One, `TICK_INTERVAL_MINUTES = 10`, with `max_instances=1` and `coalesce=True` so a slow run never overlaps the next. |
-| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `import_archive_month`, `requeue_stale_analyses`, `requeue_orphaned_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local recovery checks running. **Enqueues no analysis.** |
+| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `import_archive_month`, `requeue_stale_analyses`, `requeue_orphaned_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local recovery checks running. **Enqueues no analysis.** |
 | Archive import | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `import_archive_month` — where games come from. `_months_to_import` picks the current month (always, since it keeps growing) plus one backlog month per run, so a multi-year account fills in over hours instead of one burst. `import_all_archives` is the same work unpaced, behind `manage.py import_archives`. |
 | Stuck-analysis recovery | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
 | Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |
-| Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `archive_months()` and `finished_games(y, m)` (the archive — every game type), plus `my_current_games()` (daily, in progress only). Pure IO + shape normalisation, no DB access. |
-| Persistence | [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) | Pure DB reads/writes: `upsert_finished_games`, `upsert_current_games`, `past_games` (a **queryset**, so the home page pages in the database), `time_classes`, `stored_game`. No Chess.com access. |
+| Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `archive_months()` and `finished_games(y, m)` — the archives, and the only endpoints used. Pure IO + shape normalisation, no DB access. |
+| Persistence | [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) | Pure DB reads/writes: `upsert_finished_games` (the one writer), `past_games` (a **queryset**, so the home page pages in the database), `time_classes`, `stored_game`. No Chess.com access. |
 | Board rendering | [`services/board.py`](../chessdotcom_ai_coach/services/board.py) | Expands FEN/PGN into what templates can iterate over. |
 | Views | [`views.py`](../chessdotcom_ai_coach/views.py) | Thin, except `_position_context` (see below). |
 | Whole-game analysis | [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) | `enqueue_game_analysis` — the idempotent enqueue, applied to every move the user played in a game. Driven by the **Analyse this game** button (`views.analyze_game`) and by `manage.py analyze_game`. `_covered_plies` reads the game's existing rows in one query and matches on `(move_no, side to move)`, so the FEN spellings never diverge into duplicates. |

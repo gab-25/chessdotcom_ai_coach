@@ -20,12 +20,10 @@ class User(AbstractUser):
 class Game(models.Model):
     """Persisted snapshot of a Chess.com game; the PGN is the source of the moves.
 
-    Rows come from two places. The **monthly archives** are the main source: every
-    finished game, live and daily alike, with its final PGN and result. The
-    *current games* endpoint fills the one gap the archives leave — it is daily-only
-    and in-progress-only, and is what lets the app notice a daily game has ended.
-    A game in progress is therefore stored but never shown: it is recorded for the
-    review that follows, not for watching along.
+    Every row is a finished game, mirrored from the **monthly archives** with its
+    final PGN and result. Games in progress are not tracked at all: they cannot be
+    reviewed, and the archive carries the finished game complete, so there is
+    nothing a snapshot would add.
     """
 
     user = models.ForeignKey(
@@ -39,14 +37,18 @@ class Game(models.Model):
     black_rating = models.CharField(max_length=16, blank=True)
     time_class = models.CharField(max_length=32, blank=True)
     pgn = models.TextField(blank=True)  # the source of the move history
-    fen = models.CharField(max_length=100, blank=True)  # final/last known position
+    fen = models.CharField(max_length=100, blank=True)  # final position
     # When the game ended, from the archive. Indexed because it orders the home
     # page: an imported archive arrives in bulk, so `updated_at` says when we
     # fetched a game, never when it was played. Null for a game we have only ever
     # seen as "current" (still in progress) and for rows predating the import.
     end_time = models.DateTimeField(null=True, blank=True, db_index=True)
-    # True while Chess.com still lists the game as current. Flipping to False is
-    # what makes the game visible in the app and eligible for analysis.
+    # Vestigial: every imported game is written False, because the archive only
+    # holds finished games. It survives for the rows left True by older versions,
+    # which snapshotted games while they were still being played — those close
+    # themselves out the next time the archive covers them. The read paths
+    # (`game_store.past_games`, `views._reviewable_game`) still honour it, so such
+    # a row is never shown half-finished in the meantime.
     is_active = models.BooleanField(default=True)
 
     class Result(models.TextChoices):
@@ -56,9 +58,9 @@ class Game(models.Model):
         UNKNOWN = "unknown", "Unknown"
 
     # Outcome relative to this row's user, straight from the archive. Stays
-    # UNKNOWN only for a row that never came from there: a daily game still in
-    # progress, snapshotted from a PGN whose Result tag is "*". It resolves itself
-    # the next time the archive is read.
+    # UNKNOWN only for a row that never came from there — one left by an older
+    # version of the app — and resolves itself the next time the archive covers
+    # that game.
     result = models.CharField(
         max_length=8, choices=Result.choices, default=Result.UNKNOWN
     )

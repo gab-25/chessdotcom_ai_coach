@@ -9,10 +9,8 @@ One job, on a slow cadence, because nothing it does needs to be fresh by the
 second:
 
 * `import_archive_month` — one month of each linked user's archive per run. This
-  is where the app's games come from, live and daily alike.
-* `sync_current_games` — the daily-only, in-progress-only endpoint, used to flip
-  a daily game to finished as soon as it ends rather than waiting for the next
-  archive read.
+  is where the app's games come from, live and daily alike, and the reason this
+  process exists.
 * `requeue_stale_analyses` / `requeue_orphaned_analyses` — revive analyses whose
   worker, or whose broker message, never came back.
 
@@ -33,7 +31,6 @@ from ...services.scheduler import (
     import_archive_month,
     requeue_orphaned_analyses,
     requeue_stale_analyses,
-    sync_current_games,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,8 +40,8 @@ TICK_INTERVAL_MINUTES = 10
 
 class Command(BaseCommand):
     help = (
-        "Every 10min, import a month of each linked user's Chess.com archive, "
-        "mark finished daily games, and revive stuck analyses."
+        "Every 10min, import a month of each linked user's Chess.com archive "
+        "and revive stuck analyses."
     )
 
     def handle(self, *args, **options):
@@ -68,14 +65,8 @@ class Command(BaseCommand):
 
     def _tick(self):
         try:
-            sync_current_games()
-        except Exception:  # a bad tick must not kill the scheduler
-            logger.exception("Chess.com sync failed")
-        try:
-            # After the sync: a daily game that just ended is already is_active
-            # False, so this run's read of the current month picks it up complete.
             import_archive_month()
-        except Exception:
+        except Exception:  # a bad tick must not kill the scheduler
             logger.exception("Archive import failed")
         try:
             # Anything still RUNNING well past the analysis timeout lost its

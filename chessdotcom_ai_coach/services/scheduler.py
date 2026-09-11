@@ -5,11 +5,15 @@ One schedule calls in here (see `management.commands.run_scheduler`):
 
 * `import_archive_month` pulls one month of each linked user's Chess.com archive
   into the local DB — every finished game, live and daily alike. This is where
-  the app's games come from.
-* `sync_current_games` covers the one gap the archive leaves: a daily game still
-  being played is not in it, and this is what notices when such a game ends.
+  the app's games come from, and the only reason a scheduler exists at all.
 * `requeue_stale_analyses` / `requeue_orphaned_analyses` revive analyses that got
   stuck.
+
+Games in progress are not tracked. Earlier versions snapshotted them from the
+*current games* endpoint on the belief that a game not caught before it ended was
+lost for good — the archives disprove it: they carry every finished game with its
+final PGN, so the snapshot was only ever an incomplete copy of what arrives
+anyway.
 
 **Nothing here enqueues analysis.** A full archive is thousands of games at
 dozens of analyses each, which no worker is going to finish, so the user asks for
@@ -61,27 +65,6 @@ def linked_users():
         .exclude(chessdotcom_username__isnull=True)
         .exclude(chessdotcom_username="")
     )
-
-
-def sync_current_games() -> None:
-    """Refresh linked users' current games from Chess.com into the local DB.
-
-    Narrow job, easy to over-read: the endpoint behind it is **daily-only and
-    in-progress-only**, so it is not how games get here — `import_archive_month`
-    is. What it does is flip `is_active` to False when a daily game disappears
-    from the current-games list, which is what stops a finished game being hidden
-    as "still in progress" until the next archive read catches up.
-
-    Only users who explicitly linked a Chess.com account are synced. A per-user
-    failure (bad username, transient network error) is logged and skipped so it
-    doesn't block the rest of the batch.
-    """
-    for user in linked_users():
-        try:
-            games = Client(username=user.chess_username).my_current_games()
-            game_store.upsert_current_games(user, games)
-        except Exception:
-            logger.exception("Chess.com sync failed for user %s", user.chess_username)
 
 
 def _months_to_import(user, months: list[tuple[int, int]]) -> list[tuple[int, int]]:

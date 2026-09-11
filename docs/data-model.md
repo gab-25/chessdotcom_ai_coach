@@ -7,6 +7,11 @@ per account. `Game` mirrors them locally, `ArchiveImport` remembers how far the
 mirroring has got, and `CoachSuggestion` holds what the coach made of a position
 once someone asked.
 
+Nothing models a game *in progress*. The archive carries a finished game complete
+with its final PGN, so there is nothing a mid-play snapshot would preserve — a
+belief earlier versions of this app were built on, and which these docs used to
+repeat.
+
 ```mermaid
 erDiagram
     USER ||--o{ GAME : "plays"
@@ -24,8 +29,8 @@ erDiagram
         int id PK
         int user_id FK
         string game_id "last segment of the Chess.com URL"
-        text pgn "snapshot — source of the move history"
-        string fen "last snapshotted position"
+        text pgn "final movetext — source of the move history"
+        string fen "final position"
         string white_name
         string black_name
         bool is_active "seen in the latest fetch"
@@ -87,8 +92,8 @@ A local mirror of the archive, not a live view. Fields worth calling out:
 | `pgn` | The move history. Everything the review page shows is derived from this. |
 | `time_class` | `bullet` / `blitz` / `rapid` / `daily` — Chess.com's own value, and what the home filter offers. |
 | `end_time` | When the game was played, from the archive. Indexed, and the home page's sort key: an archive arrives in bulk, so `updated_at` records when we *fetched* a game, never when it was played. Null for a game only ever seen as "current". |
-| `fen` | The last position snapshotted before the game left "current games". Used for the home card's mini-board; the analysis works off `pgn` instead. |
-| `is_active` | `True` = seen in the most recent `current games` fetch. `upsert_current_games` flips to `False` every row it *didn't* just see. **That flip is the app's "the game is over" event**: it is what makes a game visible at all and what makes it eligible for analysis. |
+| `fen` | The final position, from the archive. Used for the home card's mini-board; the analysis works off `pgn` instead. |
+| `is_active` | **Vestigial.** Every imported game is written `False`, because the archive only holds finished games. It survives for rows left `True` by older versions of the app, which snapshotted games while they were still being played; those close themselves out the next time the archive covers them. The read paths still honour it, so such a row is never shown half-finished in the meantime. |
 | `result` / `result_detail` | The outcome relative to **this row's user**, plus how it ended. |
 
 **Constraints:** unique on `(user, game_id)`; default ordering
@@ -112,11 +117,10 @@ states it per side, and `chess_client._outcome` maps that to win/loss/draw plus
 the reason (which always lives on the *losing* side — the winner simply reads
 "win").
 
-`unknown` therefore means the row did **not** come from the archive. That is the
-case for a daily game still in progress, snapshotted by `upsert_current_games`
-from a PGN whose `Result` tag is `*`. It resolves itself the next time the
-archive is read, because a finished game appears there and the upsert overwrites
-the row in place.
+`unknown` therefore means the row did **not** come from the archive — one left by
+an older version of the app, which snapshotted games mid-play from a PGN whose
+`Result` tag is `*`. It resolves itself the next time the archive covers that
+game, because the upsert overwrites the row in place.
 
 A row can stay `unknown` indefinitely in one case: a game played under an alias
 the archive does not attribute to this user (`finished_games` skips those). It
