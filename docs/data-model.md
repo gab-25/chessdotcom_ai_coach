@@ -70,17 +70,23 @@ foreign key** between them — a suggestion survives independently of the game r
 
 ## `User`
 
-Django's `AbstractUser` plus one field:
+Django's `AbstractUser` plus two fields:
 
 - **`chessdotcom_username`** — the linked Chess.com account. Nullable and blank.
+- **`last_synced_at`** — when an archive sync was last *claimed*, not when one
+  completed. This is the lock that replaces the old scheduler process:
+  `sync.request_sync` takes it with a single conditional `UPDATE`, so several web
+  replicas handling the same user's page load still start one import, and the
+  import re-stamps it after each month so a long backfill keeps its claim.
 - **`chess_username`** (property) — the username to actually query, falling back
-  to the Django login name when the field is blank. Always use this property;
-  the scheduler, views and analysis code all do.
+  to the Django login name when the field is blank. Always use this property when
+  *querying*; views and analysis code all do.
 
-Only users with `is_active=True` **and** a non-empty `chessdotcom_username` are
-polled (`scheduler.linked_users`). A user who never set the field is invisible
-to the scheduler — this is the most common reason for "nothing shows up on the
-home page".
+Deciding whether a user has an account at all is a different question, and
+`sync.is_linked` answers it from the raw field, ignoring the fallback: only users
+with `is_active=True` **and** a non-empty `chessdotcom_username` are ever synced.
+A user who never set the field imports nothing — this is the most common reason
+for "nothing shows up on the home page".
 
 ## `Game`
 
@@ -211,17 +217,20 @@ there a worker on this row or not?**
   What that does *not* cover is the message going missing altogether — Redis
   losing the queue, say. The row still reads `PENDING`, so every reconciliation
   pass finds it and enqueues nothing: the position is locked by work that does
-  not exist. `scheduler.requeue_orphaned_analyses()` is the way out, and it
-  detects the state by comparison rather than by age, because age cannot tell a
+  not exist. `sync.requeue_orphaned_analyses()` is the way out — run from the
+  pending card's own poll, so opening the stuck position is what triggers it —
+  and it detects the state by comparison rather than by age, because age cannot tell a
   stranded row from one merely queued behind a long scan. **If the broker's queue
   is empty and no row is `RUNNING`, then no `PENDING` row can have a message** —
   whatever its age. That is exact, so it re-enqueues with no false positives and
   no attempt spent.
 - **`RUNNING` — a worker claimed it.** `analyze_game_task` sets this as it starts
   and `updated_at` records when. Now there *is* a bound on how long it may take,
-  so `scheduler.requeue_stale_analyses()` sweeps anything older than
+  so `sync.requeue_stale_analyses()` sweeps anything older than
   `ANALYSIS_TIMEOUT` (10 minutes — a wide margin over the ~152s worst case) back
-  to `PENDING` and onto the queue.
+  to `PENDING` and onto the queue. It runs in the **web** process, not the
+  worker: its job is to rescue analyses from a wedged worker, and queued behind
+  that worker it could not run in the one case it exists for.
 
 Timing out `PENDING` on the same clock would be a bug, not extra safety: it would
 re-queue healthy work that was merely waiting, deepening the very backlog it was
@@ -281,7 +290,7 @@ has a row under the other spelling.
 - **`analysis`** — the LLM's prose, or the Stockfish-only fallback text when the
   LLM was unreachable. It's never empty for a `DONE` row. On a `FAILED` row it
   carries the engine error, when there was one — a position retired by the
-  scheduler has no prose at all, and the card supplies the wording.
+  recovery sweep has no prose at all, and the card supplies the wording.
 
 **Constraints:** unique on `(user, game_id, fen)`; default ordering
 `["move_no", "-updated_at"]`, which is why the analysis-history timeline comes
@@ -289,6 +298,6 @@ out in move order without any explicit sort.
 
 ## Migrations
 
-`migrations/0001` … `0007`, in [`chessdotcom_ai_coach/migrations/`](../chessdotcom_ai_coach/migrations/).
+`migrations/0001` … `0008`, in [`chessdotcom_ai_coach/migrations/`](../chessdotcom_ai_coach/migrations/).
 Applied automatically by [`entrypoint.sh`](../entrypoint.sh) on container start;
 run `uv run python manage.py migrate` by hand for local development.

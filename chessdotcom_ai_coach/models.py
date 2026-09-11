@@ -11,6 +11,15 @@ class User(AbstractUser):
 
     chessdotcom_username = models.CharField(max_length=255, blank=True, null=True)
 
+    # When an archive sync was last *claimed* — not when one completed. There is
+    # no scheduler: a sync is started from the request path, and this column is
+    # the claim that keeps every web replica from starting the same one.
+    # `services.sync.request_sync` stamps it with a conditional UPDATE (atomic in
+    # Postgres and in the SQLite the tests use), and the import loop re-stamps it
+    # after each month so a long backfill holds the claim for its whole run
+    # instead of letting a second one start on top of it.
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
     @property
     def chess_username(self) -> str:
         """The Chess.com username to query, falling back to the app username."""
@@ -96,13 +105,15 @@ class Game(models.Model):
 class ArchiveImport(models.Model):
     """One month of a user's Chess.com archive, already read.
 
-    The archive job imports **one month per run** so the first pass over a
-    multi-year account neither hammers the API nor dumps thousands of rows at
-    once; this table is how it remembers where it got to. Without it every run
-    would start again from the oldest month.
+    A row here means "this month has been read". That is the whole of the import
+    schedule: `services.sync._due_months` asks for every month the archive offers
+    that has no row, so a user's first sync reads the lot and later ones read
+    nothing — and a backfill cut short by a restart or a rate limit resumes at
+    exactly the months it never got to, rather than starting over or, worse,
+    treating the partial history as complete.
 
     The current month is the exception: it keeps growing as the user plays, so it
-    is re-read on every run and this row is refreshed rather than treated as
+    is re-read on every sync and this row is refreshed rather than treated as
     done. `game_count` is what was seen on the last read, kept for the log and
     for telling "no games that month" apart from "never looked".
     """
@@ -128,9 +139,9 @@ class ArchiveImport(models.Model):
 
 
 # How many times a worker may start on the same position before it is retired as
-# FAILED. Lives here rather than in `services.scheduler` because both the worker
-# (`tasks.analyze_game_task`, which counts the attempts) and the scheduler (which
-# retries the stuck ones) need it, and the worker cannot import the scheduler.
+# FAILED. Lives here rather than in `services.sync` because both the worker
+# (`tasks.analyze_game_task`, which counts the attempts) and the recovery sweep
+# (which retries the stuck ones) need it, and the worker cannot import `sync`.
 MAX_ANALYSIS_ATTEMPTS = 3
 
 
@@ -144,9 +155,10 @@ class CoachSuggestion(models.Model):
 
     Rows are only ever created for moves the user actually played, and only when
     someone asks (`services.analysis.enqueue_game_analysis`, driven by the
-    "Analyse this game" button) — no schedule creates any. Older rows written for
-    a position that was never played still exist; they are simply never rendered,
-    because the templates join suggestions onto the plies in the PGN.
+    "Analyse this game" button) — nothing creates them in the background. Older
+    rows written for a position that was never played still exist; they are
+    simply never rendered, because the templates join suggestions onto the plies
+    in the PGN.
     """
 
     user = models.ForeignKey(
@@ -173,7 +185,7 @@ class CoachSuggestion(models.Model):
     # it queued for far longer than an analysis takes — and is recovered by Celery
     # redelivering the message (`task_acks_late`). A RUNNING row has a worker on
     # it, so a single analysis bounds how long it may legitimately take, and
-    # anything past `services.scheduler.ANALYSIS_TIMEOUT` is genuinely stuck.
+    # anything past `services.sync.ANALYSIS_TIMEOUT` is genuinely stuck.
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.PENDING
     )

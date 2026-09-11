@@ -8,6 +8,7 @@ from .models import CoachSuggestion
 from .services import analysis as analysis_service
 from .services import board as board_utils
 from .services import game_store
+from .services import sync
 from .tasks import analyze_game_task
 
 _START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -62,9 +63,9 @@ def _arrow(from_sq, to_sq, color, marker, flipped):
 def _in_flight(row):
     """True while the analysis is queued or running — both render as "pending".
 
-    The two are worth distinguishing in the scheduler (only a RUNNING row can time
-    out) but not on the card: either way the answer isn't there yet and the
-    fragment self-polls until it is.
+    The two are worth distinguishing to the recovery sweeps (only a RUNNING row
+    can time out) but not on the card: either way the answer isn't there yet and
+    the fragment self-polls until it is.
     """
     return row.status in (
         CoachSuggestion.Status.PENDING,
@@ -84,8 +85,8 @@ def _failed_coach(row, san=""):
         "mode": "failed",
         "san": san,
         "fen": row.fen,
-        # A row retired by the scheduler carries no prose — it never got far enough
-        # to produce any — so say why instead of showing a bare card.
+        # A row retired by the recovery sweep carries no prose — it never got far
+        # enough to produce any — so say why instead of showing a bare card.
         "reason": row.analysis
         or row.eval_text
         or "The background analysis did not complete.",
@@ -316,13 +317,27 @@ def _games_page(request):
 
 @login_required
 def home(request):
-    """Home page: the user's finished games, the ones there is something to review."""
-    return render(request, "home.html", _games_page(request))
+    """Home page: the user's finished games, the ones there is something to review.
+
+    Also where the archive import is started. There is no scheduler: opening the
+    page is what asks for the user's games to be brought up to date, and
+    `sync.request_sync` both rate-limits that and hands the actual work to the
+    worker, so this stays a plain DB read. It returns True only when this request
+    won the claim, which the template uses to refresh itself once the games have
+    had a moment to land.
+    """
+    context = _games_page(request)
+    context["syncing"] = sync.request_sync(request.user)
+    return render(request, "home.html", context)
 
 
 @login_required
 def game_list(request):
     """HTMX endpoint: the finished-games fragment — refresh, paging and filtering."""
+    # The Refresh button should mean "fetch my games", not just "re-read the DB".
+    # Whether it does is `request_sync`'s call, not ours: paging and filtering come
+    # through here too, and they hit the cooldown and enqueue nothing.
+    sync.request_sync(request.user)
     context = _games_page(request)
     context["oob"] = True
     return render(request, "partials/game_list.html", context)
@@ -357,8 +372,8 @@ def game_position(request, id):
 def analyze_game(request, id):
     """HTMX endpoint: queue the coach on every move the user played in this game.
 
-    Analysis is on demand — no schedule queues any — so this is the control that
-    starts it. `analysis.enqueue_game_analysis` is idempotent, so pressing it
+    Analysis is on demand — nothing queues it in the background — so this is the
+    control that starts it. `analysis.enqueue_game_analysis` is idempotent, so pressing it
     twice queues nothing the second time and there is no need to guard against a
     double click. Returns the position fragment, which re-renders with the plies
     now showing as pending.
@@ -392,6 +407,14 @@ def analyze_position(request, id):
     game, _message = _reviewable_game(request.user, id)
     if game is None:
         return HttpResponse(status=404)
+
+    if request.method == "GET":
+        # The GET is the pending card's self-poll, and that card only renders while
+        # a position is in flight — so this runs exactly when an analysis might be
+        # stuck, and nowhere else. It never raises; a card that keeps spinning is
+        # the worst a broker outage may cost here.
+        sync.recover_stuck_analyses(request.user)
+
     sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
     context = _position_context(request.user, game, sel)
 
@@ -413,9 +436,9 @@ def analyze_position(request, id):
                 )
             else:
                 # Re-enqueue whatever state the row is in, in-flight ones included:
-                # an explicit click is exactly the signal to break a lock the
-                # scheduler hasn't timed out yet. `attempts` restarts too, so the
-                # user's retry isn't spent by earlier failures.
+                # an explicit click is exactly the signal to break a lock that
+                # `sync.ANALYSIS_TIMEOUT` hasn't expired yet. `attempts` restarts
+                # too, so the user's retry isn't spent by earlier failures.
                 row.status = CoachSuggestion.Status.PENDING
                 row.attempts = 0
                 row.eval_text = ""

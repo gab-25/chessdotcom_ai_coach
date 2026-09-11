@@ -1,13 +1,20 @@
 # Architecture
 
-The app is not a single Django process. It is **four processes plus two backing
+The app is not a single Django process. It is **two processes plus two backing
 services**, and understanding why is the fastest way into the codebase.
 
 The reason is latency: a coach analysis costs ~2s of Stockfish plus 20–30s of
 CPU LLM inference. That can't happen inside a request, so it happens in a Celery
-worker. Something has to keep the local mirror of your games up to date — that's
-APScheduler. The web process, as a result, never talks to Chess.com and never
-runs the engine: it only reads the database.
+worker. Keeping the local mirror of your games up to date is slow for a different
+reason — one HTTP call per archive month — so it goes to the same worker. The web
+process, as a result, never talks to Chess.com and never runs the engine: it only
+reads the database.
+
+**Nothing is scheduled.** There is no cron, no Celery Beat, no scheduler process:
+both background jobs are enqueued from the request path, by the user they are
+for. That is what lets `web` scale to as many replicas as it likes — a scheduler
+living inside it would run once per replica and fetch every archive that many
+times over.
 
 **The app reviews games, it does not watch them.** Your whole Chess.com archive
 is mirrored locally — every finished game, live and daily — and the coach
@@ -29,9 +36,8 @@ graph TD
     Browser["Browser<br/><i>HTMX fragments, no JS framework</i>"]
 
     subgraph app["Application processes"]
-        Web["<b>web</b> — Gunicorn + Django<br/>views.py, templates/"]
-        Sched["<b>scheduler</b> — APScheduler<br/>manage.py run_scheduler<br/><i>10min tick</i>"]
-        Worker["<b>worker</b> — Celery<br/>analyze_game_task"]
+        Web["<b>web</b> — Gunicorn + Django<br/>views.py, templates/<br/><i>scales freely</i>"]
+        Worker["<b>worker</b> — Celery<br/>analyze_game_task<br/>sync_user_task"]
     end
 
     subgraph infra["Backing services"]
@@ -47,13 +53,12 @@ graph TD
 
     Browser -->|"navigation, paging, analyse request<br/>pending card poll every 2s"| Web
     Web --> PG
-    Sched -->|"monthly archives"| ChessCom
-    Sched --> PG
-    Web -->|"enqueue task<br/><i>when you ask</i>"| Redis
+    Web -->|"enqueue analysis <i>when you ask</i><br/>enqueue sync <i>when you open the app</i>"| Redis
     Redis --> Worker
+    Worker -->|"monthly archives"| ChessCom
     Worker --> SF
     Worker --> LLM
-    Worker -->|"persist suggestion"| PG
+    Worker -->|"persist games + suggestions"| PG
 
     linkStyle 1 stroke:#4a7a52,stroke-width:2px
 ```
@@ -70,9 +75,15 @@ Two separate stories, and keeping them apart is the key to the codebase.
 only Chess.com endpoint that carries live games at all — the current-games
 endpoint everyone reaches for first is documented as *"Daily Chess games that a
 player is currently playing"*, which is why the app saw nothing but daily games
-before, and why it is not used any more. The import walks the archive list a
-month at a time, so a five-year account fills in over a few hours rather than in
-one burst that Chess.com would rate-limit.
+before, and why it is not used any more. The import reads one month per request,
+in sequence newest-first — Chess.com tolerates that far better than parallel
+fetches — and `ArchiveImport` records each month as it lands, so a run cut short
+resumes at the months it never reached rather than starting over.
+
+**The import is started by you opening the app.** `sync.request_sync` claims the
+user's sync with one conditional `UPDATE` on `last_synced_at` — atomic, so N web
+replicas racing on the same page load produce exactly one import — and hands it
+to the worker. A user who never opens the app costs no Chess.com traffic at all.
 
 **Analysis is requested, never scheduled.** An imported archive is thousands of
 games; at dozens of analyses each, and up to 152s apiece, no schedule could drain
@@ -84,7 +95,7 @@ one task per move you played.
 sequenceDiagram
     autonumber
     participant B as Browser (HTMX)
-    participant S as Scheduler
+    participant Web as Web
     participant C as Chess.com API
     participant DB as PostgreSQL
     participant Q as Redis / Celery
@@ -92,17 +103,28 @@ sequenceDiagram
     participant E as Stockfish + LLM
 
     rect rgba(120,140,180,0.10)
-    Note over S,DB: every 10min — the import tick (enqueues nothing)
-    S->>C: archive_months()
-    C-->>S: one URL per month the player was active
-    S->>C: finished_games(yyyy, mm) — the current month,<br/>plus one backlog month per run
-    C-->>S: every finished game: final PGN, result, time class
-    S->>DB: upsert_finished_games() + record ArchiveImport
-    Note over S,DB: variants (chess960, crazyhouse, …) are skipped:<br/>Stockfish and the PGN replay assume standard chess
+    Note over B,W: opening the app — the archive import (enqueues no analysis)
+    B->>Web: GET /
+    Web->>DB: claim the sync: UPDATE last_synced_at WHERE it has lapsed
+    Note over Web,DB: 0 rows updated ⇒ someone claimed it already ⇒ stop here
+    Web->>Q: sync_user_task(user_id), retry=False
+    Web-->>B: the page, from the DB alone
+    Q->>W: sync_user_task
+    W->>C: archive_months()
+    C-->>W: one URL per month the player was active
+    W->>C: finished_games(yyyy, mm) — every month with no<br/>ArchiveImport row, plus the current one, newest first
+    C-->>W: every finished game: final PGN, result, time class
+    W->>DB: upsert_finished_games() + record ArchiveImport<br/>+ heartbeat last_synced_at
+    Note over W,DB: variants (chess960, crazyhouse, …) are skipped:<br/>Stockfish and the PGN replay assume standard chess
+    B->>Web: GET /games (once, 6s later — only if this load claimed the sync)
+    end
 
-    S->>DB: requeue_stale_analyses() — rows RUNNING past ANALYSIS_TIMEOUT
-    S->>Q: requeue_orphaned_analyses() — queue empty + nothing RUNNING?
-    Note over S,Q: then no PENDING row can still have a message,<br/>so hand them back (Redis lost the queue)
+    rect rgba(180,150,120,0.10)
+    Note over B,Q: the pending card's own poll, at most every 30s
+    B->>Web: GET /game/<id>/analyze (the 2s self-poll)
+    Web->>DB: requeue_stale_analyses() — rows RUNNING past ANALYSIS_TIMEOUT
+    Web->>Q: requeue_orphaned_analyses() — queue empty + nothing RUNNING?
+    Note over Web,Q: then no PENDING row can still have a message,<br/>so hand them back (Redis lost the queue)
     end
 
     rect rgba(120,160,120,0.10)
@@ -174,6 +196,10 @@ So the broker is *not* the guarantee in the case that matters most. That is
 `ANALYSIS_TIMEOUT` to the queue — 10 minutes, whatever the broker is doing.
 Treat re-delivery as an optimisation on top of it, not the mechanism.
 
+It runs **in the web process**, from the pending card's own poll, and that is not
+an accident: its job is to rescue analyses from a wedged worker, so queued behind
+that same worker it would be unable to run in exactly the case it exists for.
+
 Either way a task can be run more than once, so `attempts` bounds it: the worker
 counts the attempt as it claims the row, and the fourth claim retires the
 position as FAILED instead of running it again.
@@ -182,10 +208,9 @@ position as FAILED instead of running it again.
 
 | Component | Entry point | Notes |
 | --- | --- | --- |
-| Scheduler job | [`management/commands/run_scheduler.py`](../chessdotcom_ai_coach/management/commands/run_scheduler.py) | One, `TICK_INTERVAL_MINUTES = 10`, with `max_instances=1` and `coalesce=True` so a slow run never overlaps the next. |
-| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `import_archive_month`, `requeue_stale_analyses`, `requeue_orphaned_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local recovery checks running. **Enqueues no analysis.** |
-| Archive import | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `import_archive_month` — where games come from. `_months_to_import` picks the current month (always, since it keeps growing) plus one backlog month per run, so a multi-year account fills in over hours instead of one burst. `import_all_archives` is the same work unpaced, behind `manage.py import_archives`. |
-| Stuck-analysis recovery | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). |
+| Sync claim | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `request_sync` — called from `views.home` and `views.game_list`. One conditional `UPDATE` on `User.last_synced_at`, so N web replicas produce one import per `SYNC_COOLDOWN`. Publishes with `retry=False`: nothing in a request may wait on the broker. **Enqueues no analysis.** |
+| Archive import | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `sync_user` — where games come from, run in the worker as `tasks.sync_user_task`. `_due_months` asks for every month with no `ArchiveImport` row plus the current one, so a first sync reads the whole history and an interrupted one resumes at the gaps. `import_all_archives` re-reads regardless, behind `manage.py import_archives`. |
+| Stuck-analysis recovery | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `recover_stuck_analyses`, called from the pending card's poll at most every `RECOVERY_INTERVAL`. Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). Never raises. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
 | Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |
 | Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `archive_months()` and `finished_games(y, m)` — the archives, and the only endpoints used. Pure IO + shape normalisation, no DB access. |
@@ -256,8 +281,13 @@ There is no custom JavaScript. Everything is a fragment swap:
   the **Analyse this game** POST, which re-renders it with the plies now pending.
 - **Pending coach cards** (`partials/coach_card.html`) self-poll
   `/game/<id>/analyze` `every 2s` until the worker finishes. PENDING and RUNNING
-  both render as that pending card — the distinction matters to the scheduler,
-  not to someone waiting for an answer.
+  both render as that pending card — the distinction matters to the recovery
+  sweeps, not to someone waiting for an answer. That poll is also what *drives*
+  those sweeps: it only exists while something is in flight, so the check runs
+  exactly when something might need rescuing.
+- **The home grid** refreshes itself **once**, six seconds after a load that
+  claimed the sync (`hx-trigger="load delay:6s"` on the `#game-list` wrapper,
+  which `game_list` never replaces). It is not a poll: no claim, no attribute.
 - **Keyboard navigation** is done with HTMX triggers, not JS:
   `hx-trigger="click, keydown[key=='ArrowLeft'] from:body"`.
 - The coach card uses `hx-swap-oob` to update the eval bar, board arrows, moves
@@ -271,20 +301,24 @@ them and new code should too:
 
 1. **`services/chess_client.py` does Chess.com IO only** — no DB, no Django models.
 2. **`services/game_store.py` does DB only** — no HTTP calls.
-3. **`services/scheduler.py` orchestrates the two** and is where per-user
-   exception handling lives (a bad account is logged and skipped, never allowed
-   to break the batch).
+3. **`services/sync.py` orchestrates the two**, and is the only module that
+   knows there is no scheduler: it owns the sync claim, what a sync should read,
+   and the recovery sweeps.
 4. **Views stay thin and never call Chess.com.** They read the snapshot.
 5. **Idempotency via `get_or_create` on a unique key** is the standard way to
    enqueue work — see `analysis.enqueue_game_analysis`. It is what lets the
-   enqueue path be a reconciliation that can run on a schedule, rather than a
+   enqueue path be a reconciliation that can run repeatedly, rather than a
    one-shot trigger whose failure loses the work.
 6. **Only finished games are analysed or shown.** `views._reviewable_game` is the
    single gate for the second half of that, and `game_store.past_games` for the
    first; nothing else should reach for `is_active` on its own.
-7. **Nothing on a schedule enqueues analysis.** If you find yourself adding a job
-   that queues work over the whole archive, re-read the sizing above: it is the
-   reason the button exists.
+7. **Nothing enqueues analysis in the background.** If you find yourself adding
+   a job that queues work over the whole archive, re-read the sizing above: it is
+   the reason the button exists.
+8. **Nothing runs on a timer.** New background work is claimed from the request
+   path and handed to the worker, the way `request_sync` does it. A process that
+   ticks on its own has to be a singleton, and this app's `web` service is not
+   one.
 
 ## One layout quirk
 

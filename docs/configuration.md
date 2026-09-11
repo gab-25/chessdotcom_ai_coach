@@ -20,6 +20,7 @@ Copy [`.env.example`](../.env.example) to `.env` and edit.
 | `LLM_BASE_URL` | OpenAI-compatible LLM endpoint | `http://ollama:11434/v1` | `http://localhost:11434/v1` |
 | `LLM_MODEL` | Model tag sent with each request | `llama3.2:3b` | same |
 | `REDIS_URL` | Celery broker **and** result backend | `redis://redis:6379/0` | `redis://localhost:6379/0` |
+| `SYNC_COOLDOWN_SECONDS` | How long a user's archive-sync claim holds | `300` | same |
 | `STOCKFISH_PATH` | Path to the engine binary | `stockfish` (resolved on `PATH`) | `./stockfish` |
 
 Note that the **defaults are the Docker values**, not the local ones —
@@ -42,7 +43,7 @@ how the worker behaves under restart:
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `requeue_stale_analyses` is the guarantee that actually holds. |
+| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `sync.requeue_stale_analyses` — run from the pending card's own poll — is the guarantee that actually holds. |
 | `CELERY_TASK_REJECT_ON_WORKER_LOST` | `True` | Makes the above cover a worker killed outright (an OOM kill), not just a clean shutdown. |
 | `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. |
 

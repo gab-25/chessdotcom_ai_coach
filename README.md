@@ -21,15 +21,15 @@ until you ask — a full archive is more games than any worker would get through
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
-- **Celery + Redis** — analysis runs out-of-band: a task is enqueued
+- **Celery + Redis** — both background jobs run out-of-band: a task is enqueued
   (`chessdotcom_ai_coach/tasks.py`) with Redis as broker and result backend, and
   a hidden HTMX poller reveals the result once the worker finishes
-- **APScheduler** — background scheduler (`manage.py run_scheduler`,
-  `chessdotcom_ai_coach/services/scheduler.py`), which exists for one job: every
-  10 minutes it reads a month of each linked user's Chess.com archive — the
-  current one, plus one month of backlog — so a multi-year account mirrors itself
-  over a few hours rather than in one burst Chess.com would rate-limit. It
-  enqueues no analysis.
+- **No scheduler** — there is no cron, no Celery Beat and no scheduler process.
+  Importing a user's Chess.com archive is started by that user opening the app
+  (`chessdotcom_ai_coach/services/sync.py`), rate-limited to once per
+  `SYNC_COOLDOWN_SECONDS` by a claim on their own row, and handed to the worker.
+  An idle deployment therefore makes no Chess.com requests at all, and the `web`
+  service scales to as many replicas as you like without duplicating any of it.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
   `django-htmx`: the home refresh, move-by-move navigation and the coach card are
   all fragment swaps, with no custom JavaScript
@@ -58,9 +58,9 @@ docker compose up --build
 docker compose exec ollama ollama pull llama3.2:3b   # once, ~2GB
 ```
 
-Compose starts the whole stack: `web` (Gunicorn + the APScheduler process,
-started by `entrypoint.sh` after `migrate`/`collectstatic`), a `worker` running
-the Celery worker, plus `redis`, `postgres` and `ollama`. The app is served on
+Compose starts the whole stack: `web` (Gunicorn, started by `entrypoint.sh`
+after `migrate`/`collectstatic`), a `worker` running the Celery worker, plus
+`redis`, `postgres` and `ollama`. The app is served on
 http://localhost:8000.
 
 Compose overrides `POSTGRES_HOST`, `LLM_BASE_URL`, `LLM_MODEL`, `REDIS_URL` and
@@ -98,7 +98,7 @@ The line to watch for is `Task ... succeeded in Ns`. Reading the log:
 - **Silence, with analyses still outstanding** → the queue and the database
   disagree: rows say `PENDING` but no message is waiting for them, so nothing
   picks them up. Compare the two, `docker compose exec redis redis-cli llen
-  celery` against the `pending` count. The scheduler repairs this on its own
+  celery` against the `pending` count. Opening one of those positions repairs it
   (`Re-enqueued N analyses that were PENDING with an empty queue` in
   `docker compose logs web`); seeing it repeatedly means the queue is being lost,
   so check that the `redis-data` volume is mounted.
@@ -121,14 +121,13 @@ image, locally you download it into the repo root. See
 [docs/configuration.md](docs/configuration.md#stockfish) for the exact command,
 and for the full environment-variable reference.
 
-Analysis is asynchronous, so a local run needs **four processes** — without the
-worker and the scheduler, a requested analysis stays stuck on "Analyzing…"
-forever:
+Analysis is asynchronous, so a local run needs **three processes** — without the
+worker, a requested analysis stays stuck on "Analyzing…" forever and no archive
+is ever imported:
 
 ```bash
 uv run python manage.py runserver                        # the web app
-uv run celery -A chessdotcom_ai_coach worker -l info     # the analysis worker
-uv run python manage.py run_scheduler                    # the APScheduler process
+uv run celery -A chessdotcom_ai_coach worker -l info     # analysis + archive import
                                                          # + Redis and PostgreSQL
 ```
 
@@ -136,10 +135,10 @@ uv run python manage.py run_scheduler                    # the APScheduler proce
 
 Open http://localhost:8000, sign in, then set your **Chess.com username** on the
 user via the admin at http://localhost:8000/admin/ (field `chessdotcom_username`;
-it falls back to the login username if left blank, but the scheduler only polls
-users whose field is non-empty). Your games appear on the home page as the archive
-is imported, a month per tick. To pull the whole history at once instead of
-waiting:
+it falls back to the login username if left blank, but only a non-empty field
+counts as a linked account). Reload the home page and your archive starts
+importing — the whole history on the first pass, so a multi-year account takes a
+few minutes. To re-read it later, ignoring what has already been imported:
 
 ```bash
 uv run python manage.py import_archives [--user <username>] [--months N]

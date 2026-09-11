@@ -18,7 +18,13 @@
     </div>
   </div>
 
-  <div id="game-list">
+  {% comment %}
+    `syncing` is set only when this request actually claimed the archive sync, so
+    the trigger appears once and then not again until the cooldown lapses. It sits
+    on the wrapper, which game_list.html never replaces (it swaps innerHTML), so it
+    fires once and cannot turn into a poll.
+  {% endcomment %}
+  <div id="game-list"{% if syncing %} hx-get="{% url 'game_list' %}?time_class={{ time_class }}" hx-trigger="load delay:6s" hx-swap="innerHTML"{% endif %}>
     {% include "partials/game_list.html" %}
   </div>
 </div>

@@ -1,9 +1,10 @@
-"""Import a user's Chess.com game archive in one go.
+"""Force a re-read of a user's Chess.com game archive.
 
-The scheduler already walks the archive at one backlog month per run, which is
-gentle on Chess.com but takes hours to cover a multi-year account. This is the
-"don't wait for it" version: it reads every monthly archive in sequence, newest
-first, and stores every finished game — live and daily alike.
+Ordinary imports need no command: opening the app claims a sync and the worker
+reads whatever months are still missing. This is the override for when that is
+not enough — a history imported by an older version, or `ArchiveImport` rows that
+claim more than the database actually holds. It ignores those rows entirely and
+re-reads every monthly archive in sequence, newest first.
 
     python manage.py import_archives [--user <username>] [--months N]
 
@@ -14,7 +15,7 @@ game already stored is updated in place, so re-running adds nothing.
 
 from django.core.management.base import BaseCommand, CommandError
 
-from ...services.scheduler import linked_users, import_all_archives
+from ...services.sync import linked_users, import_all_archives
 
 
 class Command(BaseCommand):

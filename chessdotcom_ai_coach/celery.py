@@ -1,8 +1,11 @@
 """Celery application for the project.
 
-Celery is used purely as the worker/executor for background analysis
-(`analyze_game_task`). Scheduling is owned entirely by APScheduler (see
-`management/commands/run_scheduler.py`) — there is no Celery Beat.
+Celery is used purely as the worker/executor for background work:
+`analyze_game_task` for coach analysis, `sync_user_task` for the Chess.com
+archive import. **Nothing is scheduled** — there is no Celery Beat and no
+scheduler process of any kind. Both tasks are enqueued from the request path (see
+`services.sync`), which is what lets the web container run as many replicas as it
+likes without duplicating any background work.
 """
 
 import os

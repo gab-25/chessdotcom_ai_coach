@@ -32,8 +32,10 @@
       <p>
         {% if time_class %}
           No finished {{ time_class }} games. Try another time control.
+        {% elif not user.chessdotcom_username %}
+          No Chess.com account is linked to this profile, so there is no archive to import.
         {% else %}
-          None of your Chess.com games are here yet. They are imported from your archive a month at a time.
+          None of your Chess.com games are here yet. Your archive is being imported — this may take a few minutes the first time.
         {% endif %}
       </p>
     </div>

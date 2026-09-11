@@ -1,12 +1,17 @@
-"""Unit tests for the scheduler job bodies: `import_archive_month` (the monthly
-archive -> DB, and where the app's games come from), `requeue_stale_analyses`
-(reviving analyses whose worker never came back) and `requeue_orphaned_analyses`
-(reviving those whose broker message went missing instead).
+"""Unit tests for `services.sync`: the request-driven replacement for the old
+scheduler.
 
-**No job enqueues analysis** — that is on demand now, from the detail page.
-`TestImportArchiveMonth.test_never_enqueues_analysis` pins it down.
+* `sync_user` — the monthly archive -> DB, and where the app's games come from.
+* `request_sync` — the per-user claim that keeps N web replicas from starting the
+  same import, and hands it to the worker.
+* `requeue_stale_analyses` / `requeue_orphaned_analyses` — reviving analyses whose
+  worker, or whose broker message, never came back, and `recover_stuck_analyses`
+  which throttles them on the coach card's poll.
 
-The Celery task and the Chess.com `Client` are mocked, so no broker, worker or
+**Nothing here enqueues analysis** — that is on demand, from the detail page.
+`TestSyncUser.test_never_enqueues_analysis` pins it down.
+
+The Celery tasks and the Chess.com `Client` are mocked, so no broker, worker or
 network is needed.
 """
 
@@ -21,14 +26,19 @@ from chessdotcom_ai_coach.models import (
     ArchiveImport,
     CoachSuggestion,
     Game,
+    User,
 )
-from chessdotcom_ai_coach.services.scheduler import (
+from chessdotcom_ai_coach.services import sync as sync_module
+from chessdotcom_ai_coach.services.sync import (
     ANALYSIS_TIMEOUT,
     REQUEUE_BATCH_SIZE,
+    SYNC_COOLDOWN,
     import_all_archives,
-    import_archive_month,
+    recover_stuck_analyses,
+    request_sync,
     requeue_orphaned_analyses,
     requeue_stale_analyses,
+    sync_user,
 )
 
 # White to move (FEN field 2 = "w") vs. black to move.
@@ -83,14 +93,23 @@ def _archive_client(mock_client_cls, months, games_by_month=None):
     return client
 
 
+@pytest.fixture(autouse=True)
+def _reset_recovery_throttle():
+    """`recover_stuck_analyses` throttles on a module global that outlives a test."""
+    sync_module._last_recovery = None
+    yield
+    sync_module._last_recovery = None
+
+
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler.Client")
-class TestImportArchiveMonth:
+@patch("chessdotcom_ai_coach.services.sync.Client")
+class TestSyncUser:
     """The archive import: where the app's games actually come from.
 
-    Paced at the current month plus one backlog month per run, so the first pass
-    over a multi-year account neither hammers Chess.com nor writes thousands of
-    rows at once.
+    Which months get read is a set difference — everything with no
+    `ArchiveImport` row, plus the current one — so a first sync reads the whole
+    history, a later one reads only the current month, and an interrupted first
+    sync picks up where it stopped.
     """
 
     @pytest.fixture(autouse=True)
@@ -105,11 +124,9 @@ class TestImportArchiveMonth:
 
     def test_imports_the_current_month(self, mock_client_cls):
         current = self._now_month()
-        _archive_client(
-            mock_client_cls, [current], {current: [_archive_game()]}
-        )
+        _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
 
-        assert import_archive_month() == 1
+        assert sync_user(self.user) == 1
 
         game = Game.objects.get(user=self.user, game_id="944768131")
         assert game.time_class == "blitz"  # a live game: never in "current games"
@@ -120,28 +137,13 @@ class TestImportArchiveMonth:
         current = self._now_month()
         _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
 
-        import_archive_month()
+        sync_user(self.user)
 
         row = ArchiveImport.objects.get(user=self.user)
         assert (row.year, row.month, row.game_count) == (*current, 1)
 
-    def test_always_re_reads_the_current_month(self, mock_client_cls):
-        """It keeps growing as the user plays, so a finished game is in it and
-        nowhere else. Treating it as done would strand every new game."""
-        current = self._now_month()
-        client = _archive_client(
-            mock_client_cls, [current], {current: [_archive_game()]}
-        )
-
-        import_archive_month()
-        import_archive_month()
-
-        assert client.finished_games.call_count == 2
-        assert Game.objects.count() == 1  # idempotent, not duplicated
-
-    def test_walks_the_backlog_newest_first(self, mock_client_cls):
-        """A fresh account fills in with recent games rather than making the user
-        wait for years of history to scroll past."""
+    def test_first_sync_reads_the_whole_history(self, mock_client_cls):
+        """No pacing any more: the user gets their games, not a month of them."""
         current = self._now_month()
         months = [(2023, 1), (2023, 2), current]
         client = _archive_client(
@@ -150,54 +152,94 @@ class TestImportArchiveMonth:
             {
                 (2023, 1): [_archive_game("old1")],
                 (2023, 2): [_archive_game("old2")],
-                current: [],
+                current: [_archive_game("new")],
             },
         )
 
-        import_archive_month()
-        assert {row.game_id for row in Game.objects.all()} == {"old2"}
+        assert sync_user(self.user) == 3
+        assert {row.game_id for row in Game.objects.all()} == {"old1", "old2", "new"}
+        # Newest first, so recent games land before years of history scroll past.
+        assert [call.args for call in client.finished_games.call_args_list] == [
+            current,
+            (2023, 2),
+            (2023, 1),
+        ]
 
-        client.finished_games.reset_mock()
-        import_archive_month()
-        assert {row.game_id for row in Game.objects.all()} == {"old1", "old2"}
-
-    def test_settles_on_the_current_month_once_history_is_done(self, mock_client_cls):
+    def test_a_later_sync_reads_only_the_current_month(self, mock_client_cls):
+        """It keeps growing as the user plays, so a finished game is in it and
+        nowhere else. Everything else has a row and is left alone."""
         current = self._now_month()
         client = _archive_client(mock_client_cls, [(2023, 1), current])
 
-        import_archive_month()  # current + the one backlog month
+        sync_user(self.user)
         client.finished_games.reset_mock()
-        import_archive_month()
+        sync_user(self.user)
 
-        # Nothing left to catch up on: one request per run from here on.
-        assert client.finished_games.call_count == 1
-        assert client.finished_games.call_args[0] == current
+        assert [call.args for call in client.finished_games.call_args_list] == [current]
+
+    def test_is_idempotent(self, mock_client_cls):
+        current = self._now_month()
+        _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
+
+        assert sync_user(self.user) == 1
+        assert sync_user(self.user) == 0  # updated in place, not added
+        assert Game.objects.count() == 1
+
+    def test_an_interrupted_backfill_resumes_the_months_it_missed(
+        self, mock_client_cls
+    ):
+        """A first sync cut short by a restart or a rate limit leaves rows for the
+        months it managed. Treating "has any row" as "imported" would strand the
+        rest of the history for good; the set difference reads exactly the gaps."""
+        current = self._now_month()
+        months = [(2023, 1), (2023, 2), (2023, 3), current]
+        client = _archive_client(mock_client_cls, months)
+        # A previous run got through the current month and 2023-03 before dying.
+        for year, month in (current, (2023, 3)):
+            ArchiveImport.objects.create(user=self.user, year=year, month=month)
+
+        sync_user(self.user)
+
+        read = [call.args for call in client.finished_games.call_args_list]
+        assert read == [current, (2023, 2), (2023, 1)]
+
+    def test_heartbeats_the_sync_claim_as_it_goes(self, mock_client_cls):
+        """A first backfill can outlast SYNC_COOLDOWN. Without this the claim would
+        expire mid-run and a second sync would start on top of it."""
+        current = self._now_month()
+        _archive_client(mock_client_cls, [(2023, 1), current])
+        self.user.last_synced_at = timezone.now() - SYNC_COOLDOWN * 2
+        self.user.save()
+
+        sync_user(self.user)
+
+        self.user.refresh_from_db()
+        assert timezone.now() - self.user.last_synced_at < SYNC_COOLDOWN
 
     def test_leaves_a_legacy_in_progress_row_alone(self, mock_client_cls):
         """Older versions snapshotted games while they were being played. Such a
         row is not in the archive, so the import must not touch it — it closes
         itself out once that game is covered."""
         current = self._now_month()
-        Game.objects.create(
-            user=self.user, game_id="running", is_active=True, pgn=PGN
-        )
+        Game.objects.create(user=self.user, game_id="running", is_active=True, pgn=PGN)
         _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
 
-        import_archive_month()
+        sync_user(self.user)
 
         assert Game.objects.get(game_id="running").is_active is True
 
-    def test_closes_out_a_legacy_row_once_the_archive_covers_it(
-        self, mock_client_cls
-    ):
+    def test_closes_out_a_legacy_row_once_the_archive_covers_it(self, mock_client_cls):
         """The same row, updated in place: finished, with the archive's full PGN."""
         current = self._now_month()
         Game.objects.create(
-            user=self.user, game_id="944768131", is_active=True, pgn='[Event "T"]\n\n1. e4 *'
+            user=self.user,
+            game_id="944768131",
+            is_active=True,
+            pgn='[Event "T"]\n\n1. e4 *',
         )
         _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
 
-        import_archive_month()
+        sync_user(self.user)
 
         game = Game.objects.get(game_id="944768131")
         assert Game.objects.count() == 1  # updated, not duplicated
@@ -211,7 +253,7 @@ class TestImportArchiveMonth:
         current = self._now_month()
         _archive_client(mock_client_cls, [current], {current: [_archive_game()]})
 
-        import_archive_month()
+        sync_user(self.user)
 
         mock_task.delay.assert_not_called()
         assert CoachSuggestion.objects.count() == 0
@@ -219,39 +261,136 @@ class TestImportArchiveMonth:
     def test_does_nothing_for_an_account_with_no_archive(self, mock_client_cls):
         _archive_client(mock_client_cls, [])
 
-        assert import_archive_month() == 0
+        assert sync_user(self.user) == 0
         assert ArchiveImport.objects.count() == 0
 
-    def test_one_users_failure_does_not_block_the_rest(
-        self, mock_client_cls, django_user_model
-    ):
-        good = django_user_model.objects.create_user(
-            username="good_login", password="pw12345!", chessdotcom_username="Good"
-        )
-        current = self._now_month()
+    def test_a_failure_propagates_to_the_task(self, mock_client_cls):
+        """`sync_user` works for one user, so there is nothing to protect the rest
+        of a batch from: the task lets it surface in the worker log instead."""
+        mock_client_cls.return_value.archive_months.side_effect = RuntimeError("boom")
 
-        def _client_for(username):
-            client = MagicMock()
-            if username == "MyUser":
-                client.archive_months.side_effect = RuntimeError("boom")
-            else:
-                client.archive_months.return_value = [current]
-                client.finished_games.return_value = [
-                    _archive_game(
-                        "good-game", white={"username": "Good", "rating": "1"}
-                    )
-                ]
-            return client
-
-        mock_client_cls.side_effect = lambda username: _client_for(username)
-
-        assert import_archive_month() == 1  # must not raise
-
-        assert Game.objects.filter(user=good, game_id="good-game").exists()
+        with pytest.raises(RuntimeError):
+            sync_user(self.user)
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler.Client")
+@patch("chessdotcom_ai_coach.tasks.sync_user_task")
+class TestRequestSync:
+    """The claim that replaces the scheduler process.
+
+    One conditional UPDATE, so N web replicas racing on the same user's page load
+    produce exactly one import.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _users(self, django_user_model):
+        self.user = django_user_model.objects.create_user(
+            username="login_name", password="pw12345!", chessdotcom_username="MyUser"
+        )
+        self.unlinked = django_user_model.objects.create_user(
+            username="no_account", password="pw12345!"
+        )
+
+    def test_claims_and_enqueues(self, mock_task):
+        assert request_sync(self.user) is True
+
+        mock_task.apply_async.assert_called_once()
+        assert mock_task.apply_async.call_args.kwargs["args"] == [self.user.pk]
+        self.user.refresh_from_db()
+        assert self.user.last_synced_at is not None
+
+    def test_a_second_call_within_the_cooldown_enqueues_nothing(self, mock_task):
+        assert request_sync(self.user) is True
+        mock_task.apply_async.reset_mock()
+
+        assert request_sync(self.user) is False
+        mock_task.apply_async.assert_not_called()
+
+    def test_enqueues_again_once_the_cooldown_lapses(self, mock_task):
+        request_sync(self.user)
+        User.objects.filter(pk=self.user.pk).update(
+            last_synced_at=timezone.now() - SYNC_COOLDOWN - timedelta(seconds=1)
+        )
+        mock_task.apply_async.reset_mock()
+
+        assert request_sync(self.user) is True
+        mock_task.apply_async.assert_called_once()
+
+    def test_never_publishes_with_retries(self, mock_task):
+        """`task_publish_retry` is on by default, and this runs in a request: a
+        broker that is down must not hold the home page for seconds of backoff."""
+        request_sync(self.user)
+
+        assert mock_task.apply_async.call_args.kwargs["retry"] is False
+
+    def test_an_unlinked_user_is_left_alone(self, mock_task):
+        """The `chess_username` fallback orients the board; it is not a claim that
+        the login name is a real Chess.com account."""
+        assert request_sync(self.unlinked) is False
+
+        mock_task.apply_async.assert_not_called()
+        self.unlinked.refresh_from_db()
+        assert self.unlinked.last_synced_at is None
+
+    def test_a_broker_failure_does_not_raise_and_keeps_the_claim(self, mock_task):
+        """One publish attempt per cooldown while Redis is down, not one per page
+        load — and the home page still renders."""
+        mock_task.apply_async.side_effect = RuntimeError("broker down")
+
+        assert request_sync(self.user) is False
+
+        self.user.refresh_from_db()
+        assert self.user.last_synced_at is not None
+        mock_task.apply_async.reset_mock()
+        assert request_sync(self.user) is False
+        mock_task.apply_async.assert_not_called()
+
+
+@pytest.mark.django_db
+class TestRecoverStuckAnalyses:
+    """The throttle in front of the two sweeps, called from the coach card poll."""
+
+    @pytest.fixture(autouse=True)
+    def _user(self, django_user_model):
+        self.user = django_user_model.objects.create_user(
+            username="login_name", password="pw12345!"
+        )
+
+    @patch("chessdotcom_ai_coach.services.sync.requeue_orphaned_analyses")
+    @patch("chessdotcom_ai_coach.services.sync.requeue_stale_analyses")
+    def test_runs_both_sweeps_scoped_to_the_user(self, mock_stale, mock_orphaned):
+        mock_stale.return_value = 1
+        mock_orphaned.return_value = 2
+
+        assert recover_stuck_analyses(self.user) == 3
+
+        mock_stale.assert_called_once_with(user=self.user)
+        mock_orphaned.assert_called_once_with(user=self.user)
+
+    @patch("chessdotcom_ai_coach.services.sync.requeue_stale_analyses")
+    def test_a_second_call_inside_the_interval_is_a_no_op(self, mock_stale):
+        """The card polls every 2s; the sweeps must not follow it."""
+        mock_stale.return_value = 0
+        recover_stuck_analyses(self.user)
+        mock_stale.reset_mock()
+
+        assert recover_stuck_analyses(self.user) == 0
+        mock_stale.assert_not_called()
+
+    @patch("chessdotcom_ai_coach.services.sync.requeue_stale_analyses")
+    def test_a_sweep_failure_never_reaches_the_card(self, mock_stale):
+        """This sits in front of a fragment render: a broker outage must cost a
+        card that keeps spinning, not a 500."""
+        mock_stale.side_effect = RuntimeError("broker down")
+
+        with patch(
+            "chessdotcom_ai_coach.services.sync._queued_task_count", return_value=None
+        ):
+            assert recover_stuck_analyses(self.user) == 0
+
+
+@pytest.mark.django_db
+@patch("chessdotcom_ai_coach.services.sync.Client")
 class TestImportAllArchives:
     """The bulk catch-up behind `manage.py import_archives`."""
 
@@ -292,7 +431,7 @@ class TestImportAllArchives:
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler.analyze_game_task")
+@patch("chessdotcom_ai_coach.services.sync.analyze_game_task")
 class TestRequeueStaleAnalyses:
     """A `CoachSuggestion` row is the in-flight lock, so an analysis whose worker
     never came back would otherwise leave the position RUNNING — and skipped by
@@ -393,6 +532,23 @@ class TestRequeueStaleAnalyses:
         # Retired explicitly, so the card can offer a retry instead of spinning.
         assert row.status == CoachSuggestion.Status.FAILED
 
+    def test_scopes_to_one_user(self, mock_task, user, django_user_model):
+        """The request path passes the user making the request: a page load should
+        unstick the card they are looking at, not do the deployment's housekeeping."""
+        other = django_user_model.objects.create_user(
+            username="someone_else", password="pw12345!"
+        )
+        _game(user)
+        mine = self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1))
+        theirs = self._running(other, ANALYSIS_TIMEOUT + timedelta(minutes=1))
+
+        assert requeue_stale_analyses(user=user) == 1
+
+        mine.refresh_from_db()
+        theirs.refresh_from_db()
+        assert mine.status == CoachSuggestion.Status.PENDING
+        assert theirs.status == CoachSuggestion.Status.RUNNING
+
     def test_survives_a_row_whose_game_is_gone(self, mock_task, user):
         # No `Game` row: the suggestion is decoupled from Game by design.
         self._running(user, ANALYSIS_TIMEOUT + timedelta(minutes=1), attempts=1)
@@ -404,8 +560,8 @@ class TestRequeueStaleAnalyses:
 
 
 @pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler._queued_task_count")
-@patch("chessdotcom_ai_coach.services.scheduler.analyze_game_task")
+@patch("chessdotcom_ai_coach.services.sync._queued_task_count")
+@patch("chessdotcom_ai_coach.services.sync.analyze_game_task")
 class TestRequeueOrphanedAnalyses:
     """The other way a position gets stuck: the row survives but its message
     doesn't (Redis losing the queue, a bad manual write). Nothing else recovers
@@ -442,6 +598,27 @@ class TestRequeueOrphanedAnalyses:
         # Still PENDING, and no attempt spent: nothing was ever attempted.
         assert row.status == CoachSuggestion.Status.PENDING
         assert row.attempts == 0
+
+    def test_scopes_the_rows_but_not_the_preconditions(
+        self, mock_task, mock_depth, user, django_user_model
+    ):
+        """Which rows are revived is per-user; "is anything running?" and "is the
+        queue empty?" are facts about the whole deployment, so they stay global."""
+        other = django_user_model.objects.create_user(
+            username="someone_else", password="pw12345!"
+        )
+        _game(user)
+        mine = self._pending(user)
+        theirs = self._pending(other)
+        mock_depth.return_value = 0
+
+        assert requeue_orphaned_analyses(user=user) == 1
+
+        assert mock_task.delay.call_args[0][0] == user.id
+        before = theirs.updated_at
+        theirs.refresh_from_db()
+        assert theirs.updated_at == before  # untouched
+        assert mine.pk is not None
 
     def test_does_nothing_while_work_is_queued(self, mock_task, mock_depth, user):
         """A deep queue is the normal state during a scan — those rows have

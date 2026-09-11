@@ -22,39 +22,42 @@ uv run python manage.py migrate
 uv run python manage.py createsuperuser
 ```
 
-## Running: you need four processes
+## Running: you need three processes
 
 This is the part that trips people up. `runserver` alone gives you a UI with
 **no games in it and nothing that can analyse them**.
 
 ```bash
 uv run python manage.py runserver                        # 1. the web app
-uv run celery -A chessdotcom_ai_coach worker -l info     # 2. the analysis worker
-uv run python manage.py run_scheduler                    # 3. the archive importer
-                                                         # 4. Redis + Postgres
+uv run celery -A chessdotcom_ai_coach worker -l info     # 2. analysis + archive import
+                                                         # 3. Redis + Postgres
 ```
+
+There is no fourth process. Nothing is scheduled: opening the home page claims
+the archive import and hands it to the same worker that runs the analyses.
 
 Symptoms when one is missing:
 
 | Missing | What you see |
 | --- | --- |
-| Scheduler | The home page stays empty (or frozen at an old state) — nothing ever imports from Chess.com. `manage.py import_archives` fills it in without one. |
-| Celery worker | Games appear, but every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING` — nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and the scheduler retries it after 10 minutes.) |
-| Redis | Pressing **Analyse this game** errors, and the scheduler logs connection errors on every tick. |
+| Celery worker | The home page stays empty — nothing imports from Chess.com — and every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING`, because nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and reopening that position re-queues it after 10 minutes.) |
+| Redis | Pressing **Analyse this game** errors. The home page still renders — `request_sync` publishes with `retry=False` and logs a warning — but no import is ever queued. |
 
 ## First run
 
 1. Open http://localhost:8000 and sign in with the superuser you created.
 2. Go to http://localhost:8000/admin/, open your user, and set
    **`chessdotcom_username`** to your Chess.com account. It falls back to the
-   Django login name if left blank — but the scheduler only polls users whose
-   field is non-empty, so set it explicitly.
-3. Within 10 minutes the scheduler imports the current month of your archive and
-   the games show up on the home page. To not wait, run
-   `uv run python manage.py import_archives --months 1`.
+   Django login name if left blank — but only a non-empty field counts as a
+   linked account, so set it explicitly.
+3. Reload the home page. That claims the sync and queues `sync_user_task`, which
+   reads your **whole** archive — a few minutes on a multi-year account. The page
+   refreshes itself once after six seconds; reload again for the rest.
 
-If nothing appears, check the scheduler's output — a bad username is logged and
-skipped rather than raised, so it fails quietly by design.
+If nothing appears, check the **worker's** output: that is where the import runs,
+and a bad username surfaces there. Note the claim — a second reload within
+`SYNC_COOLDOWN_SECONDS` (5 minutes) deliberately queues nothing, so clear
+`last_synced_at` on your user if you want to retry at once.
 
 ## URL map
 
@@ -76,30 +79,18 @@ belonging to another user reads as not found.
 
 ## Management commands
 
-### `run_scheduler`
-
-```bash
-uv run python manage.py run_scheduler
-```
-
-The APScheduler process — **the only scheduling in the project** (there is no
-Celery Beat). One blocking scheduler running one 10-minute job: import a month of
-each linked user's archive, mark finished daily games, revive stuck analyses. It
-must exist exactly once: an in-process scheduler under Gunicorn would start once
-per worker and duplicate every archive fetch.
-
-It enqueues no analysis — that is on demand, from the detail page.
-
 ### `import_archives`
 
 ```bash
 uv run python manage.py import_archives [--user <username>] [--months N]
 ```
 
-The scheduler mirrors your archive a month per tick, which takes hours on a
-multi-year account. This reads every monthly archive in sequence instead, newest
-first. `--months` caps it to the most recent N months for a quick partial
-catch-up; without `--user` every linked user is imported. Idempotent: a game
+Ordinary imports need no command — opening the app claims a sync and the worker
+reads whatever months are missing. This is the **override**: it ignores
+`ArchiveImport` entirely and re-reads every monthly archive in sequence, newest
+first, which is what you want for a history imported by an older version or rows
+that claim more than the database holds. `--months` caps it to the most recent N
+months; without `--user` every linked user is imported. Idempotent: a game
 already stored is updated in place, so re-running adds nothing.
 
 ### `analyze_game`

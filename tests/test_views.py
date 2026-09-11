@@ -6,6 +6,10 @@ The app shows finished games only, so ``_make_game`` builds one by default
 the stored ``Game`` snapshot and ``CoachSuggestion`` rows — no Chess.com call —
 so these tests just seed the DB. The Celery task is mocked where analysis is
 enqueued.
+
+The ``user`` fixture links no Chess.com account, so `sync.request_sync` returns
+early and no view here reaches the broker. The one exception is the coach card's
+poll, which runs the recovery sweeps — patched out in `_no_recovery_sweep`.
 """
 
 from datetime import timedelta
@@ -36,6 +40,18 @@ def user(django_user_model):
 def auth_client(client, user):
     client.force_login(user)
     return client
+
+
+@pytest.fixture(autouse=True)
+def _no_recovery_sweep():
+    """The coach card's poll runs the recovery sweeps, which read the broker.
+
+    They have their own tests in `test_sync.py`; here they would only add a
+    connection attempt to every poll.
+    """
+    with patch("chessdotcom_ai_coach.views.sync.recover_stuck_analyses") as mock:
+        mock.return_value = 0
+        yield mock
 
 
 def _make_game(user, **overrides):
@@ -114,11 +130,13 @@ class TestHome:
         assert b'hx-get="/games"' in response.content
 
     def test_has_no_auto_refresh(self, auth_client, user):
+        """The home grid never polls. It may refresh itself *once* after claiming
+        a sync (see TestHomeSync), which is why this asserts on `every `."""
         _make_game(user)
 
         response = auth_client.get("/")
 
-        assert b"every 5s" not in response.content
+        assert b"every " not in response.content
         assert b"AUTO-REFRESH" not in response.content
 
     def test_shows_game_count_once(self, auth_client, user):
@@ -139,6 +157,83 @@ class TestHome:
         assert list(response.context["games"]) == []
         assert b"944768131" not in response.content
         assert b"No games to review" in response.content
+
+
+@pytest.mark.django_db
+@patch("chessdotcom_ai_coach.tasks.sync_user_task")
+class TestHomeSync:
+    """Opening the app is what asks for the archive to be imported.
+
+    There is no scheduler, so the home page carries the trigger — rate-limited by
+    the per-user claim, and visible to the user as a single delayed refresh once
+    the games have had a moment to land.
+    """
+
+    @pytest.fixture
+    def linked_client(self, client, django_user_model):
+        user = django_user_model.objects.create_user(
+            username="login_name", password="pw12345!", chessdotcom_username="MyUser"
+        )
+        client.force_login(user)
+        return client, user
+
+    def test_queues_the_import_and_refreshes_once(self, mock_task, linked_client):
+        client, user = linked_client
+
+        response = client.get("/")
+
+        mock_task.apply_async.assert_called_once()
+        assert b"load delay:6s" in response.content
+        assert response.content.count(b"load delay:6s") == 1
+
+    def test_a_second_load_neither_queues_nor_refreshes(self, mock_task, linked_client):
+        client, _user = linked_client
+        client.get("/")
+        mock_task.apply_async.reset_mock()
+
+        response = client.get("/")
+
+        mock_task.apply_async.assert_not_called()
+        assert b"load delay:6s" not in response.content
+
+    def test_an_unlinked_user_queues_nothing(self, mock_task, auth_client, user):
+        """The default `user` fixture has no Chess.com account."""
+        response = auth_client.get("/")
+
+        mock_task.apply_async.assert_not_called()
+        assert b"load delay:6s" not in response.content
+
+    def test_the_refresh_endpoint_also_claims(self, mock_task, linked_client):
+        """The Refresh button should mean "fetch my games", not just re-read the DB."""
+        client, _user = linked_client
+
+        client.get("/games")
+
+        mock_task.apply_async.assert_called_once()
+
+    def test_the_empty_state_says_why_there_is_nothing_yet(
+        self, mock_task, linked_client
+    ):
+        """Two different problems, so two different messages: an unlinked account
+        needs a username, a linked one just needs to wait for the import."""
+        client, _user = linked_client
+
+        assert b"Your archive is being imported" in client.get("/").content
+
+    def test_the_empty_state_asks_an_unlinked_user_to_link(
+        self, mock_task, auth_client, user
+    ):
+        assert b"No Chess.com account is linked" in auth_client.get("/").content
+
+    def test_a_broker_outage_still_renders_the_home_page(self, mock_task, linked_client):
+        """Nothing in a request may depend on Redis being up."""
+        client, _user = linked_client
+        mock_task.apply_async.side_effect = RuntimeError("broker down")
+
+        response = client.get("/")
+
+        assert response.status_code == 200
+        assert b"load delay:6s" not in response.content
 
 
 @pytest.mark.django_db
@@ -317,7 +412,7 @@ class TestAnalyzePosition:
 
     def test_post_re_enqueues_a_row_stuck_in_flight(self, mock_task, auth_client, user):
         """An in-flight row is skipped by every later `get_or_create`, so an explicit
-        click has to break the lock rather than wait for the scheduler's timeout."""
+        click has to break the lock rather than wait out `sync.ANALYSIS_TIMEOUT`."""
         _make_game(user)
         row = _make_suggestion(
             user, _ply_fen(2), status=CoachSuggestion.Status.RUNNING, attempts=3
@@ -530,7 +625,7 @@ class TestCoachCardModes:
         assert 'hx-get="/game/944768131/analyze?sel=3"' in body
 
     def test_running_renders_as_pending(self, auth_client, user):
-        """RUNNING and PENDING are worth telling apart in the scheduler (only a
+        """RUNNING and PENDING are worth telling apart to the sweeps (only a
         RUNNING analysis can time out) but not on the card: either way the answer
         isn't there yet."""
         _make_game(user)
@@ -542,7 +637,7 @@ class TestCoachCardModes:
         assert 'hx-trigger="every 2s"' in response.content.decode()
 
     def test_pending_does_not_offer_a_retry(self, auth_client, user):
-        """The scheduler's timeout recovers a stuck analysis on its own; a button
+        """The recovery sweep unsticks an analysis on its own; a button
         here would only invite breaking a lock on work that is still running."""
         _make_game(user)
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
@@ -574,7 +669,7 @@ class TestCoachCardModes:
         assert response.context["history_count"] == 0
 
     def test_a_retired_row_explains_itself(self, auth_client, user):
-        """The scheduler retires a position without any prose — it never got far
+        """The recovery sweep retires a position without any prose — it never got far
         enough to produce any — so the card has to supply the reason."""
         _make_game(user)
         _make_suggestion(

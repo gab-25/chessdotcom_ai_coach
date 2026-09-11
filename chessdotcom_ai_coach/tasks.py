@@ -8,9 +8,15 @@ out-of-band. `services/coach.py` is left untouched so its test mocking seam
 
 The task also owns the row's in-flight bookkeeping: it claims the position as
 RUNNING before doing any work and counts the attempt there. Counting it here
-rather than where the task was enqueued is what makes the scheduler's timeout
-meaningful — a task can sit queued behind a whole-game backfill for far longer
-than an analysis takes, and that wait must not be mistaken for a failure.
+rather than where the task was enqueued is what makes
+`services.sync.ANALYSIS_TIMEOUT` meaningful — a task can sit queued behind a
+whole-game backfill for far longer than an analysis takes, and that wait must not
+be mistaken for a failure.
+
+`sync_user_task` is the other job here: importing one user's Chess.com archive.
+Nothing schedules it — it is queued from the request path by
+`services.sync.request_sync` — but it belongs in the worker all the same, because
+a first import is dozens of sequential HTTP calls.
 """
 
 import logging
@@ -32,9 +38,9 @@ def _claim(user_id: int, game_id: str, fen: str) -> CoachSuggestion | None:
     nothing to do — the position is already settled (DONE/FAILED, e.g. a message
     redelivered after the analysis had in fact finished) or it has burned through
     `MAX_ANALYSIS_ATTEMPTS`, in which case it is retired as FAILED. The cap is
-    enforced here and not only in the scheduler because `task_acks_late` means a
-    task that kills its worker is redelivered by the broker, and something has to
-    stop that loop.
+    enforced here and not only in the recovery sweep because `task_acks_late`
+    means a task that kills its worker is redelivered by the broker, and something
+    has to stop that loop.
     """
     row, _created = CoachSuggestion.objects.get_or_create(
         user_id=user_id,
@@ -64,7 +70,7 @@ def _claim(user_id: int, game_id: str, fen: str) -> CoachSuggestion | None:
     row.status = CoachSuggestion.Status.RUNNING
     row.attempts += 1
     # `auto_now` on updated_at: this stamps when the analysis actually started,
-    # which is what `services.scheduler.requeue_stale_analyses` times out on.
+    # which is what `services.sync.requeue_stale_analyses` times out on.
     row.save()
     return row
 
@@ -103,3 +109,26 @@ def analyze_game_task(user_id: int, game_id: str, fen: str, pgn: str | None = No
             "analysis": suggestion["analysis"],
         },
     )
+
+
+@shared_task(name="chessdotcom_ai_coach.sync_user_task", soft_time_limit=1800)
+def sync_user_task(user_id: int):
+    """Import one user's due Chess.com archive months.
+
+    Queued by `services.sync.request_sync` when a page load takes the user's sync
+    claim. Nothing schedules it, and nothing else enqueues it, so a user who never
+    opens the app costs no Chess.com traffic at all.
+
+    `soft_time_limit` bounds a first import, which walks the whole history: being
+    cut short is safe rather than destructive, because `sync._due_months` reads
+    what is still missing, so the next sync resumes at the months this run never
+    reached. It also keeps the task well inside kombu's visibility timeout, past
+    which `acks_late` would redeliver it while it was still running.
+    """
+    from .models import User
+    from .services import sync  # function-local: `sync` imports this module back
+
+    user = User.objects.filter(pk=user_id, is_active=True).first()
+    if user is None:
+        return
+    sync.sync_user(user)
