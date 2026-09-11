@@ -120,9 +120,10 @@ input {
   max-width: 1300px;
   margin: 0 auto;
   padding: 0 28px;
-  height: 64px;
+  min-height: 64px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 20px;
 }
 
@@ -171,6 +172,7 @@ input {
 
 .back-link {
   margin-left: 6px;
+  white-space: nowrap;
   font-size: 14px;
   color: #b0a48f;
   display: flex;
@@ -192,6 +194,7 @@ input {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   gap: 7px;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -450,7 +453,7 @@ input {
 
 .games-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(292px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(292px, 100%), 1fr));
   gap: 22px;
 }
 
@@ -629,6 +632,7 @@ input {
 }
 .board-stage__board {
   flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
 }
@@ -669,6 +673,8 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 14px;
   padding: 10px 14px;
   background: var(--paper);
@@ -1326,7 +1332,7 @@ input {
 /* Played-vs-coach comparison */
 .gr-compare {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: 10px;
   margin-top: 14px;
 }
@@ -1355,6 +1361,8 @@ input {
 .gr-compare__val {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
 }
 .gr-compare__san {
@@ -1605,7 +1613,7 @@ input {
 /* ===================== Responsive ===================== */
 @media (max-width: 860px) {
   .game-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .board--lg {
     --board-size: 100%;
@@ -1637,6 +1645,45 @@ input {
   }
   .coach__move {
     font-size: 44px;
+  }
+}
+
+@media (max-width: 440px) {
+  .app-header__inner {
+    gap: 10px;
+    min-height: 56px;
+  }
+  .app-header__right {
+    gap: 12px;
+  }
+  .brand__sub,
+  .brand__version {
+    display: none;
+  }
+  .status-pill {
+    padding: 6px;
+    gap: 0;
+  }
+  .back-link__label,
+  .status-pill__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .login__aside,
+  .login__form {
+    padding: 32px 22px;
+  }
+  .login__stats {
+    gap: 16px;
+  }
+  .login__title {
+    font-size: 30px;
   }
 }
 
