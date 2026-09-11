@@ -264,25 +264,60 @@ class TestGameListSync:
         mock_task.apply_async.assert_not_called()
         assert b"load delay:6s" not in response.content
 
-    def test_the_empty_state_says_why_there_is_nothing_yet(
+    def test_the_button_reports_the_import_for_as_long_as_it_runs(
         self, mock_task, linked_client
     ):
-        """Two different problems, so two different messages: an unlinked account
-        needs a username, a linked one just needs to wait for the import."""
+        """The button is the only thing that says an import is running, so the
+        state cannot ride on htmx's own in-flight class: this endpoint is a DB
+        read that answers in about two milliseconds, while the import it queued
+        runs in the worker for seconds. `sync_started` is what carries it — from
+        the press to the re-fetch six seconds later."""
         client, _user = linked_client
 
-        assert b"Your archive is being imported" in client.get("/games").content
+        response = client.get("/games")
 
-    def test_the_empty_state_does_not_claim_an_import_that_was_never_queued(
+        assert b"btn--sm is-syncing" in response.content
+        assert b'hx-swap="innerHTML" disabled aria-busy="true"' in response.content
+
+    def test_the_button_leaves_that_state_on_the_re_fetch(
         self, mock_task, linked_client
     ):
-        """"Being imported" is true only of a request that took the claim. A page
-        load takes none, and a second Sync inside the cooldown takes none."""
+        """The re-fetch never claims, so the button it swaps back in is idle — it
+        is what ends the running state, which otherwise would have nothing to
+        end it."""
         client, _user = linked_client
-
-        assert b"being imported" not in client.get("/").content
         client.get("/games")
-        assert b"being imported" not in client.get("/games").content
+
+        response = client.get("/games", {"after_sync": "1"})
+
+        assert b"is-syncing" not in response.content
+        assert b"aria-busy" not in response.content
+
+    def test_the_button_is_idle_when_no_import_was_queued(
+        self, mock_task, linked_client
+    ):
+        """Running is true only of a request that took the claim. A page load
+        takes none, and a second Sync inside the cooldown takes none."""
+        client, _user = linked_client
+
+        assert b"is-syncing" not in client.get("/").content
+        client.get("/games")
+        assert b"is-syncing" not in client.get("/games").content
+
+    def test_the_empty_state_leaves_a_running_import_to_the_button(
+        self, mock_task, linked_client
+    ):
+        """The grid says only that it is empty; the button says why. Two places
+        reporting the same import is what this avoids."""
+        client, _user = linked_client
+
+        running = client.get("/games").content
+
+        assert b"No games to review" in running
+        assert b"Sync to look again" not in running
+        # The cooldown makes the second press claim nothing, so the nudge is
+        # honest again: there is no import for it to contradict.
+        assert b"Sync to look again" in client.get("/games").content
 
     def test_the_empty_state_asks_an_unlinked_user_to_link(
         self, mock_task, auth_client, user
