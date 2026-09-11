@@ -120,12 +120,9 @@ input {
   max-width: 1300px;
   margin: 0 auto;
   padding: 0 28px;
-  /* min-height, not height: a fixed height cannot contain a row that wraps. */
   min-height: 64px;
   display: flex;
   align-items: center;
-  /* Safety net: if the labels still do not fit at some font size, the row breaks
-     onto a second line instead of overflowing the viewport. */
   flex-wrap: wrap;
   gap: 20px;
 }
@@ -456,8 +453,6 @@ input {
 
 .games-grid {
   display: grid;
-  /* min(292px, 100%) so the last track can shrink below its floor rather than
-     overflow the viewport on a 320px phone. */
   grid-template-columns: repeat(auto-fill, minmax(min(292px, 100%), 1fr));
   gap: 22px;
 }
@@ -637,8 +632,6 @@ input {
 }
 .board-stage__board {
   flex: 1;
-  /* Without this the flex item keeps its automatic min-width and can floor the
-     column at the board's min-content instead of shrinking with the viewport. */
   min-width: 0;
   display: flex;
   justify-content: center;
@@ -680,8 +673,6 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* The nav buttons are a fixed 154px that cannot compress, so on narrow screens
-     they must wrap to a second row rather than widen the whole column. */
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
@@ -1341,8 +1332,6 @@ input {
 /* Played-vs-coach comparison */
 .gr-compare {
   display: grid;
-  /* min(140px, 100%) so the two cells collapse to one column on narrow screens
-     instead of flooring the track above the available width. */
   grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: 10px;
   margin-top: 14px;
@@ -1624,9 +1613,6 @@ input {
 /* ===================== Responsive ===================== */
 @media (max-width: 860px) {
   .game-layout {
-    /* minmax(0, 1fr), not a bare 1fr: `1fr` means minmax(auto, 1fr), which floors
-       the track at its items' min-content. The board is sized at 100% of this
-       track, so that floor is what pushes it past the viewport on phones. */
     grid-template-columns: minmax(0, 1fr);
   }
   .board--lg {
@@ -1662,9 +1648,6 @@ input {
   }
 }
 
-/* The header is a single non-wrapping row whose natural width is ~430px, so
-   below that it must shed labels rather than overflow and drag the whole
-   document into horizontal scroll. */
 @media (max-width: 440px) {
   .app-header__inner {
     gap: 10px;
@@ -1681,8 +1664,6 @@ input {
     padding: 6px;
     gap: 0;
   }
-  /* The arrow and the pulsing dot already carry the meaning visually; keep the
-     wording for screen readers instead of hiding it outright. */
   .back-link__label,
   .status-pill__label {
     position: absolute;
