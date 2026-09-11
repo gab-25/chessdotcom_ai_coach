@@ -1,12 +1,12 @@
 {% comment %}
-  The Refresh button: the app's only sync trigger, and the one control that cannot
+  The Sync button: the app's only sync trigger, and the one control that cannot
   live inside #game-list, since it is the element issuing the swap. So it is
   swapped back in out of band, exactly like the count line — which is what keeps
   its `time_class` in step with the filter the user picked instead of frozen at
   whatever the page was first loaded with.
 
   The id sits on the button itself, not on a wrapper: htmx re-focuses a replaced
-  element only when it has an id of its own, so a keyboard user stays on Refresh.
+  element only when it has an id of its own, so a keyboard user stays on Sync.
   It shares a line with the oob flag and the hx-get so that a test can pin all
   three at once — the "rapid" filter chip renders the same hx-get, and the id is
   the only thing that tells them apart.
@@ -16,8 +16,8 @@
   opposite — reproduce the view already on screen.
 {% endcomment %}
 <button type="button" class="btn btn--ghost btn--sm"
-        id="home-refresh"{% if oob %} hx-swap-oob="true"{% endif %} hx-get="{% url 'game_list' %}?time_class={{ time_class }}"
+        id="home-sync"{% if oob %} hx-swap-oob="true"{% endif %} hx-get="{% url 'game_list' %}?time_class={{ time_class }}"
         hx-target="#game-list"
         hx-swap="innerHTML">
-  <i class="fa-solid fa-arrows-rotate"></i>Refresh
+  <i class="fa-solid fa-arrows-rotate"></i>Sync
 </button>

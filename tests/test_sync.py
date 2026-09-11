@@ -278,7 +278,7 @@ class TestSyncUser:
 class TestRequestSync:
     """The claim that replaces the scheduler process.
 
-    One conditional UPDATE, so N web replicas racing on the same user's Refresh
+    One conditional UPDATE, so N web replicas racing on the same user's Sync press
     produce exactly one import.
     """
 

@@ -1,6 +1,6 @@
 """Force a re-read of a user's Chess.com game archive.
 
-Ordinary imports need no command: pressing Refresh claims a sync and the worker
+Ordinary imports need no command: pressing Sync claims a sync and the worker
 reads whatever months are still missing. This is the override for when that is
 not enough — a history imported by an older version, or `ArchiveImport` rows that
 claim more than the database actually holds. It ignores those rows entirely and

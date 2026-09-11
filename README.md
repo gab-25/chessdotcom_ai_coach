@@ -26,7 +26,7 @@ until you ask — a full archive is more games than any worker would get through
   a hidden HTMX poller reveals the result once the worker finishes
 - **No scheduler** — there is no cron, no Celery Beat and no scheduler process.
   Importing a user's Chess.com archive is started by that user pressing
-  **Refresh** (`chessdotcom_ai_coach/services/sync.py`), rate-limited to once per
+  **Sync** (`chessdotcom_ai_coach/services/sync.py`), rate-limited to once per
   `SYNC_COOLDOWN_SECONDS` by a claim on their own row, and handed to the worker.
   Merely opening a page fetches nothing, so an idle deployment makes no Chess.com
   requests at all, and the `web` service scales to as many replicas as you like
@@ -137,7 +137,7 @@ uv run celery -A chessdotcom_ai_coach worker -l info     # analysis + archive im
 Open http://localhost:8000, sign in, then set your **Chess.com username** on the
 user via the admin at http://localhost:8000/admin/ (field `chessdotcom_username`;
 it falls back to the login username if left blank, but only a non-empty field
-counts as a linked account). Open the home page and press **Refresh**: your
+counts as a linked account). Open the home page and press **Sync**: your
 archive starts importing — the whole history on the first pass, so a multi-year
 account takes a few minutes. To re-read it later, ignoring what has already been imported:
 

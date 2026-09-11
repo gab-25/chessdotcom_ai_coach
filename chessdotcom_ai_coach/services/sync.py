@@ -60,7 +60,7 @@ TASK_QUEUE_NAME = "celery"
 
 # How long a user's archive sync claim holds. An incremental sync is two HTTP
 # requests (the archive index plus the current month), and it is now paid only
-# when somebody presses Refresh — an idle deployment makes no requests at all,
+# when somebody presses Sync — an idle deployment makes no requests at all,
 # where the old 10-minute scheduler tick polled every linked user around the
 # clock, and merely opening a page no longer costs a fetch either.
 SYNC_COOLDOWN = timedelta(seconds=settings.SYNC_COOLDOWN_SECONDS)
@@ -85,7 +85,7 @@ def is_linked(user) -> bool:
     exists so the board can be oriented for a user who never set the field
     (`views._position_context`); it is not a claim that their app username is a
     real Chess.com account. Treating it as one here would mean a lookup for a
-    probably-nonexistent player every time somebody presses Refresh.
+    probably-nonexistent player every time somebody presses Sync.
     """
     return bool(user.chessdotcom_username)
 
@@ -236,7 +236,7 @@ def request_sync(user) -> bool:
             "Could not enqueue the archive sync for user %s", user.pk, exc_info=True
         )
         # The claim is kept, not released: one publish attempt per cooldown is
-        # the right rate while the broker is down, rather than one per Refresh.
+        # the right rate while the broker is down, rather than one per Sync press.
         return False
     return True
 

@@ -320,7 +320,7 @@ def home(request):
     """Home page: the user's finished games, the ones there is something to review.
 
     A plain DB read. It starts nothing: the archive import is claimed by the
-    Refresh button (`game_list`), because that is the one control whose meaning is
+    Sync button (`game_list`), because that is the one control whose meaning is
     "fetch my games". Opening a page used to claim it too, which made every return
     to the home page a potential Chess.com fetch and left the empty state
     announcing an import that a cooled-down load had not actually queued.

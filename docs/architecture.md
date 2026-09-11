@@ -53,7 +53,7 @@ graph TD
 
     Browser -->|"navigation, paging, analyse request<br/>pending card poll every 2s"| Web
     Web --> PG
-    Web -->|"enqueue analysis <i>when you ask</i><br/>enqueue sync <i>when you press Refresh</i>"| Redis
+    Web -->|"enqueue analysis <i>when you ask</i><br/>enqueue sync <i>when you press Sync</i>"| Redis
     Redis --> Worker
     Worker -->|"monthly archives"| ChessCom
     Worker --> SF
@@ -80,11 +80,11 @@ in sequence newest-first — Chess.com tolerates that far better than parallel
 fetches — and `ArchiveImport` records each month as it lands, so a run cut short
 resumes at the months it never reached rather than starting over.
 
-**The import is started by you pressing Refresh.** `sync.request_sync` claims
+**The import is started by you pressing Sync.** `sync.request_sync` claims
 the user's sync with one conditional `UPDATE` on `last_synced_at` — atomic, so N
 web replicas racing on the same user produce exactly one import — and hands it to
 the worker. Opening a page claims nothing: the home page is a plain DB read, so a
-user who never presses Refresh costs no Chess.com traffic at all.
+user who never presses Sync costs no Chess.com traffic at all.
 
 **Analysis is requested, never scheduled.** An imported archive is thousands of
 games; at dozens of analyses each, and up to 152s apiece, no schedule could drain
@@ -104,7 +104,7 @@ sequenceDiagram
     participant E as Stockfish + LLM
 
     rect rgba(120,140,180,0.10)
-    Note over B,W: pressing Refresh — the archive import (enqueues no analysis)
+    Note over B,W: pressing Sync — the archive import (enqueues no analysis)
     B->>Web: GET /games
     Web->>DB: claim the sync: UPDATE last_synced_at WHERE it has lapsed
     Note over Web,DB: 0 rows updated ⇒ someone claimed it already ⇒ stop here
@@ -272,13 +272,13 @@ analysed value forward across un-analysed plies so it never snaps back to 50%.
 There is no custom JavaScript. Everything is a fragment swap:
 
 - **Home** (`home.html`) does not poll, and starts nothing of its own. Its
-  **Refresh** button, the time-control filter and the pager all fetch `/games` and
+  **Sync** button, the time-control filter and the pager all fetch `/games` and
   swap the grid in place; the fragment carries `hx-swap-oob` copies of the two
   head elements that live outside the swapped container, the count line and the
-  Refresh button itself — which is what keeps the button's `time_class` in step
+  Sync button itself — which is what keeps the button's `time_class` in step
   with the active filter. Each control carries the *other*'s state in its query
   string (the filter drops the page, the pager keeps the filter), so they never
-  cancel out. Refresh differs from the other two in one way: it is the request
+  cancel out. Sync differs from the other two in one way: it is the request
   that claims the sync.
 - **Detail** (`partials/position.html`) does not poll either. A finished game does
   not change, so navigation is the only thing that swaps `#gr-view` — that, and

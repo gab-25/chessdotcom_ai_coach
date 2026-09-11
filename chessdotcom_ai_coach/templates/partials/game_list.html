@@ -8,13 +8,13 @@
   Every control here targets #game-list and carries the *other* control's state in
   its query string (the filter keeps no page, the pager keeps the filter), so the
   two never cancel each other out. Two head elements live outside this fragment
-  and are swapped back in out of band: the count line and the Refresh button.
+  and are swapped back in out of band: the count line and the Sync button.
 
-  Refresh is the sync trigger; the filter and the pager merely share its endpoint
+  Sync is the sync trigger itself; the filter and the pager merely share its endpoint
   and are DB reads, which is why only a request that actually claimed the sync
   (`sync_started`) renders the one-shot re-fetch below.
 {% endcomment %}
-{% if oob %}{% include "partials/home_count.html" %}{% include "partials/refresh_button.html" %}{% endif %}
+{% if oob %}{% include "partials/home_count.html" %}{% include "partials/sync_button.html" %}{% endif %}
 
 {% if sync_started %}
 {% comment %}
@@ -68,7 +68,7 @@
         {% elif sync_started %}
           Your archive is being imported — this may take a few minutes the first time. This list will look again in a few seconds.
         {% else %}
-          None of your Chess.com games are here yet. Refresh to look again.
+          None of your Chess.com games are here yet. Sync to look again.
         {% endif %}
       </p>
     </div>

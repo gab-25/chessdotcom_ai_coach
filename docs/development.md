@@ -33,7 +33,7 @@ uv run celery -A chessdotcom_ai_coach worker -l info     # 2. analysis + archive
                                                          # 3. Redis + Postgres
 ```
 
-There is no fourth process. Nothing is scheduled: pressing **Refresh** on the
+There is no fourth process. Nothing is scheduled: pressing **Sync** on the
 home page claims the archive import and hands it to the same worker that runs the
 analyses.
 
@@ -41,7 +41,7 @@ Symptoms when one is missing:
 
 | Missing | What you see |
 | --- | --- |
-| Celery worker | The home page stays empty however often you press **Refresh** — nothing imports from Chess.com — and every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING`, because nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and reopening that position re-queues it after 10 minutes.) |
+| Celery worker | The home page stays empty however often you press **Sync** — nothing imports from Chess.com — and every analysis you ask for sits on **"Analyzing…"** forever. The `CoachSuggestion` row stays `PENDING` and never reaches `RUNNING`, because nothing consumes the queue. (A row stuck on `RUNNING` is a different problem: the worker is there but the analysis hung, and reopening that position re-queues it after 10 minutes.) |
 | Redis | Pressing **Analyse this game** errors. The home page and the games fragment still render — `request_sync` publishes with `retry=False` and logs a warning — but no import is ever queued. |
 
 ## First run
@@ -52,13 +52,13 @@ Symptoms when one is missing:
    Django login name if left blank — but only a non-empty field counts as a
    linked account, so set it explicitly.
 3. Open the home page — it will be empty, because a page load reads the DB and
-   nothing else — and press **Refresh**. That claims the sync and queues
+   nothing else — and press **Sync**. That claims the sync and queues
    `sync_user_task`, which reads your **whole** archive: a few minutes on a
    multi-year account. The grid re-fetches itself once after six seconds; press
-   Refresh again for the rest.
+   Sync again for the rest.
 
 If nothing appears, check the **worker's** output: that is where the import runs,
-and a bad username surfaces there. Note the claim — a second **Refresh** within
+and a bad username surfaces there. Note the claim — a second **Sync** within
 `SYNC_COOLDOWN_SECONDS` (5 minutes) deliberately queues nothing, so clear
 `last_synced_at` on your user if you want to retry at once.
 
@@ -69,7 +69,7 @@ From [`urls.py`](../chessdotcom_ai_coach/urls.py):
 | Route | View | Kind |
 | --- | --- | --- |
 | `/` | `home` | Full page — a page of the finished games available to review |
-| `/games` | `game_list` | **HTMX fragment** — the game grid, for the Refresh button, the time-control filter (`?time_class=`) and the pager (`?page=`) |
+| `/games` | `game_list` | **HTMX fragment** — the game grid, for the Sync button, the time-control filter (`?time_class=`) and the pager (`?page=`) |
 | `/game/<id>` | `game_detail` | Full page — the review board. **404** for a game still in progress |
 | `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N` |
 | `/game/<id>/analyze` | `analyze_position` | **HTMX fragment** — `GET` is the pending self-poll (2s), `POST` requests analysis of one move |
@@ -88,7 +88,7 @@ belonging to another user reads as not found.
 uv run python manage.py import_archives [--user <username>] [--months N]
 ```
 
-Ordinary imports need no command — pressing **Refresh** claims a sync and the
+Ordinary imports need no command — pressing **Sync** claims a sync and the
 worker reads whatever months are missing. This is the **override**: it ignores
 `ArchiveImport` entirely and re-reads every monthly archive in sequence, newest
 first, which is what you want for a history imported by an older version or rows
@@ -149,7 +149,7 @@ templates/
 ├── login.html
 ├── error.html
 └── partials/
-    ├── game_list.html     # the home Refresh target
+    ├── game_list.html     # the home Sync target
     ├── position.html      # the whole review view (#gr-view)
     ├── board.html         # 64 cells
     ├── coach_card.html    # coach panel + the 2s pending self-poll

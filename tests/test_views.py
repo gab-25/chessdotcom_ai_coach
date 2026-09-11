@@ -121,7 +121,7 @@ class TestHome:
         assert response.status_code == 302
         assert "/login" in response["Location"]
 
-    def test_has_refresh_button(self, auth_client, user):
+    def test_has_sync_button(self, auth_client, user):
         """The button, not the "All" filter chip: both point at /games, so this
         asserts on the id the head control carries and the chips do not."""
         _make_game(user)
@@ -130,7 +130,7 @@ class TestHome:
 
         assert b'id="game-list"' in response.content
         assert b'hx-target="#game-list"' in response.content
-        assert response.content.count(b'id="home-refresh"') == 1
+        assert response.content.count(b'id="home-sync"') == 1
         assert b'hx-get="/games?time_class="' in response.content
 
     def test_the_home_page_neither_polls_nor_refreshes_itself(self, auth_client, user):
@@ -146,7 +146,7 @@ class TestHome:
         assert b"AUTO-REFRESH" not in response.content
 
     def test_the_home_page_does_not_start_a_sync(self, auth_client, user):
-        """The home page is a plain DB read. The Refresh button is what fetches."""
+        """The home page is a plain DB read. The Sync button is what fetches."""
         _make_game(user)
 
         with patch("chessdotcom_ai_coach.views.sync.request_sync") as mock_sync:
@@ -177,7 +177,7 @@ class TestHome:
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.tasks.sync_user_task")
 class TestGameListSync:
-    """Pressing Refresh is what asks for the archive to be imported.
+    """Pressing Sync is what asks for the archive to be imported.
 
     There is no scheduler and the home page starts nothing, so this endpoint
     carries the only trigger — rate-limited by the per-user claim, and visible to
@@ -246,7 +246,7 @@ class TestGameListSync:
         assert b"load delay:6s" not in second.content
 
     def test_the_re_fetch_keeps_the_filter_and_the_page(self, mock_task, linked_client):
-        """Its job is to reproduce the view already on screen, unlike the Refresh
+        """Its job is to reproduce the view already on screen, unlike the Sync
         button, which means "show me the newest" and so drops the page."""
         client, user = linked_client
         for i in range(GAMES_PER_PAGE + 1):
@@ -277,7 +277,7 @@ class TestGameListSync:
         self, mock_task, linked_client
     ):
         """"Being imported" is true only of a request that took the claim. A page
-        load takes none, and a second Refresh inside the cooldown takes none."""
+        load takes none, and a second Sync inside the cooldown takes none."""
         client, _user = linked_client
 
         assert b"being imported" not in client.get("/").content
@@ -351,19 +351,19 @@ class TestGameList:
         assert b'hx-swap-oob="true"' in response.content
         assert b"of 1 finished game" in response.content
 
-    def test_swaps_the_refresh_button_back_in_with_the_active_filter(
+    def test_swaps_the_sync_button_back_in_with_the_active_filter(
         self, auth_client, user
     ):
         """The button lives outside #game-list, so without this its time_class
         would stay frozen at whatever the page was first loaded with and pressing
-        Refresh would silently drop the filter. Asserted as one string because the
+        Sync would silently drop the filter. Asserted as one string because the
         "rapid" filter chip renders the same hx-get."""
         _make_game(user)
 
         response = auth_client.get("/games", {"time_class": "rapid"})
 
         assert (
-            b'id="home-refresh" hx-swap-oob="true" hx-get="/games?time_class=rapid"'
+            b'id="home-sync" hx-swap-oob="true" hx-get="/games?time_class=rapid"'
             in response.content
         )
 
