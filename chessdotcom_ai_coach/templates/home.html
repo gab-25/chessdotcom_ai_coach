@@ -1,16 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Live games · Chessdotcom AI Coach{% endblock %}
+{% block title %}Game review · Chessdotcom AI Coach{% endblock %}
 
 {% block content %}
 <div class="page">
   <div class="home__head">
     <div>
-      <h1 class="home__title">Live games</h1>
+      <h1 class="home__title">Game review</h1>
       {% include "partials/home_count.html" %}
     </div>
     <div class="home__filters">
-      <span class="filter-chip">Sort: Most recent &#9662;</span>
-      <span class="filter-chip">All time controls &#9662;</span>
       <button type="button" class="btn btn--ghost btn--sm"
               hx-get="{% url 'game_list' %}"
               hx-target="#game-list"

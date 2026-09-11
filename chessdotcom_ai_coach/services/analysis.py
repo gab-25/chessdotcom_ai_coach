@@ -1,17 +1,16 @@
 """Enqueue coach analysis for a whole game.
 
-The live path can only analyse the position a 5s poll happens to catch, so any
-turn that comes and goes between two ticks is never seen — in fast time controls
-that's most of them. This fills in the rest, so a game can be reviewed with the
-coach's take on *every* one of the user's moves.
+Analysis is keyed on the moves the user actually played, read from the stored
+PGN, so a game can be reviewed with the coach's take on *every* one of them. A
+position the user never played is not analysed — there is nothing in the PGN to
+analyse it against.
 
 It is written to be run repeatedly rather than once: enqueuing is idempotent, so
 the same call reconciles a game towards "every user move analysed" no matter how
-much of it is already done. That is what the two schedules use it for —
-``scheduler.enqueue_due_analyses`` on each active game every 5s and
-``scheduler.enqueue_finished_game_analyses`` on the finished ones every 10
-minutes — alongside the manual ``analyze_game`` management command. Reads the
-stored ``Game`` snapshot only — no Chess.com call.
+much of it is already done. That is what
+``scheduler.enqueue_finished_game_analyses`` uses it for on every finished game
+each 10 minutes, alongside the manual ``analyze_game`` management command. Reads
+the stored ``Game`` snapshot only — no Chess.com call.
 """
 
 from __future__ import annotations

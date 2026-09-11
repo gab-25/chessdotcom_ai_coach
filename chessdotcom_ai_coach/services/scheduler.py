@@ -5,17 +5,24 @@ Two schedules call in here (see `management.commands.run_scheduler`):
 
 * the 5s tick — `sync_current_games` pulls each linked user's games from
   Chess.com into the local DB, `backfill_results` resolves the outcome of games
-  that just ended, `enqueue_due_analyses` enqueues analysis for the active games,
-  and `requeue_stale_analyses` / `requeue_orphaned_analyses` revive analyses that
-  got stuck;
+  that just ended, and `requeue_stale_analyses` / `requeue_orphaned_analyses`
+  revive analyses that got stuck. It enqueues no analysis of its own;
 * the 10 minute scan — `enqueue_finished_game_analyses` reconciles finished
-  games towards "every user move analysed".
+  games towards "every user move analysed". This is the *only* path that
+  enqueues work.
 
-The two enqueue steps are reconciliation passes, not one-shot triggers: each
-compares what the PGN says the user played against the `CoachSuggestion` rows
-that exist and queues the difference. Anything missed — because a poll landed
-between two moves, because a task was lost, because the worker was down — is
-therefore picked up on a later run rather than being gone for good.
+A game is analysed once it is over, never while it is being played: the coach
+comments on moves you have played, and a position you have not played yet is not
+analysed at all. The 5s tick still has to run, though — Chess.com only serves the
+PGN of games that are still "current", so `sync_current_games` is the one chance
+to snapshot a game before it disappears, and without it there would be nothing
+left to analyse afterwards.
+
+The enqueue step is a reconciliation pass, not a one-shot trigger: it compares
+what the PGN says the user played against the `CoachSuggestion` rows that exist
+and queues the difference. Anything missed — because a task was lost, because the
+worker was down — is therefore picked up on a later run rather than being gone
+for good.
 """
 
 import logging
@@ -25,7 +32,6 @@ from django.utils import timezone
 
 from ..models import MAX_ANALYSIS_ATTEMPTS, CoachSuggestion, Game, User
 from ..tasks import analyze_game_task
-from . import board as board_utils
 from . import game_store
 from .analysis import enqueue_game_analysis
 from .chess_client import Client
@@ -69,31 +75,20 @@ def _linked_users():
     )
 
 
-def _user_color(game: Game) -> str | None:
-    """Which color the game's user plays ("white"/"black"), or None if unknown."""
-    username = game.user.chess_username.lower()
-    if game.white_name and game.white_name.lower() == username:
-        return "white"
-    if game.black_name and game.black_name.lower() == username:
-        return "black"
-    return None
-
-
-def _is_user_turn(game: Game) -> bool:
-    """True when the side to move in `game.fen` is the side the user plays."""
-    color = _user_color(game)
-    return color is not None and board_utils.active_color(game.fen) == color
-
-
 def sync_current_games() -> None:
     """Refresh linked users' current games from Chess.com into the local DB.
 
-    This is the only path that keeps `Game` fresh now that the home page is a
-    plain DB read (see `views.home`/`views.game_list`) — without it, `Game`
-    rows would never advance and `enqueue_due_analyses` would keep checking a
-    stale FEN. Only users who explicitly linked a Chess.com account are
-    synced. A per-user failure (bad username, transient network error) is
-    logged and skipped so it doesn't block the rest of the batch.
+    Do not be fooled by the app never showing a game in progress: this job is
+    load-bearing precisely *because* of that. Chess.com serves the PGN only for
+    games that are still "current", so this is the one chance to snapshot a game
+    at all — and it is also what flips `is_active` to False once a game vanishes
+    from that endpoint, which is the event `enqueue_finished_game_analyses` waits
+    for. Without it nothing would ever enter the DB, and nothing would ever be
+    analysed.
+
+    Only users who explicitly linked a Chess.com account are synced. A per-user
+    failure (bad username, transient network error) is logged and skipped so it
+    doesn't block the rest of the batch.
     """
     for user in _linked_users():
         try:
@@ -159,59 +154,21 @@ def backfill_results() -> int:
     return updated
 
 
-def enqueue_due_analyses() -> int:
-    """Enqueue the outstanding analyses of every active game.
-
-    Two things are due while a game is running. The position the user is *about*
-    to play, which only exists in the live FEN and never reaches the PGN as
-    something to analyse — that's the `get_or_create` below, guarded by
-    `_is_user_turn`. And the moves already played: a 5s poll only ever sees the
-    position it happens to land on, so in fast time controls most turns come and
-    go between two ticks and would stay un-analysed until the game ended.
-    `enqueue_game_analysis` reconciles those from the PGN on every tick, so a
-    missed move is picked up within seconds instead of after the game.
-
-    Dedup: a `CoachSuggestion` row for (user, game_id, fen) means the position is
-    already queued, running or analysed, so `get_or_create` only enqueues when the
-    row was just created. Returns the number of tasks enqueued this tick.
-    """
-    enqueued = 0
-    games = Game.objects.filter(is_active=True).select_related("user")
-    for game in games:
-        if game.fen and _is_user_turn(game):
-            _row, created = CoachSuggestion.objects.get_or_create(
-                user=game.user,
-                game_id=game.game_id,
-                fen=game.fen,
-                defaults={
-                    "status": CoachSuggestion.Status.PENDING,
-                    "move_no": board_utils.fullmove_number(game.fen),
-                    "eval_text": "",
-                    "analysis": "",
-                },
-            )
-            if created:
-                analyze_game_task.delay(
-                    game.user_id, game.game_id, game.fen, game.pgn or None
-                )
-                enqueued += 1
-
-        result = enqueue_game_analysis(game.user, game.game_id)
-        if result:
-            enqueued += result["enqueued"]
-    return enqueued
-
-
 def enqueue_finished_game_analyses() -> int:
     """Enqueue the analyses still missing from finished games.
 
-    The live path can only cover a game while it is being played, and anything it
-    missed — a move played between two ticks, a task lost to a worker restart, a
-    game that was already over when the account was linked — needs a second look.
-    This is that second look: every finished game is compared against its
-    `CoachSuggestion` rows and the difference is queued. It runs on its own
-    10 minute schedule rather than on the 5s tick because it reads every stored
-    game, and nothing about a finished game changes fast enough to need more.
+    The only path that enqueues work. A game is analysed once it is over, so
+    nothing is queued while it is being played: every finished game is compared
+    against its `CoachSuggestion` rows and the difference is queued. It runs on
+    its own 10 minute schedule rather than on the 5s tick because it reads every
+    stored game, and nothing about a finished game changes fast enough to need
+    more — the cost is that analysis starts up to ten minutes after the last move.
+
+    Being a reconciliation rather than a one-shot trigger is what makes that safe.
+    A game whose closing moves only arrived with the archive's PGN (our snapshot
+    stops at the last sync before it left "current games"), one whose task was
+    lost to a worker restart, one that was already over when the account was
+    linked — each is picked up on a later run instead of being missed for good.
 
     Deliberately unbounded in time: a game is checked for as long as it is stored,
     so one whose result never resolved from the archives still gets analysed.

@@ -82,12 +82,15 @@ class TestEnqueueGameAnalysis:
             CoachSuggestion.objects.filter(user=user, game_id="g1").values_list("fen", flat=True)
         ) == set(black_fens)
 
-    def test_skips_a_ply_the_live_coach_analysed_under_a_different_fen(
+    def test_skips_a_ply_already_covered_under_a_different_fen(
         self, mock_task, user
     ):
-        """The live scheduler stores Chess.com's FEN spelling, this module stores
-        python-chess's. They can differ in the halfmove clock for the very same ply,
-        so matching on the raw FEN alone would re-analyse every move played live."""
+        """A ply can be on record under a second FEN spelling.
+
+        Chess.com's FEN and python-chess's can differ in the halfmove clock for
+        the very same position — rows written by the app's earlier live path are
+        still in the database in that spelling — so matching on the raw FEN alone
+        would re-analyse a move the coach has already handled."""
         _game(user)
         first = _white_fens()[0]
         # Same position, halfmove clock bumped — Chess.com's spelling of the ply.

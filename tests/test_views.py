@@ -1,8 +1,11 @@
 """Unit tests for the views.
 
-The detail page reads entirely from the stored ``Game`` snapshot (kept fresh by
-the scheduler) and ``CoachSuggestion`` rows — no Chess.com call — so these tests
-just seed the DB. The Celery task is mocked where analysis is enqueued.
+The app shows finished games only, so ``_make_game`` builds one by default
+(``is_active=False``); the few tests that need a game still in progress pass
+``is_active=True`` and assert it is refused. The detail page reads entirely from
+the stored ``Game`` snapshot and ``CoachSuggestion`` rows — no Chess.com call —
+so these tests just seed the DB. The Celery task is mocked where analysis is
+enqueued.
 """
 
 from unittest.mock import patch
@@ -43,7 +46,7 @@ def _make_game(user, **overrides):
         time_class="rapid",
         pgn=PGN,
         fen=FEN_LIVE,
-        is_active=True,
+        is_active=False,  # finished: the only kind the app shows
     )
     defaults.update(overrides)
     return Game.objects.create(**defaults)
@@ -121,8 +124,18 @@ class TestHome:
         response = auth_client.get("/")
 
         assert response.content.count(b'id="home-count"') == 1
-        assert b"1 game in progress" in response.content
+        assert b"1 finished game to review" in response.content
         assert b"hx-swap-oob" not in response.content
+
+    def test_does_not_list_a_game_in_progress(self, auth_client, user):
+        """A game still being played has nothing to review, so it isn't shown."""
+        _make_game(user, is_active=True)
+
+        response = auth_client.get("/")
+
+        assert list(response.context["games"]) == []
+        assert b"944768131" not in response.content
+        assert b"No games to review" in response.content
 
 
 @pytest.mark.django_db
@@ -135,17 +148,28 @@ class TestGameList:
         assert response.status_code == 200
         assert b"Opponent" in response.content
 
-    def test_renders_past_games_section(self, auth_client, user):
+    def test_renders_finished_games(self, auth_client, user):
         Game.objects.create(
             user=user, game_id="old1", black_name="PastFoe", is_active=False
         )
 
         response = auth_client.get("/games")
 
-        assert b"Past games" in response.content
         assert b"PastFoe" in response.content
+        assert b"REVIEW" in response.content
 
-    def test_past_games_link_to_detail(self, auth_client, user):
+    def test_omits_a_game_in_progress(self, auth_client, user):
+        _make_game(user, is_active=True)
+        Game.objects.create(
+            user=user, game_id="old1", black_name="PastFoe", is_active=False
+        )
+
+        response = auth_client.get("/games")
+
+        assert b"PastFoe" in response.content
+        assert b"944768131" not in response.content
+
+    def test_finished_games_link_to_detail(self, auth_client, user):
         Game.objects.create(
             user=user, game_id="old1", black_name="PastFoe", is_active=False
         )
@@ -161,39 +185,52 @@ class TestGameList:
 
         assert b'id="home-count"' in response.content
         assert b'hx-swap-oob="true"' in response.content
-        assert b"1 game in progress" in response.content
+        assert b"1 finished game to review" in response.content
 
 
 @pytest.mark.django_db
 class TestGameDetail:
-    """The unified detail page: same UI for live and finished games."""
+    """The detail page: review of a finished game, and only a finished game."""
 
-    def test_live_game_renders_at_head(self, auth_client, user):
-        _make_game(user)  # active, user is White and to move
+    def test_finished_game_starts_at_opening(self, auth_client, user):
+        _make_game(user)
 
         response = auth_client.get("/game/944768131")
 
         assert response.status_code == 200
         assert b'id="gr-view"' in response.content
-        assert b"WATCHING LIVE" in response.content
-        # Your turn: the page opens on the live slot, one past the last played ply.
-        assert response.context["head"] == 4
-        assert response.context["sel"] == response.context["live_sel"] == 5
-        # At the live head, your move, no suggestion yet → request button.
-        assert b"Request suggestion" in response.content
+        assert response.context["sel"] == 0
+        assert response.context["head"] == 4  # the timeline ends on the last ply
+        assert b"Step through the moves" in response.content
 
-    def test_finished_game_starts_at_opening(self, auth_client, user):
-        _make_game(user, is_active=False)
+    def test_game_in_progress_is_refused(self, auth_client, user):
+        """Nothing about a running game is shown, hand-typed URL included."""
+        _make_game(user, is_active=True)
 
         response = auth_client.get("/game/944768131")
 
-        assert response.status_code == 200
-        assert b"REVIEW" in response.content
-        assert response.context["sel"] == 0
-        assert b"Step through the moves" in response.content
+        assert response.status_code == 404
+        assert b"still in progress" in response.content
+        assert b'id="gr-view"' not in response.content
+
+    def test_position_fragment_refuses_a_game_in_progress(self, auth_client, user):
+        _make_game(user, is_active=True)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+
+        assert response.status_code == 404
+
+    def test_never_polls_for_live_updates(self, auth_client, user):
+        """There is no live poll left: the page is a static review."""
+        _make_game(user)
+
+        response = auth_client.get("/game/944768131")
+
+        assert b"every 5s" not in response.content
+        assert b"/live" not in response.content
 
     def test_orientation_black_when_user_is_black(self, auth_client, user):
-        _make_game(user, white_name="Opponent", black_name="MyUser", is_active=False)
+        _make_game(user, white_name="Opponent", black_name="MyUser")
 
         response = auth_client.get("/game/944768131")
 
@@ -211,7 +248,7 @@ class TestGameDetail:
         assert response.status_code == 302
 
     def test_position_fragment_for_a_ply(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
 
@@ -220,7 +257,7 @@ class TestGameDetail:
         assert b"Reviewing" in response.content
 
     def test_full_render_has_no_out_of_band_swaps(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
         body = response.content.decode()
@@ -239,7 +276,7 @@ class TestGameDetail:
         assert 'id="gr-moves-panel" hx-swap-oob' not in body
 
     def test_embeds_completed_analysis(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
         CoachSuggestion.objects.create(
             user=user,
@@ -258,31 +295,12 @@ class TestGameDetail:
         assert b"BEST MOVE" in response.content
         assert b"You played the best move" in response.content
 
-    def test_live_poll_204_when_no_new_move(self, auth_client, user):
-        _make_game(user)  # head == 4
-
-        response = auth_client.get(
-            "/game/944768131/live", {"sel": "4", "head": "4"}
-        )
-
-        assert response.status_code == 204
-
-    def test_live_poll_swaps_when_new_move(self, auth_client, user):
-        _make_game(user)  # head == 4 now; client still thinks head == 3
-
-        response = auth_client.get(
-            "/game/944768131/live", {"sel": "3", "head": "3"}
-        )
-
-        assert response.status_code == 200
-        assert b'id="gr-view"' in response.content
-
 
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.views.analyze_game_task")
 class TestAnalyzePosition:
     def test_post_enqueues_for_a_user_move(self, mock_task, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         # sel 3 is White's 2nd move (Nf3) — a user move.
         response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
@@ -297,7 +315,7 @@ class TestAnalyzePosition:
     def test_post_re_enqueues_a_row_stuck_in_flight(self, mock_task, auth_client, user):
         """An in-flight row is skipped by every later `get_or_create`, so an explicit
         click has to break the lock rather than wait for the scheduler's timeout."""
-        _make_game(user, is_active=False)
+        _make_game(user)
         row = _make_suggestion(
             user, _ply_fen(2), status=CoachSuggestion.Status.RUNNING, attempts=3
         )
@@ -313,7 +331,7 @@ class TestAnalyzePosition:
 
     def test_post_re_analyses_a_failed_row(self, mock_task, auth_client, user):
         """A retired position must not be a dead end."""
-        _make_game(user, is_active=False)
+        _make_game(user)
         row = _make_suggestion(
             user,
             _ply_fen(2),
@@ -332,7 +350,7 @@ class TestAnalyzePosition:
         assert row.analysis == ""
 
     def test_post_is_noop_for_opponent_move(self, mock_task, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         # sel 2 is Black's move (e5) — the coach only analyses the user's moves.
         response = auth_client.post("/game/944768131/analyze", {"sel": "2"})
@@ -342,7 +360,7 @@ class TestAnalyzePosition:
         assert CoachSuggestion.objects.count() == 0
 
     def test_get_returns_the_done_card(self, mock_task, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
         CoachSuggestion.objects.create(
             user=user,
@@ -363,12 +381,11 @@ class TestAnalyzePosition:
         mock_task.delay.assert_not_called()
 
     def test_get_syncs_board_out_of_band(self, mock_task, auth_client, user):
-        _make_game(user)  # live, White (user) to move — the live slot is sel 5
-        CoachSuggestion.objects.create(
-            user=user,
-            game_id="944768131",
-            fen=FEN_LIVE,
-            status=CoachSuggestion.Status.DONE,
+        _make_game(user)
+        # sel 3 is White's 2nd move (Nf3); the coach would have played Bb5.
+        _make_suggestion(
+            user,
+            _ply_fen(2),
             eval_text="+0.4",
             eval_cp=0.4,
             best_move_san="Bb5",
@@ -376,7 +393,7 @@ class TestAnalyzePosition:
             analysis="Pin the knight.",
         )
 
-        response = auth_client.get("/game/944768131/analyze", {"sel": "5"})
+        response = auth_client.get("/game/944768131/analyze", {"sel": "3"})
         body = response.content.decode()
 
         # The card body updated…
@@ -389,7 +406,7 @@ class TestAnalyzePosition:
         assert 'stroke="#b78e54"' in body  # brass recommended-move arrow
 
     def test_get_adds_the_history_slot_out_of_band(self, mock_task, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         # sel 3 is White's 2nd move (Nf3) — the coach recommended it too.
         _make_suggestion(user, _ply_fen(2))
 
@@ -408,7 +425,7 @@ class TestAnalyzePosition:
     def test_post_badges_the_move_as_pending_out_of_band(
         self, mock_task, auth_client, user
     ):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
         body = response.content.decode()
@@ -421,7 +438,7 @@ class TestAnalyzePosition:
         assert 'class="gr-card__count">0<' in body
 
     def test_analysis_never_calls_chess_com(self, mock_task, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         with patch("chessdotcom_ai_coach.services.chess_client.Client") as mock_client:
             auth_client.post("/game/944768131/analyze", {"sel": "3"})
@@ -475,7 +492,7 @@ class TestCoachCardModes:
     """Every branch of partials/coach_card.html, driven by ``coach.mode``."""
 
     def test_opponent_move(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         # sel 2 is Black's move (e5) — the opponent's.
         response = auth_client.get("/game/944768131/view", {"sel": "2"})
@@ -484,7 +501,7 @@ class TestCoachCardModes:
         assert b"The coach only analyses your moves" in response.content
 
     def test_unanalyzed_shows_request_button(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         # sel 3 is White's Nf3 (a user move) with no suggestion yet.
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
@@ -496,7 +513,7 @@ class TestCoachCardModes:
         assert 'hx-target="#gr-coach"' in body
 
     def test_pending_self_polls(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(
             user, _ply_fen(2), status=CoachSuggestion.Status.PENDING
         )
@@ -513,7 +530,7 @@ class TestCoachCardModes:
         """RUNNING and PENDING are worth telling apart in the scheduler (only a
         RUNNING analysis can time out) but not on the card: either way the answer
         isn't there yet."""
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.RUNNING)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
@@ -524,7 +541,7 @@ class TestCoachCardModes:
     def test_pending_does_not_offer_a_retry(self, auth_client, user):
         """The scheduler's timeout recovers a stuck analysis on its own; a button
         here would only invite breaking a lock on work that is still running."""
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
 
         body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
@@ -532,7 +549,7 @@ class TestCoachCardModes:
         assert "Retry" not in body
 
     def test_failed_analysis_offers_a_retry(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(
             user,
             _ply_fen(2),
@@ -556,7 +573,7 @@ class TestCoachCardModes:
     def test_a_retired_row_explains_itself(self, auth_client, user):
         """The scheduler retires a position without any prose — it never got far
         enough to produce any — so the card has to supply the reason."""
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(
             user,
             _ply_fen(2),
@@ -576,7 +593,7 @@ class TestCoachCardModes:
     def test_terminal_position_is_not_treated_as_a_failure(self, auth_client, user):
         """Stockfish has no move to suggest at mate/stalemate, but it still scores
         the position — that's an evaluation, not a failed analysis."""
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(
             user,
             _ply_fen(2),
@@ -591,7 +608,7 @@ class TestCoachCardModes:
         assert response.context["coach"]["mode"] == "analyzed"
 
     def test_analyzed_followed(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         # Best move equals the move actually played (Nf3) → "followed".
         _make_suggestion(user, _ply_fen(2), best_move_san="Nf3")
 
@@ -607,7 +624,7 @@ class TestCoachCardModes:
         assert "gr-legend__dot--green" not in body
 
     def test_analyzed_differed(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         # Best move differs from the played Nf3 → "differed".
         _make_suggestion(
             user, _ply_fen(2), best_move_san="d4", best_move_uci="d2d4"
@@ -625,57 +642,26 @@ class TestCoachCardModes:
         assert "gr-legend__dot--green" in body
         assert 'stroke="#4a7a52"' in body  # green played-move arrow
 
-    def test_live_waiting_for_opponent(self, auth_client, user):
-        # Live game, Black to move while the user is White → waiting.
+    def test_last_ply_of_the_game_is_reviewed_like_any_other(
+        self, auth_client, user
+    ):
+        # A game whose final ply is one of the user's own moves: it gets the full
+        # review treatment — coach comparison and both board arrows — rather than
+        # any special end-of-timeline state.
+        last_pgn = '[Event "Test"]\n\n1. e4 e5 2. Nf3 *'
         _make_game(
             user,
-            fen="r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 2 3",
-        )
-
-        response = auth_client.get("/game/944768131")
-
-        assert response.context["coach"]["mode"] == "live_waiting"
-        assert b"Opponent to move" in response.content
-
-    def test_live_request_for_user_move(self, auth_client, user):
-        _make_game(user)  # live, White (user) to move, no suggestion yet
-
-        response = auth_client.get("/game/944768131")
-
-        assert response.context["coach"]["mode"] == "live_request"
-        assert b"Ask the coach what to play" in response.content
-
-    def test_live_pending_self_polls(self, auth_client, user):
-        _make_game(user)  # live head at FEN_LIVE, user to move
-        _make_suggestion(
-            user, FEN_LIVE, status=CoachSuggestion.Status.PENDING
-        )
-
-        response = auth_client.get("/game/944768131")
-        body = response.content.decode()
-
-        assert response.context["coach"]["mode"] == "live_pending"
-        assert "Analysing the current position" in body
-        assert 'hx-trigger="every 2s"' in body
-
-    def test_live_head_reviews_your_just_played_move(self, auth_client, user):
-        # Live game whose last ply is the user's OWN move (White Nf3), with the
-        # opponent now on the clock. The just-played move must still show its
-        # coach review and board arrows — not the bare "waiting" state.
-        live_pgn = '[Event "Test"]\n\n1. e4 e5 2. Nf3 *'
-        _make_game(
-            user,
-            pgn=live_pgn,
+            pgn=last_pgn,
             fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
         )
         # Suggestion for that move (position before White's 2. Nf3); best move
         # differs from the played Nf3 → both recommended and played arrows.
-        fen_before = board_utils.moves_from_pgn(live_pgn)[2]["fen_before"]
+        fen_before = board_utils.moves_from_pgn(last_pgn)[2]["fen_before"]
         _make_suggestion(
             user, fen_before, best_move_san="d4", best_move_uci="d2d4"
         )
 
-        response = auth_client.get("/game/944768131")
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
         body = response.content.decode()
 
         assert response.context["coach"]["mode"] == "analyzed"
@@ -688,7 +674,7 @@ class TestMovesGrid:
     """partials/moves_grid.html — the click-to-review move list."""
 
     def test_each_move_links_to_its_position(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
         body = response.content.decode()
@@ -699,7 +685,7 @@ class TestMovesGrid:
         assert "gr-move--sel" in body
 
     def test_analyzed_move_shows_followed_badge(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(user, _ply_fen(2), best_move_san="Nf3")
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
@@ -709,7 +695,7 @@ class TestMovesGrid:
         assert "gr-badge--followed" in body
 
     def test_pending_move_shows_pending_badge(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(
             user, _ply_fen(2), status=CoachSuggestion.Status.PENDING
         )
@@ -720,111 +706,77 @@ class TestMovesGrid:
 
 
 @pytest.mark.django_db
-class TestLiveMoveSlot:
-    """The provisional grid item for the move you're about to play.
+class TestNoFutureMoveSuggestion:
+    """The coach never suggests a move that has not been played.
 
-    On a live game where it's the user's turn the slot owns its own cursor,
-    ``live_sel`` (``head + 1`` — here 5), so the opponent's last move stays
-    reviewable at ``head``.
+    ``FEN_LIVE`` is the position reached after the 4 plies of ``PGN`` — the one
+    the user would play next. It never appears in the PGN as a played move, so a
+    ``CoachSuggestion`` row stored against it (the app used to create one, and
+    those rows are still in the database) must stay invisible everywhere.
     """
 
-    def test_live_turn_shows_an_empty_slot(self, auth_client, user):
-        _make_game(user)  # live, White (user) to move, no suggestion yet
-
-        response = auth_client.get("/game/944768131/view", {"sel": "5"})
-        body = response.content.decode()
-
-        assert "gr-move--live" in body
-        assert "your move" in body
-        # Nothing requested yet — no badge on the slot.
-        assert "gr-badge--live" not in body
-        assert "gr-badge--pending" not in body
-
-    def test_pending_suggestion_badges_the_slot(self, auth_client, user):
+    def test_timeline_ends_on_the_last_played_move(self, auth_client, user):
         _make_game(user)
-        _make_suggestion(user, FEN_LIVE, status=CoachSuggestion.Status.PENDING)
 
         response = auth_client.get("/game/944768131/view", {"sel": "5"})
         body = response.content.decode()
 
-        assert "gr-move--live" in body
-        assert "gr-badge--pending" in body
+        # The cursor is clamped to the last ply; there is no slot past it.
+        assert response.context["sel"] == response.context["head"] == 4
+        assert response.context["next_sel"] == 4
+        assert ">your move<" not in body  # the old provisional grid slot
+        assert "gr-move--live" not in body
 
-    def test_done_suggestion_shows_the_recommendation_before_you_play(
+    def test_a_stored_suggestion_for_an_unplayed_position_is_not_shown(
         self, auth_client, user
     ):
+        """The anti-regression that matters: those rows are still in the DB."""
         _make_game(user)
-        _make_suggestion(user, FEN_LIVE, best_move_san="Bb5")
-
-        response = auth_client.get("/game/944768131/view", {"sel": "5"})
-        body = response.content.decode()
-
-        # The move isn't played yet — the grid still holds only the 4 PGN plies,
-        # but the coach's pick is already visible on the live slot.
-        assert "gr-badge--live" in body
-        assert "Bb5" in body
-
-    def test_slot_owns_the_selection_at_the_live_head(self, auth_client, user):
-        _make_game(user)
-
-        response = auth_client.get("/game/944768131/view", {"sel": "5"})
-        body = response.content.decode()
-
-        assert body.count("gr-move--sel") == 1
-        assert "gr-move--live gr-move--sel" in body
-
-    def test_opponents_last_move_stays_reviewable(self, auth_client, user):
-        _make_game(user)  # live, your turn — head 4 is Black's Nc6
+        _make_suggestion(user, FEN_LIVE, best_move_san="Bb5", best_move_uci="f1b5")
 
         response = auth_client.get("/game/944768131/view", {"sel": "4"})
         body = response.content.decode()
 
-        # Stepping back from the live slot reviews the opponent's move rather
-        # than falling through to the live view.
-        assert response.context["coach"]["mode"] == "opponent"
-        assert "Reviewing: 2… Nc6" in body
-        # …and the selection is on that ply, not on the live slot.
-        assert body.count("gr-move--sel") == 1
-        assert "gr-move--live gr-move--sel" not in body
+        assert "Bb5" not in body  # not in the card, the grid or the history
+        assert "BEST MOVE" not in body
+        assert 'stroke="#b78e54"' not in body  # no recommended-move arrow
+        assert response.context["history_count"] == 0
 
-    def test_back_from_the_live_slot_lands_on_the_last_ply(self, auth_client, user):
+    def test_a_pending_analysis_of_an_unplayed_position_is_not_shown(
+        self, auth_client, user
+    ):
         _make_game(user)
+        _make_suggestion(user, FEN_LIVE, status=CoachSuggestion.Status.PENDING)
 
-        response = auth_client.get("/game/944768131/view", {"sel": "5"})
-
-        assert response.context["prev_sel"] == 4
-        assert response.context["next_sel"] == 5
-
-    def test_no_slot_while_the_opponent_is_on_the_clock(self, auth_client, user):
-        # Black to move: the coach has nothing to suggest for the user yet.
-        _make_game(user, fen=FEN_LIVE.replace(" w ", " b "))
-
-        response = auth_client.get("/game/944768131/view", {"sel": "5"})
-
-        assert b"gr-move--live" not in response.content
-        # The timeline ends at the last played ply.
-        assert response.context["sel"] == response.context["live_sel"] == 4
-
-    def test_no_slot_on_a_finished_game(self, auth_client, user):
-        _make_game(user, is_active=False)
-
-        response = auth_client.get("/game/944768131/view", {"sel": "5"})
-
-        assert b"gr-move--live" not in response.content
-        assert response.context["sel"] == 4
-
-    def test_arriving_suggestion_updates_the_slot_out_of_band(self, auth_client, user):
-        _make_game(user)
-        _make_suggestion(user, FEN_LIVE, best_move_san="Bb5")
-
-        # The `live_pending` self-poll lands on the analyze endpoint.
-        response = auth_client.get("/game/944768131/analyze", {"sel": "5"})
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
         body = response.content.decode()
 
-        assert 'id="gr-moves-panel" hx-swap-oob="true"' in body
-        assert "gr-move--live" in body
-        assert "gr-badge--live" in body
-        assert "Bb5" in body
+        assert "gr-badge--pending" not in body
+        assert 'hx-trigger="every 2s"' not in body
+
+    def test_the_card_at_the_end_reviews_the_last_move_played(
+        self, auth_client, user
+    ):
+        _make_game(user)
+
+        response = auth_client.get("/game/944768131/view", {"sel": "4"})
+        body = response.content.decode()
+
+        # Ply 4 is Black's Nc6 — the opponent's, so the coach says as much.
+        assert response.context["coach"]["mode"] == "opponent"
+        assert "Reviewing: 2… Nc6" in body
+
+    def test_a_move_once_played_does_get_its_suggestion(self, auth_client, user):
+        """The other half of the rule: a played move is analysed and shown."""
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(2), best_move_san="d4", best_move_uci="d2d4")
+
+        response = auth_client.get("/game/944768131/view", {"sel": "3"})
+        body = response.content.decode()
+
+        assert response.context["coach"]["mode"] == "analyzed"
+        assert "The coach preferred" in body
+        assert "d4" in body
 
 
 @pytest.mark.django_db
@@ -832,7 +784,7 @@ class TestHistoryList:
     """partials/history_list.html — the analysed-moves timeline."""
 
     def test_counts_and_lists_analysed_user_moves(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(user, _ply_fen(2), best_move_san="Nf3")  # followed
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
@@ -844,7 +796,7 @@ class TestHistoryList:
         assert "gr-tag--followed" in body
 
     def test_empty_when_no_analysis(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "1"})
 
@@ -857,14 +809,14 @@ class TestBoardRendering:
     """partials/board.html expanded from the stored FEN."""
 
     def test_renders_64_cells(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "0"})
 
         assert len(response.context["cells"]) == 64
 
     def test_last_move_highlights_two_squares(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         # sel 3 is Nf3 (g1→f3): both squares ringed.
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
@@ -900,7 +852,7 @@ class TestNavigation:
     """The move navigation bar in partials/position.html."""
 
     def test_prev_next_head_and_button_targets(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
         body = response.content.decode()
@@ -911,63 +863,38 @@ class TestNavigation:
         assert 'hx-get="/game/944768131/view?sel=2"' in body  # back
         assert 'hx-get="/game/944768131/view?sel=4"' in body  # forward / end
 
-    def test_live_game_shows_jump_to_live_button(self, auth_client, user):
-        _make_game(user)  # live, head == 4
+    def test_end_button_targets_the_last_played_ply(self, auth_client, user):
+        """"End" goes to `head`; there is no live position to jump to."""
+        _make_game(user)
 
-        # Review an earlier ply on the live game (htmx fragment).
-        response = auth_client.get(
-            "/game/944768131/view", {"sel": "2"}, HTTP_HX_REQUEST="true"
-        )
+        response = auth_client.get("/game/944768131/view", {"sel": "2"})
         body = response.content.decode()
 
-        assert response.context["behind"] == 2
-        assert "gr-live-btn" in body
-        assert "2 new · live" in body
-        assert 'hx-get="/game/944768131/view?sel=4"' in body  # jump to head
-
-
-@pytest.mark.django_db
-class TestHtmxFragments:
-    """HTMX-specific rendering: the out-of-band header pill sync."""
-
-    def test_htmx_request_syncs_pill_out_of_band(self, auth_client, user):
-        _make_game(user, is_active=False)
-
-        response = auth_client.get(
-            "/game/944768131/view", {"sel": "3"}, HTTP_HX_REQUEST="true"
-        )
-        body = response.content.decode()
-
-        assert 'id="gr-pill" hx-swap-oob="true"' in body
-
-    def test_non_htmx_request_has_no_pill_swap(self, auth_client, user):
-        _make_game(user, is_active=False)
-
-        response = auth_client.get("/game/944768131/view", {"sel": "3"})
-        body = response.content.decode()
-
-        assert 'id="gr-pill" hx-swap-oob="true"' not in body
+        assert 'hx-get="/game/944768131/view?sel=4"' in body
+        assert 'hx-get="/game/944768131/view?sel=5"' not in body
+        assert "gr-live-btn" not in body
 
 
 @pytest.mark.django_db
 class TestGameListStates:
-    """partials/game_list.html — empty state and the your-turn card."""
+    """partials/game_list.html — the empty state and the review card."""
 
     def test_empty_state(self, auth_client):
         response = auth_client.get("/games")
 
-        assert b"No active games" in response.content
+        assert b"No games to review" in response.content
 
-    def test_your_turn_card(self, auth_client, user):
-        # FEN_START has White (the user) to move → your turn.
+    def test_review_card(self, auth_client, user):
         _make_game(user, fen=FEN_START)
 
         response = auth_client.get("/games")
         body = response.content.decode()
 
-        assert "gm-card--your-turn" in body
-        assert "Your turn" in body
-        assert "LIVE" in body
+        assert "gm-card--past" in body
+        assert "REVIEW" in body
+        # Nothing that would advertise a game in progress.
+        assert "LIVE" not in body
+        assert "Your turn" not in body
 
 
 @pytest.mark.django_db
@@ -975,7 +902,7 @@ class TestEvalBar:
     """The eval bar fill (_eval_fill / partials/_evalfill.html)."""
 
     def test_defaults_to_midpoint_without_analysis(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
 
@@ -983,7 +910,7 @@ class TestEvalBar:
         assert b"height:50%" in response.content
 
     def test_clamps_a_large_positive_eval(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(user, _ply_fen(2), best_move_san="Nf3", eval_cp=10)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
@@ -992,7 +919,7 @@ class TestEvalBar:
         assert b"height:93%" in response.content
 
     def test_clamps_a_large_negative_eval(self, auth_client, user):
-        _make_game(user, is_active=False)
+        _make_game(user)
         _make_suggestion(user, _ply_fen(2), best_move_san="Nf3", eval_cp=-10)
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})

@@ -1,9 +1,12 @@
 """Unit tests for the scheduler job bodies: `sync_current_games` (Chess.com ->
-DB), `enqueue_due_analyses` (DB -> Celery, for the active games),
-`backfill_results` (archives -> DB), `enqueue_finished_game_analyses` (the 10
-minute reconciliation over finished games), `requeue_stale_analyses` (reviving
-analyses whose worker never came back) and `requeue_orphaned_analyses` (reviving
-those whose broker message went missing instead).
+DB), `backfill_results` (archives -> DB), `enqueue_finished_game_analyses` (the
+10 minute reconciliation over finished games, and the only path that enqueues
+work), `requeue_stale_analyses` (reviving analyses whose worker never came back)
+and `requeue_orphaned_analyses` (reviving those whose broker message went missing
+instead).
+
+Nothing is enqueued while a game is still being played — that rule is pinned by
+`TestEnqueueFinishedGameAnalyses.test_never_enqueues_a_game_in_progress`.
 
 The Celery task and the Chess.com `Client` are mocked, so no broker, worker or
 network is needed.
@@ -22,7 +25,6 @@ from chessdotcom_ai_coach.services.scheduler import (
     ANALYSIS_TIMEOUT,
     REQUEUE_BATCH_SIZE,
     backfill_results,
-    enqueue_due_analyses,
     enqueue_finished_game_analyses,
     requeue_orphaned_analyses,
     requeue_stale_analyses,
@@ -52,105 +54,6 @@ def _game(user, **kwargs):
     }
     defaults.update(kwargs)
     return Game.objects.create(user=user, **defaults)
-
-
-@pytest.mark.django_db
-@patch("chessdotcom_ai_coach.services.scheduler.analyze_game_task")
-class TestEnqueueDueAnalyses:
-    def test_enqueues_when_user_to_move(self, mock_task, user):
-        # User plays White, White to move → enqueue.
-        _game(user, fen=WHITE_TO_MOVE)
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 1
-        mock_task.delay.assert_called_once()
-        row = CoachSuggestion.objects.get(user=user, game_id="944768131")
-        assert row.status == CoachSuggestion.Status.PENDING
-
-    def test_skips_when_opponent_to_move(self, mock_task, user):
-        # User plays White, but it's Black to move → skip.
-        _game(user, fen=BLACK_TO_MOVE)
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 0
-        mock_task.delay.assert_not_called()
-        assert CoachSuggestion.objects.count() == 0
-
-    def test_skips_inactive_games(self, mock_task, user):
-        _game(user, is_active=False, fen=WHITE_TO_MOVE)
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 0
-        mock_task.delay.assert_not_called()
-
-    def test_skips_games_without_fen(self, mock_task, user):
-        _game(user, fen="")
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 0
-        mock_task.delay.assert_not_called()
-
-    def test_skips_when_user_not_a_player(self, mock_task, user):
-        # Neither player matches the user's chess username.
-        _game(user, white_name="Foo", black_name="Bar", fen=WHITE_TO_MOVE)
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 0
-        mock_task.delay.assert_not_called()
-
-    def test_dedup_across_ticks(self, mock_task, user):
-        # Same position on two consecutive ticks → enqueued only once.
-        _game(user, fen=WHITE_TO_MOVE)
-
-        first = enqueue_due_analyses()
-        second = enqueue_due_analyses()
-
-        assert first == 1
-        assert second == 0
-        assert mock_task.delay.call_count == 1
-        assert CoachSuggestion.objects.filter(game_id="944768131").count() == 1
-
-    def test_user_playing_black_to_move(self, mock_task, user):
-        # User plays Black and it's Black to move → enqueue.
-        _game(user, white_name="Opponent", black_name="MyUser", fen=BLACK_TO_MOVE)
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 1
-        mock_task.delay.assert_called_once()
-
-    @patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
-    def test_also_enqueues_moves_the_poll_missed(self, mock_backfill_task, mock_task, user):
-        """A 5s poll only sees the position it lands on, so in fast time controls
-        most turns come and go unseen. The already-played moves in the PGN are
-        reconciled on every tick instead of waiting for the game to end."""
-        _game(user, fen=BLACK_TO_MOVE, pgn=PGN)  # opponent to move: no live enqueue
-
-        enqueued = enqueue_due_analyses()
-
-        assert enqueued == 2  # e4 and Nf3
-        assert mock_backfill_task.delay.call_count == 2
-        mock_task.delay.assert_not_called()
-        white_fens = {
-            m["fen_before"]
-            for m in board_utils.moves_from_pgn(PGN)
-            if m["color"] == "white"
-        }
-        rows = CoachSuggestion.objects.filter(user=user, game_id="944768131")
-        assert set(rows.values_list("fen", flat=True)) == white_fens
-
-    @patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
-    def test_missed_moves_are_enqueued_once(self, mock_backfill_task, mock_task, user):
-        _game(user, fen=BLACK_TO_MOVE, pgn=PGN)
-
-        assert enqueue_due_analyses() == 2
-        assert enqueue_due_analyses() == 0
-        assert mock_backfill_task.delay.call_count == 2
 
 
 @pytest.mark.django_db
@@ -343,8 +246,11 @@ class TestBackfillResults:
 @pytest.mark.django_db
 @patch("chessdotcom_ai_coach.services.analysis.analyze_game_task")
 class TestEnqueueFinishedGameAnalyses:
-    """The 10 minute scan: every finished game is compared against its rows and the
-    difference is queued, so anything the live path missed is eventually covered."""
+    """The 10 minute scan: the only path that enqueues work.
+
+    Every finished game is compared against its rows and the difference is queued.
+    A game still in progress is left alone entirely — the coach comments on moves
+    that were played, once the game is over."""
 
     def _linked_user(self, django_user_model):
         return django_user_model.objects.create_user(
@@ -388,13 +294,48 @@ class TestEnqueueFinishedGameAnalyses:
 
         assert enqueue_finished_game_analyses() == 2
 
-    def test_skips_active_games(self, mock_task, django_user_model):
-        # Those belong to the 5s tick, which also has the live position to enqueue.
+    def test_never_enqueues_a_game_in_progress(self, mock_task, django_user_model):
+        """The rule: nothing is analysed while the game is still being played.
+
+        Not the moves already in the PGN, and not the position the user is about to
+        play — no schedule reaches an active game at all."""
         user = self._linked_user(django_user_model)
-        _game(user, is_active=True, pgn=PGN)
+        _game(user, is_active=True, pgn=PGN, fen=WHITE_TO_MOVE)  # user's turn
 
         assert enqueue_finished_game_analyses() == 0
         mock_task.delay.assert_not_called()
+        assert CoachSuggestion.objects.count() == 0
+
+    def test_analyses_the_same_game_once_it_ends(self, mock_task, django_user_model):
+        """The other half of the rule: the game becomes analysable when it ends."""
+        user = self._linked_user(django_user_model)
+        game = _game(user, is_active=True, pgn=PGN, fen=WHITE_TO_MOVE)
+        assert enqueue_finished_game_analyses() == 0
+
+        Game.objects.filter(pk=game.pk).update(is_active=False)
+
+        assert enqueue_finished_game_analyses() == 2  # e4 and Nf3
+        assert mock_task.delay.call_count == 2
+
+    def test_enqueues_every_played_move_only_once(self, mock_task, django_user_model):
+        """Each of the user's plies is queued on its own `fen_before`, once.
+
+        Re-running must find nothing left: this is what makes a reconciliation
+        safe to put on a schedule rather than on a one-shot trigger."""
+        user = self._linked_user(django_user_model)
+        _game(user, is_active=False, pgn=PGN)
+
+        assert enqueue_finished_game_analyses() == 2
+        assert enqueue_finished_game_analyses() == 0
+        assert mock_task.delay.call_count == 2
+
+        white_fens = {
+            m["fen_before"]
+            for m in board_utils.moves_from_pgn(PGN)
+            if m["color"] == "white"
+        }
+        rows = CoachSuggestion.objects.filter(user=user, game_id="944768131")
+        assert set(rows.values_list("fen", flat=True)) == white_fens
 
     def test_skips_games_without_a_pgn(self, mock_task, django_user_model):
         user = self._linked_user(django_user_model)

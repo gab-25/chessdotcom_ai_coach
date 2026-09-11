@@ -61,11 +61,10 @@ From [`urls.py`](../chessdotcom_ai_coach/urls.py):
 
 | Route | View | Kind |
 | --- | --- | --- |
-| `/` | `home` | Full page — current games + past-games history |
+| `/` | `home` | Full page — the finished games available to review |
 | `/games` | `game_list` | **HTMX fragment**, fetched on demand by the home Refresh button |
-| `/game/<id>` | `game_detail` | Full page — the review/live board |
+| `/game/<id>` | `game_detail` | Full page — the review board. **404** for a game still in progress |
 | `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N` |
-| `/game/<id>/live` | `game_live` | **HTMX poll** every 5s — returns **204** when `head` is unchanged |
 | `/game/<id>/analyze` | `analyze_position` | **HTMX fragment** — `GET` is the pending self-poll (2s), `POST` requests analysis |
 | `/login`, `/logout` | Django `LoginView`, `logout_view` | Session auth |
 | `/admin/` | Django admin | Where you link the Chess.com account |
@@ -129,7 +128,7 @@ follows consistently, not enforced rules.
   worth reading before changing `partials/coach_card.html` or
   `partials/position.html`, which use `hx-swap-oob`.
 - **Commit style:** short imperative subject with the PR number, e.g.
-  `Show the move you're about to play as a live slot in the moves grid (#41)`.
+  `Analyse every move you played — on a schedule, not once (#44)`.
   Comments, commit messages and PR descriptions are written in English.
 
 ## Templates
@@ -137,16 +136,16 @@ follows consistently, not enforced rules.
 ```
 templates/
 ├── base.html          # shell: header with version badge, htmx script
-├── home.html          # current games + history, polls /games
+├── home.html          # the finished-games grid, refreshed on demand
 ├── game_detail.html   # the review page shell
 ├── login.html
 ├── error.html
 └── partials/
-    ├── game_list.html     # the 5s home poll target
+    ├── game_list.html     # the home Refresh target
     ├── position.html      # the whole review view (#gr-view)
     ├── board.html         # 64 cells
     ├── coach_card.html    # coach panel + the 2s pending self-poll
-    ├── moves_grid.html    # move list, including the live slot
+    ├── moves_grid.html    # move list — played moves only
     ├── history_list.html  # analysis timeline
     ├── _evalfill.html     # eval bar (swapped out-of-band)
     └── _arrows_svg.html   # SVG arrow overlay (swapped out-of-band)

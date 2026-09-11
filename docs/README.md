@@ -1,10 +1,12 @@
 # Documentation
 
 Chessdotcom AI Coach is a Django web app that keeps a local mirror of your
-Chess.com games, renders the board server-side, and — whenever it's your turn —
-runs Stockfish and a local LLM to produce a grandmaster-style comment on the
-position. There is no client-side JavaScript framework: every screen is a
-server-rendered HTML fragment swapped in by HTMX.
+Chess.com games and, **once a game is over**, replays it move by move: for every
+move you played it runs Stockfish and a local LLM to produce a grandmaster-style
+comment on the position you faced. It is a review tool, not a live assistant — a
+game in progress is snapshotted but never shown, and a move you have not played
+is never analysed. There is no client-side JavaScript framework: every screen is
+a server-rendered HTML fragment swapped in by HTMX.
 
 For a "clone and run" quickstart, see the [root README](../README.md). These
 pages cover the parts that don't fit there.

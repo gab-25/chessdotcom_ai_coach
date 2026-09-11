@@ -1,13 +1,8 @@
 {% comment %}
-  The move-by-move "position view" — the whole #gr-view swapped by navigation and
-  the live poll. Rendered from the stored snapshot (no Chess.com call). When it is
-  an htmx response it also keeps the header pill in sync via an out-of-band swap.
+  The move-by-move "position view" — the whole #gr-view swapped by navigation.
+  Rendered from the stored snapshot of a finished game (no Chess.com call, and no
+  live poll: a game in progress is never shown).
 {% endcomment %}
-{% if request.htmx %}
-<span id="gr-pill" hx-swap-oob="true" class="status-pill{% if is_live %} status-pill--watch{% endif %}">
-  <span class="status-pill__dot"></span><span class="status-pill__label">{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}</span>
-</span>
-{% endif %}
 <div id="gr-view">
   <div class="game-layout" id="gr-root">
 
@@ -49,17 +44,11 @@
       <div class="movebar">
         <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
         <div class="gr-navwrap">
-          {% if is_live and sel < live_sel %}
-          <button type="button" class="gr-live-btn" title="Jump to the live position"
-                  hx-get="{% url 'game_position' id %}?sel={{ live_sel }}" hx-target="#gr-view" hx-swap="outerHTML">
-            <span class="status-pill__dot"></span>{% if behind %}{{ behind }} new · {% endif %}live
-          </button>
-          {% endif %}
           <div class="gr-nav">
             <button type="button" title="Start" hx-get="{% url 'game_position' id %}?sel=0" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='Home'] from:body">«</button>
             <button type="button" title="Back (←)" hx-get="{% url 'game_position' id %}?sel={{ prev_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowLeft'] from:body">‹</button>
             <button type="button" title="Forward (→)" hx-get="{% url 'game_position' id %}?sel={{ next_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowRight'] from:body">›</button>
-            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ live_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
+            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ head }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
           </div>
         </div>
       </div>
@@ -81,8 +70,4 @@
   </div>
 
   {% include "partials/moves_grid.html" %}
-
-  {% if is_live %}
-  <div hx-get="{% url 'game_live' id %}?sel={{ sel }}&head={{ head }}" hx-trigger="every 5s" hx-target="#gr-view" hx-swap="outerHTML"></div>
-  {% endif %}
 </div>

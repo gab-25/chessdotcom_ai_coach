@@ -7,17 +7,20 @@ duplicates.
 
 Two jobs run at very different cadences, because they answer to different clocks:
 
-* every 5s — the live tick, matching the detail page's own HTMX poll, so nothing
-  needs data fresher than that. It syncs each linked user's current games from
+* every 5s — the sync tick. It snapshots each linked user's current games from
   Chess.com into the local DB (`sync_current_games`), resolves the outcome of
-  games that just ended from the archives (`backfill_results`), enqueues the
-  analyses due on the active games (`enqueue_due_analyses` — both the move you're
-  about to play and any earlier move the poll skipped), and revives analyses whose
-  worker never came back (`requeue_stale_analyses`).
+  games that just ended from the archives (`backfill_results`), and revives
+  analyses whose worker or whose broker message never came back
+  (`requeue_stale_analyses`, `requeue_orphaned_analyses`). It enqueues **no**
+  analysis: a game is analysed once it is over.
 * every 10 minutes — the reconciliation scan over finished games
-  (`enqueue_finished_game_analyses`). It reads the whole stored history, and a
-  finished game changes only when something else failed, so there is nothing to
-  gain from running it on the live tick.
+  (`enqueue_finished_game_analyses`), and the only job that enqueues work. It
+  reads the whole stored history, and a finished game changes only when something
+  else failed, so there is nothing to gain from running it on the sync tick.
+
+The sync tick stays at 5s even though nothing on screen needs data that fresh:
+Chess.com serves the PGN only for games that are still "current", so a game
+missed there is gone, along with the moves that would have been analysed.
 
 Within each job the steps run in separate try/except blocks so a Chess.com outage
 doesn't stop the local enqueue checks from still running against whatever `Game`
@@ -31,7 +34,6 @@ from django.core.management.base import BaseCommand
 
 from ...services.scheduler import (
     backfill_results,
-    enqueue_due_analyses,
     enqueue_finished_game_analyses,
     requeue_orphaned_analyses,
     requeue_stale_analyses,
@@ -47,8 +49,8 @@ FINISHED_SCAN_MINUTES = 10
 class Command(BaseCommand):
     help = (
         "Every 5s, sync games from Chess.com, backfill finished-game results and "
-        "enqueue Celery analysis tasks; every 10min, scan finished games for "
-        "moves that were never analysed."
+        "revive stuck analyses; every 10min, scan finished games for moves that "
+        "were never analysed and enqueue them."
     )
 
     def handle(self, *args, **options):
@@ -89,10 +91,6 @@ class Command(BaseCommand):
             backfill_results()
         except Exception:
             logger.exception("Result backfill failed")
-        try:
-            enqueue_due_analyses()
-        except Exception:
-            logger.exception("Scheduler tick failed")
         try:
             # Anything still RUNNING well past the analysis timeout lost its
             # worker, so hand it back to the queue (or retire it) rather than leave

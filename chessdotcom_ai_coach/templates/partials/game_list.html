@@ -1,29 +1,28 @@
 {% load static %}
-{# On a manual refresh the game count lives outside this fragment, so update it out of band. #}
+{# The home grid: finished games only — a game in progress has nothing to review
+   yet, so it is not listed. On a manual refresh the game count lives outside this
+   fragment, so update it out of band. #}
 {% if oob %}{% include "partials/home_count.html" %}{% endif %}
 <div class="games-grid">
   {% if not games %}
   <div class="empty">
     <i class="fa-solid fa-circle-info"></i>
     <div>
-      <h3>No active games</h3>
-      <p>You don't have any ongoing games on Chess.com right now.</p>
+      <h3>No games to review</h3>
+      <p>None of your Chess.com games have finished yet. The coach analyses a game once it's over.</p>
     </div>
   </div>
   {% else %}
   {% for game in games %}
-  <a href="{% url 'game_detail' game.game_id %}" class="gm-card{% if game.is_user_turn %} gm-card--your-turn{% endif %}">
+  <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
     <div class="gm-card__head">
       <span class="gm-card__head-left">
         <span class="badge">{{ game.time_class|capfirst }}</span>
-        {% if game.is_user_turn %}
-        <span class="badge badge--turn"><i class="fa-solid fa-bell"></i>Your turn</span>
+        {% if game.has_result %}
+        <span class="badge badge--{{ game.result }}">{{ game.result_label }}{% if game.result_detail %} · {{ game.result_detail }}{% endif %}</span>
         {% endif %}
       </span>
-      <span class="gm-card__live">
-        <span class="badge badge--live"><span class="badge__dot"></span></span>
-        LIVE{% if game.move_no %} · move {{ game.move_no }}{% endif %}
-      </span>
+      <span class="gm-card__ended"><i class="fa-solid fa-magnifying-glass"></i> REVIEW{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
     </div>
 
     <!-- Black -->
@@ -33,7 +32,6 @@
         <span class="gm-card__name">{{ game.black_name }}</span>
         <span class="gm-card__meta">{{ game.black_rating|default:"—" }}</span>
       </span>
-      {% if game.turn == 'black' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>
 
     <!-- Board -->
@@ -50,55 +48,8 @@
         <span class="gm-card__name">{{ game.white_name }}</span>
         <span class="gm-card__meta">{{ game.white_rating|default:"—" }}</span>
       </span>
-      {% if game.turn == 'white' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>
   </a>
   {% endfor %}
   {% endif %}
 </div>
-
-{% if past_games %}
-<div class="past-games">
-  <h2 class="past-games__title"><i class="fa-solid fa-clock-rotate-left"></i> Past games</h2>
-  <div class="games-grid">
-    {% for game in past_games %}
-    <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
-      <div class="gm-card__head">
-        <span class="gm-card__head-left">
-          <span class="badge">{{ game.time_class|capfirst }}</span>
-          {% if game.has_result %}
-          <span class="badge badge--{{ game.result }}">{{ game.result_label }}{% if game.result_detail %} · {{ game.result_detail }}{% endif %}</span>
-          {% endif %}
-        </span>
-        <span class="gm-card__ended"><i class="fa-solid fa-magnifying-glass"></i> REVIEW{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
-      </div>
-
-      <!-- Black -->
-      <div class="gm-card__player">
-        <span class="gm-card__avatar gm-card__avatar--b"></span>
-        <span class="gm-card__id">
-          <span class="gm-card__name">{{ game.black_name }}</span>
-          <span class="gm-card__meta">{{ game.black_rating|default:"—" }}</span>
-        </span>
-      </div>
-
-      <!-- Board -->
-      <div class="gm-card__board">
-        <div class="gm-card__board-frame">
-          {% include "partials/board.html" with cells=game.cells board_class="board--mini" %}
-        </div>
-      </div>
-
-      <!-- White -->
-      <div class="gm-card__player gm-card__player--white">
-        <span class="gm-card__avatar gm-card__avatar--w"></span>
-        <span class="gm-card__id">
-          <span class="gm-card__name">{{ game.white_name }}</span>
-          <span class="gm-card__meta">{{ game.white_rating|default:"—" }}</span>
-        </span>
-      </div>
-    </a>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}

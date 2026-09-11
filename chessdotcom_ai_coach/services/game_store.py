@@ -56,13 +56,13 @@ def upsert_current_games(user, games: List[dict]) -> None:
     )
 
 
-def current_games(user) -> List[Game]:
-    """Active games for the user (for the home page's live-games section)."""
-    return list(Game.objects.filter(user=user, is_active=True))
-
-
 def past_games(user) -> List[Game]:
-    """Games that are no longer current, newest first (for the home history)."""
+    """Games that are no longer current, newest first.
+
+    The only game list the app shows: a game in progress has nothing to review, so
+    it is snapshotted but never displayed. Also what the analysis scan works off —
+    a game is analysed once it has left Chess.com's "current games".
+    """
     return list(Game.objects.filter(user=user, is_active=False))
 
 

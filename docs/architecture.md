@@ -5,9 +5,15 @@ services**, and understanding why is the fastest way into the codebase.
 
 The reason is latency: a coach analysis costs ~2s of Stockfish plus 20–30s of
 CPU LLM inference. That can't happen inside a request, so it happens in a Celery
-worker. Something has to notice that it's your turn and enqueue the work — that's
-APScheduler. The web process, as a result, never talks to Chess.com and never
-runs the engine: it only reads the database.
+worker. Something has to notice that a game has ended and enqueue the work —
+that's APScheduler. The web process, as a result, never talks to Chess.com and
+never runs the engine: it only reads the database.
+
+**The app reviews games, it does not watch them.** A game is analysed once it is
+over, one suggestion per move you actually played, and a game still in progress
+is snapshotted but never shown. Two consequences follow, and most of the design
+below is downstream of them: there is no live poll anywhere, and the position you
+are *about* to play is never analysed.
 
 ## Components
 
@@ -17,7 +23,7 @@ graph TD
 
     subgraph app["Application processes"]
         Web["<b>web</b> — Gunicorn + Django<br/>views.py, templates/"]
-        Sched["<b>scheduler</b> — APScheduler<br/>manage.py run_scheduler<br/><i>5s tick + 10min scan</i>"]
+        Sched["<b>scheduler</b> — APScheduler<br/>manage.py run_scheduler<br/><i>5s sync + 10min scan</i>"]
         Worker["<b>worker</b> — Celery<br/>analyze_game_task"]
     end
 
@@ -32,11 +38,11 @@ graph TD
         LLM["Ollama<br/><i>OpenAI-compatible</i>"]
     end
 
-    Browser -->|"detail-page poll every 5s / 2s<br/>home refresh on demand"| Web
+    Browser -->|"navigation + pending card poll every 2s<br/>home refresh on demand"| Web
     Web --> PG
     Sched -->|"read current games + archives"| ChessCom
     Sched --> PG
-    Sched -->|"enqueue task"| Redis
+    Sched -->|"enqueue task<br/><i>finished games only</i>"| Redis
     Redis --> Worker
     Worker --> SF
     Worker --> LLM
@@ -47,16 +53,26 @@ graph TD
 
 Note what is **missing** from that graph: there is no arrow from `web` to
 Chess.com, to Stockfish or to the LLM. Every view renders from the stored
-snapshot alone, which is what makes navigation, the live poll and reviewing a
-finished game all equally cheap.
+snapshot alone, which is what makes navigating a game as cheap as opening it.
 
 ## The analysis flow
 
-The thing to hold on to: **both enqueue steps are reconciliation passes, not
-triggers.** Neither one fires "when something happens". Each compares what the
-PGN says you played against the `CoachSuggestion` rows that exist and queues the
-difference, which is why running them repeatedly is both safe and the whole
-point — anything missed is picked up on a later run instead of being lost.
+Two things to hold on to.
+
+**Analysis begins when a game ends.** Nothing is queued while you are still
+playing — not the moves already in the PGN, and not the position you are about to
+play. What marks a game as finished is that it stopped appearing in Chess.com's
+current-games list, which `sync_current_games` records as `is_active=False`. So
+the 5s tick never enqueues: its job is to capture games (Chess.com serves the PGN
+only while a game is current, so a game missed there is gone) and to revive stuck
+analyses.
+
+**The one enqueue step is a reconciliation pass, not a trigger.** It does not
+fire "when something happens". It compares what the PGN says you played against
+the `CoachSuggestion` rows that exist and queues the difference, which is why
+running it every ten minutes forever is both safe and the whole point — a game
+whose closing moves only arrived with the archive's PGN, or whose task was lost,
+is picked up on a later run instead of being lost.
 
 ```mermaid
 sequenceDiagram
@@ -70,20 +86,13 @@ sequenceDiagram
     participant B as Browser (HTMX)
 
     rect rgba(120,140,180,0.10)
-    Note over S,Q: every 5s — the live tick
+    Note over S,Q: every 5s — the sync tick (enqueues nothing)
     S->>C: my_current_games() per linked user
     C-->>S: games (PGN + FEN)
-    S->>DB: upsert_current_games() — snapshot, retire vanished games
+    S->>DB: upsert_current_games() — snapshot, and mark<br/>every game that vanished as is_active=False
+    Note over S,DB: that flip is the "the game is over" event<br/>the scan below waits for
     S->>C: finished_game_results() for recently-ended games
     S->>DB: set_result() — win / loss / draw + the archive's final PGN
-
-    S->>DB: for each active game where it's the user's turn:<br/>get_or_create CoachSuggestion(user, game_id, fen)
-    alt row was just created
-        S->>Q: analyze_game_task.delay(...)
-    else row already exists
-        Note over S,DB: already queued, running or done — skip.<br/>The row IS the lock.
-    end
-    S->>Q: enqueue_game_analysis() on each active game —<br/>the moves already played that the poll never landed on
 
     S->>DB: requeue_stale_analyses() — rows RUNNING past ANALYSIS_TIMEOUT
     Note over S,Q: an analysis whose worker never came back goes<br/>back to PENDING, or is retired FAILED after 3 attempts
@@ -92,8 +101,13 @@ sequenceDiagram
     end
 
     rect rgba(120,160,120,0.10)
-    Note over S,Q: every 10min — the finished-game scan
-    S->>Q: enqueue_finished_game_analyses() —<br/>every finished game, every move still missing
+    Note over S,Q: every 10min — the finished-game scan (the only enqueue path)
+    S->>DB: for each finished game, each user ply still missing:<br/>get_or_create CoachSuggestion(user, game_id, fen_before)
+    alt row was just created
+        S->>Q: analyze_game_task.delay(...)
+    else row already exists
+        Note over S,DB: already queued, running or done — skip.<br/>The row IS the lock.
+    end
     end
 
     Q->>W: deliver task
@@ -139,17 +153,17 @@ position as FAILED instead of running it again.
 
 | Component | Entry point | Notes |
 | --- | --- | --- |
-| Scheduler jobs | [`management/commands/run_scheduler.py`](../chessdotcom_ai_coach/management/commands/run_scheduler.py) | Two: `POLL_INTERVAL_SECONDS = 5` (matching the home page's own HTMX cadence) and `FINISHED_SCAN_MINUTES = 10`. Both `max_instances=1` and `coalesce=True`, so a slow run never overlaps the next. |
-| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `backfill_results`, `enqueue_due_analyses`, `requeue_stale_analyses`, `requeue_orphaned_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local enqueue check running. |
+| Scheduler jobs | [`management/commands/run_scheduler.py`](../chessdotcom_ai_coach/management/commands/run_scheduler.py) | Two: `POLL_INTERVAL_SECONDS = 5` and `FINISHED_SCAN_MINUTES = 10`. Both `max_instances=1` and `coalesce=True`, so a slow run never overlaps the next. |
+| Tick body | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `sync_current_games`, `backfill_results`, `requeue_stale_analyses`, `requeue_orphaned_analyses` — each called in its own `try/except` so a Chess.com outage still leaves the local recovery checks running. Enqueues nothing. |
 | Stuck-analysis recovery | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). |
-| Finished-game scan | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `enqueue_finished_game_analyses` — unbounded in time (a game is checked for as long as it is stored, so one whose result never resolved is still covered) and bounded in volume by `ENQUEUE_BUDGET_PER_RUN`. |
+| Finished-game scan | [`services/scheduler.py`](../chessdotcom_ai_coach/services/scheduler.py) | `enqueue_finished_game_analyses` — the only path that enqueues work. Unbounded in time (a game is checked for as long as it is stored, so one whose result never resolved is still covered) and bounded in volume by `ENQUEUE_BUDGET_PER_RUN`. Its cadence is the delay you feel: analysis of a game starts up to ten minutes after its last move. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
 | Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |
 | Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `my_current_games()` and `finished_game_results()`. Pure IO + shape normalisation, no DB access. |
-| Persistence | [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) | Pure DB reads/writes: `upsert_current_games`, `current_games`, `past_games`, `set_result`, `stored_game`. No Chess.com access. |
+| Persistence | [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) | Pure DB reads/writes: `upsert_current_games`, `past_games`, `set_result`, `stored_game`. No Chess.com access. |
 | Board rendering | [`services/board.py`](../chessdotcom_ai_coach/services/board.py) | Expands FEN/PGN into what templates can iterate over. |
 | Views | [`views.py`](../chessdotcom_ai_coach/views.py) | Thin, except `_position_context` (see below). |
-| Whole-game reconcile | [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) | `enqueue_game_analysis` — same idempotent enqueue, applied to every move of a game. Shared by both scheduler jobs and by `manage.py analyze_game`. `_covered_plies` reads the game's existing rows in one query and matches on `(move_no, side to move)`, so the FEN spellings never diverge into duplicates. |
+| Whole-game reconcile | [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) | `enqueue_game_analysis` — the idempotent enqueue, applied to every move the user played in a game. Shared by the finished-game scan and by `manage.py analyze_game`. `_covered_plies` reads the game's existing rows in one query and matches on `(move_no, side to move)`, so the FEN spellings never diverge into duplicates. |
 
 ## Board rendering
 
@@ -185,15 +199,18 @@ analysis-history timeline and the coach card's mode.
 The concept worth knowing is the **ply cursor `sel`**:
 
 - `sel = 0` — the starting position.
-- `head` — the number of plies in the PGN, i.e. the last move actually played.
-- `live_sel` — the end of the timeline. When a game is live *and* it's your turn,
-  this is `head + 1`: a **live slot** for the move you're about to play. It gets
-  its own cursor so the opponent's last move stays reviewable at `head`.
+- `head` — the number of plies in the PGN, i.e. the last move actually played,
+  and the end of the timeline. `sel` is clamped to it.
 
-The coach card is then rendered in one of several modes — `start`, `opponent`,
-`unanalyzed`, `pending`, `analyzed`, `live_waiting`, `live_request`,
-`live_pending`, `live_analyzed` — and the eval bar carries the last analysed
-value forward across un-analysed plies so it never snaps back to 50%.
+There is deliberately **no cursor past `head`**. A position the player never
+reached has no move to comment on, so the timeline simply stops — which is also
+why a `CoachSuggestion` row left over for such a position is invisible without
+any filtering: `annotate_moves` joins rows onto the plies in the PGN, and there
+is no ply to join to.
+
+The coach card is then rendered in one of five modes — `start`, `opponent`,
+`unanalyzed`, `pending`, `failed`, `analyzed` — and the eval bar carries the last
+analysed value forward across un-analysed plies so it never snaps back to 50%.
 
 ## The HTMX layer
 
@@ -201,11 +218,10 @@ There is no custom JavaScript. Everything is a fragment swap:
 
 - **Home** (`home.html`) does not poll. Its **Refresh** button fetches `/games`
   on demand — a plain DB read — and swaps the game grid in place; the fragment
-  also carries an `hx-swap-oob` copy of the in-progress count that lives outside
-  the swapped container.
-- **Detail** (`partials/position.html`) polls `/game/<id>/live` `every 5s`,
-  sending its current `sel` and the `head` it already knows; the view returns
-  **204 No Content** when nothing changed, so an idle game costs almost nothing.
+  also carries an `hx-swap-oob` copy of the game count that lives outside the
+  swapped container.
+- **Detail** (`partials/position.html`) does not poll either. A finished game
+  does not change, so navigation is the only thing that swaps `#gr-view`.
 - **Pending coach cards** (`partials/coach_card.html`) self-poll
   `/game/<id>/analyze` `every 2s` until the worker finishes. PENDING and RUNNING
   both render as that pending card — the distinction matters to the scheduler,
@@ -228,10 +244,12 @@ them and new code should too:
    to break the batch).
 4. **Views stay thin and never call Chess.com.** They read the snapshot.
 5. **Idempotency via `get_or_create` on a unique key** is the standard way to
-   enqueue work — see both `scheduler.enqueue_due_analyses` and
-   `analysis.enqueue_game_analysis`. It is what lets every enqueue path be a
-   reconciliation that can run on a schedule, rather than a one-shot trigger
-   whose failure loses the work.
+   enqueue work — see `analysis.enqueue_game_analysis`. It is what lets the
+   enqueue path be a reconciliation that can run on a schedule, rather than a
+   one-shot trigger whose failure loses the work.
+6. **Only finished games are analysed or shown.** `views._reviewable_game` is the
+   single gate for the second half of that, and `game_store.past_games` for the
+   first; nothing else should reach for `is_active` on its own.
 
 ## One layout quirk
 

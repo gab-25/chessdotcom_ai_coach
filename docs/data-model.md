@@ -23,7 +23,7 @@ erDiagram
         int user_id FK
         string game_id "last segment of the Chess.com URL"
         text pgn "snapshot — source of the move history"
-        string fen "current position"
+        string fen "last snapshotted position"
         string white_name
         string black_name
         bool is_active "seen in the latest fetch"
@@ -35,7 +35,7 @@ erDiagram
         int id PK
         int user_id FK
         string game_id "no FK — decoupled from Game"
-        string fen "the analysed position = join key"
+        string fen "position before the played move = join key"
         int move_no
         string status "pending|running|done|failed"
         int attempts "worker starts, capped at 3"
@@ -72,8 +72,8 @@ A snapshot, not a live view. Fields worth calling out:
 | --- | --- |
 | `game_id` | The last segment of the Chess.com URL (e.g. `944768131` from `https://www.chess.com/game/daily/944768131`). Not globally unique across users in this table — see the constraint below. |
 | `pgn` | The move history. Everything the review page shows is derived from this. |
-| `fen` | The current position, i.e. the one the coach analyses when it's your turn. |
-| `is_active` | `True` = seen in the most recent `current games` fetch. `upsert_current_games` flips to `False` every row it *didn't* just see, which is how a game moves to the "past games" history. |
+| `fen` | The last position snapshotted before the game left "current games". Used for the home card's mini-board; the analysis works off `pgn` instead. |
+| `is_active` | `True` = seen in the most recent `current games` fetch. `upsert_current_games` flips to `False` every row it *didn't* just see. **That flip is the app's "the game is over" event**: it is what makes a game visible at all and what makes it eligible for analysis. |
 | `result` / `result_detail` | The outcome relative to **this row's user**, plus how it ended. |
 
 **Constraints:** unique on `(user, game_id)`; default ordering `-updated_at`.
@@ -111,9 +111,17 @@ Two helpers make templates readable: `has_result` (is it resolved?) and
 
 One row per analysed position: **at most one per `(user, game_id, fen)`**.
 
-The FEN identifies the position the player was about to play. Re-analysing the
-same position overwrites the row, so each move keeps a single latest analysis
-instead of accumulating duplicates.
+The FEN identifies the position the player faced *before* the move being
+reviewed — `fen_before` of a ply in the PGN. Re-analysing the same position
+overwrites the row, so each move keeps a single latest analysis instead of
+accumulating duplicates.
+
+Rows are created only for moves the user actually played, and only once the game
+has ended. Earlier versions of the app also analysed the position you were about
+to play, and **those rows are still in the database**. They are harmless: nothing
+renders them, because the templates join suggestions onto the plies in the PGN
+and an unplayed position has no ply. Once you did play that move, the row simply
+becomes its analysis — the FEN is the same.
 
 ### The row is the lock
 
@@ -122,7 +130,7 @@ table, no Redis lock, no `in_flight` flag:
 
 ```python
 _row, created = CoachSuggestion.objects.get_or_create(
-    user=game.user, game_id=game.game_id, fen=game.fen,
+    user=user, game_id=game_id, fen=move["fen_before"],
     defaults={"status": CoachSuggestion.Status.PENDING, ...},
 )
 if created:
@@ -130,11 +138,12 @@ if created:
 ```
 
 Because the unique constraint on `(user, game_id, fen)` makes `get_or_create`
-atomic, `created=True` happens exactly once per position. Every enqueue path runs
-this — the 5s tick over active games, the 10 minute scan over finished ones,
-`manage.py analyze_game` — and enqueues **only** when it created the row. A
-position already queued, running or done is skipped for free, which is precisely
-what lets those paths be re-run on a schedule instead of being one-shot triggers.
+atomic, `created=True` happens exactly once per position. Both enqueue paths run
+this — the 10 minute scan over finished games and `manage.py analyze_game` — and
+enqueue **only** when they created the row. A position already queued, running or
+done is skipped for free, which is precisely what lets the scan be re-run every
+ten minutes for as long as the game is stored instead of being a one-shot
+trigger.
 
 The one place that deliberately bypasses it is the explicit **re-analyze** button
 ([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py)): on `POST`, the
@@ -211,15 +220,15 @@ apply to `PENDING`: no amount of re-queuing helps when nothing is listening.
 ### Duplicate rows for one ply
 
 The unique key is the raw FEN, but the same ply can reach the DB under two
-spellings: the live scheduler stores Chess.com's FEN while
-[`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py) stores
-python-chess's `board.fen()`, and the two can differ in the halfmove clock or the
-en-passant field. `_covered_plies` therefore reads the game's existing rows once
-and matches on `(move_no, side to move)` — the ply identity
-`board_utils.annotate_moves` already joins on — before creating anything. Without
-it every reconciliation pass would re-analyse every move the coach already handled
-live; one query per game rather than per move matters because those passes run on
-every active game each tick.
+spellings. [`services/analysis.py`](../chessdotcom_ai_coach/services/analysis.py)
+stores python-chess's `board.fen()`, while rows written by the app's earlier live
+path hold Chess.com's spelling of the same position, and the two can differ in
+the halfmove clock or the en-passant field. `_covered_plies` therefore reads the
+game's existing rows once and matches on `(move_no, side to move)` — the ply
+identity `board_utils.annotate_moves` already joins on — before creating
+anything. Without it the scan would re-analyse every move that already has a row
+under the other spelling; one query per game rather than per move matters because
+the scan sweeps the whole stored history.
 
 ### Evaluation fields
 

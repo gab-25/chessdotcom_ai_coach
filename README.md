@@ -1,8 +1,13 @@
 # chessdotcom_ai_coach
 
-Chess Coach AI — a **Django** web app that lists your live Chess.com games,
-renders the board, and asks a local LLM to analyze the position like a
-grandmaster coach.
+Chess Coach AI — a **Django** web app that mirrors your Chess.com games and, once
+a game is over, replays it move by move: for every move you played it renders the
+board and asks Stockfish and a local LLM what it would have played instead, like
+a grandmaster coach going over the game with you.
+
+It reviews, it does not watch. A game still in progress is snapshotted (that is
+the only chance to capture its PGN) but never shown, and a move you have not
+played yet is never analysed.
 
 ## Stack
 
@@ -20,13 +25,14 @@ grandmaster coach.
   a hidden HTMX poller reveals the result once the worker finishes
 - **APScheduler** — background scheduler (`manage.py run_scheduler`) with two
   jobs (`chessdotcom_ai_coach/services/scheduler.py`): every 5 seconds it syncs
-  each linked user's current games from Chess.com into the local DB and enqueues
-  the analyses those games are missing, and every 10 minutes it does the same
-  sweep over the finished ones. This is the only path that keeps game data fresh
-  — the pages just read what it already synced.
+  each linked user's current games from Chess.com into the local DB, and every 10
+  minutes it sweeps the finished ones and enqueues the analyses they are missing.
+  Only the second job enqueues anything — a game is analysed once it is over. The
+  5 second sync is still load-bearing: Chess.com serves the PGN only while a game
+  is current, so a game missed there is gone.
 - **HTMX** — the whole UI is server-rendered fragments, vendored via
-  `django-htmx`: game-list polling, move-by-move navigation, the coach card and
-  the live game poll are all fragment swaps, with no custom JavaScript
+  `django-htmx`: the home refresh, move-by-move navigation and the coach card are
+  all fragment swaps, with no custom JavaScript
 - **Server-rendered board** — the FEN is expanded into a glyph board in Python
   (`chessdotcom_ai_coach/services/board.py`); there is no client-side JS framework
 - **Gunicorn** — WSGI server in the container
@@ -131,22 +137,23 @@ uv run python manage.py run_scheduler                    # the APScheduler proce
 Open http://localhost:8000, sign in, then set your **Chess.com username** on the
 user via the admin at http://localhost:8000/admin/ (field `chessdotcom_username`;
 it falls back to the login username if left blank, but the scheduler only polls
-users whose field is non-empty). Your current games appear within a few seconds.
+users whose field is non-empty). Games appear on the home page as they finish —
+a game still in progress is being recorded, but there is nothing to review yet.
 
 ## Analysing a whole game
 
 Every move you played gets its own analysis, and you don't have to ask for it.
-The scheduler doesn't just react to the position it happens to see — on each run
-it compares the game's PGN against the analyses already stored and queues the
-difference. A turn that came and went between two polls, a task lost to a worker
-restart, a game that was already over when you linked the account: all of it is
-picked up on a later run. Active games are reconciled on the 5 second tick,
-finished ones every 10 minutes, for as long as they are stored.
+Analysis starts when the game ends: the 10 minute scan compares each finished
+game's PGN against the analyses already stored and queues the difference. Because
+it is a comparison and not a one-off trigger, it keeps working — closing moves
+that only arrived with the archive's PGN, a task lost to a worker restart, a game
+that was already over when you linked the account are all picked up on a later
+run, for as long as the game is stored.
 
-Analyses are queued, not instant — a whole game is dozens of them, each a few
-seconds of Stockfish plus an LLM call — so a game you just finished fills in
-gradually. To skip the wait for one game, or to retry one whose analyses were
-given up on:
+Two waits stack up, so expect a finished game to fill in gradually rather than at
+once: up to 10 minutes before the scan notices, then the queue itself — a whole
+game is dozens of analyses, each a few seconds of Stockfish plus an LLM call. To
+skip the wait for one game, or to retry one whose analyses were given up on:
 
 ```bash
 uv run python manage.py analyze_game <game_id> [--user <username>]

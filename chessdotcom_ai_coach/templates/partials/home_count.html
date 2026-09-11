@@ -1,3 +1,4 @@
 <p class="home__sub" id="home-count"{% if oob %} hx-swap-oob="true"{% endif %}>
-  {{ games|length }} game{{ games|length|pluralize }} in progress from players you follow.
+  {{ games|length }} finished game{{ games|length|pluralize }} to review. A game
+  appears here once it ends.
 </p>

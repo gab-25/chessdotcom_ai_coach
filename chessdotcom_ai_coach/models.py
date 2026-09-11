@@ -21,8 +21,10 @@ class Game(models.Model):
     """Persisted snapshot of a Chess.com game; the PGN is the source of the moves.
 
     Chess.com only exposes games that are still "current", so once a game ends it
-    disappears from the API. Snapshotting it here (from the home polling) keeps the
-    game — and its move list — browsable afterwards.
+    disappears from the API. Snapshotting it here (from the scheduler's 5s sync)
+    keeps the game — and its move list — browsable afterwards. That is also why a
+    game in progress is stored but never shown: the snapshot is taken for the
+    review that follows, not for watching along.
     """
 
     user = models.ForeignKey(
@@ -36,8 +38,10 @@ class Game(models.Model):
     black_rating = models.CharField(max_length=16, blank=True)
     time_class = models.CharField(max_length=32, blank=True)
     pgn = models.TextField(blank=True)  # snapshot: the source of the move history
-    fen = models.CharField(max_length=100, blank=True)
-    is_active = models.BooleanField(default=True)  # seen in the latest "current" fetch
+    fen = models.CharField(max_length=100, blank=True)  # last position snapshotted
+    # True while Chess.com still lists the game as current. Flipping to False is
+    # what makes the game visible in the app and eligible for analysis.
+    is_active = models.BooleanField(default=True)
 
     class Result(models.TextChoices):
         WIN = "win", "Win"
@@ -88,9 +92,16 @@ MAX_ANALYSIS_ATTEMPTS = 3
 class CoachSuggestion(models.Model):
     """The coach's analysis for one position: at most ONE per (user, game_id, fen).
 
-    The FEN identifies the analysed position (the move-to-play), so re-analysing the
-    same position overwrites the existing row — every move keeps a single, latest
-    analysis rather than an ever-growing pile of duplicates.
+    The FEN identifies the analysed position — the one the player faced *before*
+    the move being reviewed — so re-analysing the same position overwrites the
+    existing row, and every move keeps a single, latest analysis rather than an
+    ever-growing pile of duplicates.
+
+    Rows are only ever created for moves the user actually played, and only once
+    the game is over (`services.analysis.enqueue_game_analysis`, driven by
+    `services.scheduler.enqueue_finished_game_analyses`). Older rows written for a
+    position that was never played still exist; they are simply never rendered,
+    because the templates join suggestions onto the plies in the PGN.
     """
 
     user = models.ForeignKey(
@@ -108,9 +119,9 @@ class CoachSuggestion(models.Model):
         DONE = "done", "Done"  # analysis computed and persisted
         FAILED = "failed", "Failed"  # gave up after MAX_ANALYSIS_ATTEMPTS
 
-    # The row doubles as the in-flight lock: the scheduler creates it PENDING (via
-    # get_or_create on the unique key) and only enqueues when it was just created,
-    # so a position under analysis is not re-enqueued on every poll tick.
+    # The row doubles as the in-flight lock: the enqueue path creates it PENDING
+    # (via get_or_create on the unique key) and only enqueues when it was just
+    # created, so a position under analysis is not re-enqueued on the next scan.
     #
     # PENDING and RUNNING are kept apart because they fail differently. A PENDING
     # row is just waiting its turn on the broker — a whole-game backfill can leave
