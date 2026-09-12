@@ -1,12 +1,9 @@
 {% comment %}
-  The coach-card body (inside #gr-coach). Driven by `coach.mode`; also returned on
-  its own by the analyze endpoint, so the pending states self-poll via htmx until
-  the background analysis is done. When rendered standalone (`oob`), it also carries
-  the eval bar, the board arrows, the analysis-history timeline and the moves grid
-  out-of-band, so a freshly-arrived analysis updates the board, gets its history
-  slot and badges the move without a full #gr-view re-render.
+  The coach-card body. Driven by `coach.mode`, and read-only: analysis is asked
+  for once, for the whole game, by the controls below it in the same column, so
+  no state here carries a button of its own. The card only ever renders as part
+  of the position view — there is no endpoint that returns it alone.
 {% endcomment %}
-{% if oob %}{% include "partials/_evalfill.html" %}{% include "partials/_arrows_svg.html" %}{% include "partials/history_list.html" %}{% include "partials/moves_grid.html" %}{% endif %}
 {% if coach.mode == "start" %}
 <div class="coach__placeholder">
   <span class="gr-glyph">&#9818;</span>
@@ -23,19 +20,17 @@
 {% elif coach.mode == "unanalyzed" %}
 <div class="coach__placeholder">
   <span class="gr-glyph gr-glyph--sm">&#9822;</span>
-  <p>No suggestion requested for <b>{{ coach.san }}</b>. You can ask the coach for one.</p>
-  <button type="button" class="btn btn--accent btn--sm"
-          hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
-    <i class="fa-solid fa-wand-magic-sparkles"></i> Request suggestion
-  </button>
+  <p>No suggestion for <b>{{ coach.san }}</b> yet. <b>Analyse this game</b>, below, covers every move you played.</p>
 </div>
 
 {% elif coach.mode == "pending" %}
-<div hx-get="{% url 'analyze_position' id %}?sel={{ sel }}" hx-trigger="every 2s" hx-target="#gr-coach" hx-swap="innerHTML">
-  <div class="coach__placeholder">
-    <span class="spinner"></span>
-    <p>Analysing <b>{{ coach.san }}</b> in the background… the suggestion will appear shortly.</p>
-  </div>
+{% comment %}
+  The card no longer waits for the answer to arrive — the page does not poll —
+  so it must not promise one is coming: it says where to press instead.
+{% endcomment %}
+<div class="coach__placeholder">
+  <span class="spinner"></span>
+  <p>Analysing <b>{{ coach.san }}</b> in the background. Press <b>Refresh</b> to see whether it has landed.</p>
 </div>
 
 {% elif coach.mode == "failed" %}
@@ -43,10 +38,12 @@
   <span class="gr-glyph gr-glyph--sm">&#9888;</span>
   <p>The coach couldn&rsquo;t analyse {% if coach.san %}<b>{{ coach.san }}</b>{% else %}this position{% endif %}.</p>
   {% if coach.reason %}<p class="coach__summary">{{ coach.reason }}</p>{% endif %}
-  <button type="button" class="btn btn--accent btn--sm"
-          hx-post="{% url 'analyze_position' id %}?sel={{ sel }}" hx-target="#gr-coach" hx-swap="innerHTML">
-    <i class="fa-solid fa-rotate-right"></i> Try again
-  </button>
+  {% comment %}
+    No retry of its own: `enqueue_game_analysis` queues a FAILED row again on the
+    plain press, so the whole-game button below is the way back — and a failed
+    move keeps the game off "complete", which is what leaves that button there.
+  {% endcomment %}
+  <p class="coach__summary">Press <b>Analyse this game</b> to try it again.</p>
 </div>
 
 {% elif coach.mode == "analyzed" %}

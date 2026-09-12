@@ -15,6 +15,10 @@ makes the ``analyze_game`` management command safe to re-run. Reads the stored
 Idempotence is also what makes a *re-analysis* need saying explicitly: ``force``
 queues every move again and overwrites the analyses already on record, which is
 the only way to get a second opinion out of a game the coach has finished with.
+
+The one move the plain call does *not* skip is a move the coach gave up on: a
+``FAILED`` row is reset and queued again without ``force``. Nothing else would
+ever pick it up, and there is no analysis on record to protect.
 """
 
 from __future__ import annotations
@@ -62,8 +66,8 @@ def reset_for_reanalysis(row: CoachSuggestion) -> CoachSuggestion:
     latter is bounded — a worker still running on the old row finishes and writes
     a result the new run then overwrites.
 
-    Shared with ``views.analyze_position``, whose per-move retry resets exactly
-    the same fields.
+    The only caller is ``enqueue_game_analysis``, on the two moves it does not
+    skip: every move under ``force``, and a ``FAILED`` move either way.
     """
     row.status = CoachSuggestion.Status.PENDING
     row.attempts = 0
@@ -85,6 +89,11 @@ def enqueue_game_analysis(user, game_id: str, force: bool = False):
     and ``get_or_create`` on ``(user, game_id, fen)`` leaves an existing row
     alone. That is what makes the button and the management command safe to press
     twice.
+
+    A ``FAILED`` row is the exception, queued again without ``force``: it holds no
+    analysis to protect, and since a failed ply never counts as analysed, the
+    page keeps offering the plain button rather than the forced re-run — so
+    without this the move could never be retried at all.
 
     ``force=True`` is the "Re-analyse this game" path: every move is queued again,
     existing rows reset in place by ``reset_for_reanalysis``. They are reset and
@@ -111,7 +120,11 @@ def enqueue_game_analysis(user, game_id: str, force: bool = False):
         row = existing_rows.get((move_no, board_utils.active_color(fen)))
 
         if row is not None:
-            if not force:
+            # FAILED is the one state the idempotent skip must not preserve.
+            # Nothing else re-queues it — the per-move retry is gone — and a
+            # failed ply keeps `analysis_complete` False, so the page never
+            # offers the forced re-run either: the move would be a dead end.
+            if not force and row.status != CoachSuggestion.Status.FAILED:
                 continue
             reset_for_reanalysis(row)
             fen = row.fen  # the spelling the row is keyed on, so the worker claims it

@@ -138,8 +138,92 @@ class TestEnqueueGameAnalysis:
 
         assert result["enqueued"] == 2  # both of White's moves are untouched
 
+    def test_a_failed_row_is_requeued_without_force(self, mock_task, user):
+        """A move the coach gave up on is the one row the skip must not keep.
+
+        It holds no analysis to protect, and a failed ply never counts as
+        analysed — so the page goes on offering the plain button rather than the
+        forced re-run, and without this the move could never be retried."""
+        _game(user)
+        fen = _white_fens()[0]
+        row = CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=fen,
+            move_no=board_utils.fullmove_number(fen),
+            status=CoachSuggestion.Status.FAILED,
+            attempts=3,
+            analysis="Error during Stockfish analysis: boom",
+        )
+
+        result = enqueue_game_analysis(user, "g1")
+
+        assert result["enqueued"] == 2  # the failed move and the un-analysed one
+        row.refresh_from_db()
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.attempts == 0
+        assert row.analysis == ""
+
+    def test_a_failed_row_is_requeued_under_its_own_fen(self, mock_task, user):
+        """The retry must land on the row, not beside it.
+
+        A row left by the app's earlier live path holds Chess.com's spelling of
+        the position; queuing `fen_before` instead would create a second row for
+        the same ply, and the two would compete for one slot in `annotate_moves`."""
+        _game(user)
+        first = _white_fens()[0]
+        fields = first.split(" ")
+        fields[4] = "7"
+        other_spelling = " ".join(fields)
+        assert other_spelling != first
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=other_spelling,
+            move_no=board_utils.fullmove_number(first),
+            status=CoachSuggestion.Status.FAILED,
+            analysis="boom",
+        )
+
+        enqueue_game_analysis(user, "g1")
+
+        assert CoachSuggestion.objects.filter(user=user, game_id="g1").count() == 2
+        queued = [call.args[2] for call in mock_task.delay.call_args_list]
+        assert other_spelling in queued
+        assert first not in queued
+
+    def test_an_analysed_row_survives_a_failed_neighbour(self, mock_task, user):
+        """Retrying the failed move must not take the good analyses with it."""
+        _game(user)
+        first, second = _white_fens()
+        done = CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=first,
+            move_no=board_utils.fullmove_number(first),
+            status=CoachSuggestion.Status.DONE,
+            best_move_san="e4",
+            analysis="a good line",
+        )
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=second,
+            move_no=board_utils.fullmove_number(second),
+            status=CoachSuggestion.Status.FAILED,
+            analysis="boom",
+        )
+
+        result = enqueue_game_analysis(user, "g1")
+
+        assert result["enqueued"] == 1
+        done.refresh_from_db()
+        assert done.status == CoachSuggestion.Status.DONE
+        assert done.analysis == "a good line"
+
     def test_force_re_enqueues_an_already_analysed_move(self, mock_task, user):
-        """`force` is the whole-game equivalent of the per-move "Try again"."""
+        """`force` is what asks for a second opinion on a move already analysed,
+        the one thing the idempotent call will not do."""
         _game(user)
         fen = _white_fens()[0]
         row = CoachSuggestion.objects.create(

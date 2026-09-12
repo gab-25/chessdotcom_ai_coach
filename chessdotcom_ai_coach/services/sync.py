@@ -11,10 +11,10 @@ Two entry points, and they deliberately run in different places:
   Celery worker (`tasks.sync_user_task`). The import is slow IO (one HTTP request
   per archive month), so it must not happen inside the request.
 * `recover_stuck_analyses` — runs the two recovery sweeps *inline* in the web
-  process. They are cheap (one indexed query, one Redis `LLEN`), and more to the
-  point `requeue_stale_analyses` exists to rescue analyses from a wedged worker:
-  queued behind that same worker it would be unable to run in exactly the case it
-  was written for.
+  process, from the detail page's Refresh button. They are cheap (one indexed
+  query, one Redis `LLEN`), and more to the point `requeue_stale_analyses` exists
+  to rescue analyses from a wedged worker: queued behind that same worker it
+  would be unable to run in exactly the case it was written for.
 
 **Nothing here enqueues analysis of its own accord.** A full archive is thousands
 of games at dozens of analyses each, which no worker is going to finish, so the
@@ -65,10 +65,12 @@ TASK_QUEUE_NAME = "celery"
 # clock, and merely opening a page no longer costs a fetch either.
 SYNC_COOLDOWN = timedelta(seconds=settings.SYNC_COOLDOWN_SECONDS)
 
-# How often the recovery sweeps may run in one web process. The coach card polls
-# every 2s, so this is purely about keeping the queue-depth read off the hot
-# path: the sweeps only act on rows RUNNING past ANALYSIS_TIMEOUT or on an empty
-# queue, so running them less often costs nothing but a few seconds of latency.
+# How often the recovery sweeps may run in one web process. They hang off the
+# detail page's Refresh button, which a waiting user can press as fast as they
+# like, and each run costs a Redis `LLEN`. The throttle is per process rather
+# than per user, so a refresh inside the interval can sweep nothing at all — the
+# cost of that is one more press, since the sweeps only act on rows RUNNING past
+# ANALYSIS_TIMEOUT or on an empty queue, neither of which goes away on its own.
 RECOVERY_INTERVAL = timedelta(seconds=30)
 
 # When the sweeps last ran in *this* process. Deliberately not shared across
@@ -246,8 +248,8 @@ def requeue_stale_analyses(user=None) -> int:
 
     The `CoachSuggestion` row doubles as the in-flight lock, so a RUNNING row that
     is never completed strands the position: every later `get_or_create` finds it
-    and enqueues nothing, and the coach card spins on its self-poll with no way
-    out. This gives the lock an expiry.
+    and enqueues nothing, and the page goes on reporting an analysis in progress
+    however often it is refreshed. This gives the lock an expiry.
 
     Only RUNNING rows are swept. A PENDING row is merely queued — it can sit there
     far longer than an analysis takes when a whole-game scan is draining — and is
@@ -367,14 +369,14 @@ def requeue_orphaned_analyses(user=None) -> int:
 def recover_stuck_analyses(user) -> int:
     """Run both recovery sweeps for `user`, at most once per `RECOVERY_INTERVAL`.
 
-    Called from the coach card's self-poll, which is the one place a stuck
-    analysis is actually visible: that fragment only renders — and only polls —
-    while a position is pending, so the check runs exactly when something might
-    need rescuing, and a stuck card recovers in seconds rather than waiting out a
-    scheduler tick.
+    Called from the detail page's Refresh button (`views.game_position` with
+    `refresh`), which is the one request that means "show me where the analysis
+    got to" — so the check runs exactly when somebody is waiting on an answer,
+    and a stuck analysis is unstuck by the same press that asks after it, rather
+    than waiting out a scheduler tick. Navigation deliberately does not call it.
 
     Never raises. This sits in front of a fragment render, and a broker that is
-    down must degrade to a card that keeps spinning, not to a 500.
+    down must degrade to a page that shows what the database holds, not to a 500.
     """
     global _last_recovery
 

@@ -9,8 +9,8 @@ enqueued.
 
 The ``user`` fixture links no Chess.com account, so `sync.request_sync` returns
 early and no view here reaches the broker — which matters for ``/games``, the one
-endpoint that still calls it. The other exception is the coach card's poll, which
-runs the recovery sweeps — patched out in `_no_recovery_sweep`.
+endpoint that still calls it. The other exception is the detail page's Refresh
+button, which runs the recovery sweeps — patched out in `_no_recovery_sweep`.
 """
 
 from datetime import timedelta
@@ -45,10 +45,11 @@ def auth_client(client, user):
 
 @pytest.fixture(autouse=True)
 def _no_recovery_sweep():
-    """The coach card's poll runs the recovery sweeps, which read the broker.
+    """The Refresh button runs the recovery sweeps, which read the broker.
 
     They have their own tests in `test_sync.py`; here they would only add a
-    connection attempt to every poll.
+    connection attempt. The mock is handed to the two tests that pin *when* the
+    sweeps run, which is the whole of what the view decides.
     """
     with patch("chessdotcom_ai_coach.views.sync.recover_stuck_analyses") as mock:
         mock.return_value = 0
@@ -449,12 +450,17 @@ class TestGameDetail:
         assert response.status_code == 404
 
     def test_never_polls_for_live_updates(self, auth_client, user):
-        """There is no live poll left: the page is a static review."""
+        """Not one `hx-trigger="every …"` anywhere on the page.
+
+        Progress used to arrive on two timers — the coach card's and the analysis
+        block's — and now arrives when the user presses Refresh. Matching the
+        bare `every ` is what keeps a third one from being added quietly."""
         _make_game(user)
+        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
 
         response = auth_client.get("/game/944768131")
 
-        assert b"every 5s" not in response.content
+        assert b"every " not in response.content
         assert b"/live" not in response.content
 
     def test_orientation_black_when_user_is_black(self, auth_client, user):
@@ -484,24 +490,79 @@ class TestGameDetail:
         assert b'id="gr-view"' in response.content
         assert b"Reviewing" in response.content
 
-    def test_full_render_has_no_out_of_band_swaps(self, auth_client, user):
+    def test_nothing_is_swapped_out_of_band(self, auth_client, user):
+        """One render, one target.
+
+        The eval bar, the arrows, the history and the moves grid used to be
+        swapped out-of-band by the coach card's poll, each needing an id of its
+        own to be aimed at. They are plain parts of #gr-view now, so any
+        `hx-swap-oob` here would mean that plumbing has grown back."""
         _make_game(user)
+        _make_suggestion(user, _ply_fen(2))
 
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
         body = response.content.decode()
 
-        # The arrow overlay, eval bar, analysis history and moves grid are always
-        # present as stable OOB targets, but in a full #gr-view render they are
-        # inline — not out-of-band (that is only for the standalone coach-card
-        # self-poll).
-        assert 'id="gr-arrows"' in body
-        assert 'id="gr-evalfill"' in body
-        assert 'id="gr-history"' in body
-        assert 'id="gr-moves-panel"' in body
-        assert 'id="gr-arrows" hx-swap-oob' not in body
-        assert 'id="gr-evalfill" hx-swap-oob' not in body
-        assert 'id="gr-history" hx-swap-oob' not in body
-        assert 'id="gr-moves-panel" hx-swap-oob' not in body
+        assert "hx-swap-oob" not in body
+        assert body.count('id="gr-view"') == 1
+
+    def test_the_refresh_button_re_reads_the_page(self, auth_client, user):
+        """The page's only way to pick up work the worker has finished."""
+        _make_game(user)
+        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
+
+        body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
+
+        assert "Refresh" in body
+        assert 'hx-get="/game/944768131/view?sel=3&amp;refresh=1"' in body
+        assert 'id="gr-refresh"' in body
+        assert 'hx-target="#gr-view"' in body
+
+    def test_the_refresh_button_survives_every_state(self, auth_client, user):
+        """It is never disabled and never conditional: while an analysis runs it
+        is the only control on the page that does anything."""
+        _make_game(user)
+        states = (
+            [],
+            [(_ply_fen(0), CoachSuggestion.Status.PENDING)],
+            [
+                (_ply_fen(0), CoachSuggestion.Status.DONE),
+                (_ply_fen(2), CoachSuggestion.Status.DONE),
+            ],
+        )
+        for rows in states:
+            CoachSuggestion.objects.all().delete()
+            for fen, status in rows:
+                _make_suggestion(user, fen, status=status)
+
+            body = auth_client.get("/game/944768131").content.decode()
+
+            assert 'id="gr-refresh"' in body, rows
+            button = body.split('id="gr-refresh"')[1].split("</button>")[0]
+            assert "disabled" not in button, rows
+
+    def test_refresh_runs_the_recovery_sweeps(
+        self, auth_client, user, _no_recovery_sweep
+    ):
+        """Refresh is the one request that means "where did the analysis get to",
+        so it is where the stuck-analysis sweeps live now that the card's poll
+        that used to carry them is gone."""
+        _make_game(user)
+
+        auth_client.get("/game/944768131/view", {"sel": "3", "refresh": "1"})
+
+        _no_recovery_sweep.assert_called_once_with(user)
+
+    def test_navigation_does_not_run_the_recovery_sweeps(
+        self, auth_client, user, _no_recovery_sweep
+    ):
+        """The sweeps read the broker's queue depth; the arrow keys must not."""
+        _make_game(user)
+
+        auth_client.get("/game/944768131/view", {"sel": "3"})
+        auth_client.get("/game/944768131")
+
+        _no_recovery_sweep.assert_not_called()
 
     def test_embeds_completed_analysis(self, auth_client, user):
         _make_game(user)
@@ -522,156 +583,6 @@ class TestGameDetail:
 
         assert b"BEST MOVE" in response.content
         assert b"You played the best move" in response.content
-
-
-@pytest.mark.django_db
-@patch("chessdotcom_ai_coach.views.analyze_game_task")
-class TestAnalyzePosition:
-    def test_post_enqueues_for_a_user_move(self, mock_task, auth_client, user):
-        _make_game(user)
-
-        # sel 3 is White's 2nd move (Nf3) — a user move.
-        response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
-
-        assert response.status_code == 200
-        assert b"Analysing" in response.content
-        mock_task.delay.assert_called_once()
-        move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
-        row = CoachSuggestion.objects.get(user=user, game_id="944768131", fen=move_fen)
-        assert row.status == CoachSuggestion.Status.PENDING
-
-    def test_post_re_enqueues_a_row_stuck_in_flight(self, mock_task, auth_client, user):
-        """An in-flight row is skipped by every later `get_or_create`, so an explicit
-        click has to break the lock rather than wait out `sync.ANALYSIS_TIMEOUT`."""
-        _make_game(user)
-        row = _make_suggestion(
-            user, _ply_fen(2), status=CoachSuggestion.Status.RUNNING, attempts=3
-        )
-
-        response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
-
-        assert response.status_code == 200
-        mock_task.delay.assert_called_once()
-        row.refresh_from_db()
-        assert row.status == CoachSuggestion.Status.PENDING
-        assert row.attempts == 0  # the user's retry isn't spent by earlier failures
-        assert CoachSuggestion.objects.filter(user=user, game_id="944768131").count() == 1
-
-    def test_post_re_analyses_a_failed_row(self, mock_task, auth_client, user):
-        """A retired position must not be a dead end."""
-        _make_game(user)
-        row = _make_suggestion(
-            user,
-            _ply_fen(2),
-            status=CoachSuggestion.Status.FAILED,
-            eval_cp=None,
-            best_move_san=None,
-            best_move_uci=None,
-            analysis="did not complete",
-        )
-
-        auth_client.post("/game/944768131/analyze", {"sel": "3"})
-
-        mock_task.delay.assert_called_once()
-        row.refresh_from_db()
-        assert row.status == CoachSuggestion.Status.PENDING
-        assert row.analysis == ""
-
-    def test_post_is_noop_for_opponent_move(self, mock_task, auth_client, user):
-        _make_game(user)
-
-        # sel 2 is Black's move (e5) — the coach only analyses the user's moves.
-        response = auth_client.post("/game/944768131/analyze", {"sel": "2"})
-
-        assert response.status_code == 200
-        mock_task.delay.assert_not_called()
-        assert CoachSuggestion.objects.count() == 0
-
-    def test_get_returns_the_done_card(self, mock_task, auth_client, user):
-        _make_game(user)
-        move_fen = board_utils.moves_from_pgn(PGN)[2]["fen_before"]
-        CoachSuggestion.objects.create(
-            user=user,
-            game_id="944768131",
-            fen=move_fen,
-            status=CoachSuggestion.Status.DONE,
-            eval_text="+0.3",
-            eval_cp=0.3,
-            best_move_san="Nf3",
-            best_move_uci="g1f3",
-            analysis="Develop the knight.",
-        )
-
-        response = auth_client.get("/game/944768131/analyze", {"sel": "3"})
-
-        assert b"BEST MOVE" in response.content
-        assert b"Develop the knight." in response.content
-        mock_task.delay.assert_not_called()
-
-    def test_get_syncs_board_out_of_band(self, mock_task, auth_client, user):
-        _make_game(user)
-        # sel 3 is White's 2nd move (Nf3); the coach would have played Bb5.
-        _make_suggestion(
-            user,
-            _ply_fen(2),
-            eval_text="+0.4",
-            eval_cp=0.4,
-            best_move_san="Bb5",
-            best_move_uci="f1b5",
-            analysis="Pin the knight.",
-        )
-
-        response = auth_client.get("/game/944768131/analyze", {"sel": "3"})
-        body = response.content.decode()
-
-        # The card body updated…
-        assert "BEST MOVE" in body
-        # …and the board arrows + eval bar ride along out-of-band so the board
-        # updates without a full #gr-view re-render.
-        assert 'id="gr-arrows"' in body
-        assert 'id="gr-evalfill"' in body
-        assert 'hx-swap-oob="true"' in body
-        assert 'stroke="#b78e54"' in body  # brass recommended-move arrow
-
-    def test_get_adds_the_history_slot_out_of_band(self, mock_task, auth_client, user):
-        _make_game(user)
-        # sel 3 is White's 2nd move (Nf3) — the coach recommended it too.
-        _make_suggestion(user, _ply_fen(2))
-
-        response = auth_client.get("/game/944768131/analyze", {"sel": "3"})
-        body = response.content.decode()
-
-        # The freshly-arrived analysis gets its slot in the timeline and badges
-        # the move in the grid, both out-of-band — no full #gr-view re-render.
-        assert 'id="gr-history" hx-swap-oob="true"' in body
-        assert "Analysis history" in body
-        assert "Develop the knight." in body
-        assert 'class="gr-card__count">1<' in body
-        assert 'id="gr-moves-panel" hx-swap-oob="true"' in body
-        assert "gr-badge--followed" in body
-
-    def test_post_badges_the_move_as_pending_out_of_band(
-        self, mock_task, auth_client, user
-    ):
-        _make_game(user)
-
-        response = auth_client.post("/game/944768131/analyze", {"sel": "3"})
-        body = response.content.decode()
-
-        # Enqueueing marks the move pending in the grid straight away; nothing
-        # is done yet, so the history stays empty.
-        assert 'id="gr-moves-panel" hx-swap-oob="true"' in body
-        assert "gr-badge--pending" in body
-        assert 'id="gr-history" hx-swap-oob="true"' in body
-        assert 'class="gr-card__count">0<' in body
-
-    def test_analysis_never_calls_chess_com(self, mock_task, auth_client, user):
-        _make_game(user)
-
-        with patch("chessdotcom_ai_coach.services.chess_client.Client") as mock_client:
-            auth_client.post("/game/944768131/analyze", {"sel": "3"})
-
-        mock_client.assert_not_called()
 
 
 @pytest.mark.django_db
@@ -728,7 +639,9 @@ class TestCoachCardModes:
         assert response.context["coach"]["mode"] == "opponent"
         assert b"The coach only analyses your moves" in response.content
 
-    def test_unanalyzed_shows_request_button(self, auth_client, user):
+    def test_unanalyzed_points_at_the_whole_game_control(self, auth_client, user):
+        """The card asks for nothing itself: analysis is requested once, for the
+        whole game, by the block below it in the same column."""
         _make_game(user)
 
         # sel 3 is White's Nf3 (a user move) with no suggestion yet.
@@ -736,11 +649,12 @@ class TestCoachCardModes:
         body = response.content.decode()
 
         assert response.context["coach"]["mode"] == "unanalyzed"
-        assert "Request suggestion" in body
-        assert 'hx-post="/game/944768131/analyze?sel=3"' in body
-        assert 'hx-target="#gr-coach"' in body
+        assert "No suggestion for <b>Nf3</b> yet" in body
+        assert "Analyse this game" in body
 
-    def test_pending_self_polls(self, auth_client, user):
+    def test_pending_waits_to_be_refreshed(self, auth_client, user):
+        """It used to promise the suggestion would "appear shortly", which a page
+        that no longer polls cannot keep: it says where to press instead."""
         _make_game(user)
         _make_suggestion(
             user, _ply_fen(2), status=CoachSuggestion.Status.PENDING
@@ -751,8 +665,8 @@ class TestCoachCardModes:
 
         assert response.context["coach"]["mode"] == "pending"
         assert "spinner" in body
-        assert 'hx-trigger="every 2s"' in body
-        assert 'hx-get="/game/944768131/analyze?sel=3"' in body
+        assert "Press <b>Refresh</b>" in body
+        assert "every " not in body
 
     def test_running_renders_as_pending(self, auth_client, user):
         """RUNNING and PENDING are worth telling apart to the sweeps (only a
@@ -764,11 +678,11 @@ class TestCoachCardModes:
         response = auth_client.get("/game/944768131/view", {"sel": "3"})
 
         assert response.context["coach"]["mode"] == "pending"
-        assert 'hx-trigger="every 2s"' in response.content.decode()
+        assert "Analysing <b>Nf3</b>" in response.content.decode()
 
     def test_pending_does_not_offer_a_retry(self, auth_client, user):
-        """The recovery sweep unsticks an analysis on its own; a button
-        here would only invite breaking a lock on work that is still running."""
+        """The recovery sweep unsticks an analysis on its own, and Refresh is what
+        runs it — nothing here invites breaking a lock on work still running."""
         _make_game(user)
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
 
@@ -776,7 +690,7 @@ class TestCoachCardModes:
 
         assert "Retry" not in body
 
-    def test_failed_analysis_offers_a_retry(self, auth_client, user):
+    def test_failed_analysis_explains_itself(self, auth_client, user):
         _make_game(user)
         _make_suggestion(
             user,
@@ -794,7 +708,9 @@ class TestCoachCardModes:
         assert response.context["coach"]["mode"] == "failed"
         assert "t analyse" in body  # "The coach couldn&rsquo;t analyse Nf3."
         assert "Error during Stockfish analysis: boom" in body
-        assert "Try again" in body
+        # No retry of its own: the whole-game button re-queues a FAILED row
+        # without `force`, and a failed move is what keeps that button on screen.
+        assert "Analyse this game" in body
         # A failure is not a suggestion: it must not pad the analysis history.
         assert response.context["history_count"] == 0
 
@@ -816,7 +732,7 @@ class TestCoachCardModes:
         body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
 
         assert "did not complete" in body
-        assert "Try again" in body
+        assert "Analyse this game" in body
 
     def test_terminal_position_is_not_treated_as_a_failure(self, auth_client, user):
         """Stockfish has no move to suggest at mate/stalemate, but it still scores
@@ -980,7 +896,9 @@ class TestNoFutureMoveSuggestion:
         body = response.content.decode()
 
         assert "gr-badge--pending" not in body
-        assert 'hx-trigger="every 2s"' not in body
+        # It has no ply to attach to, so it must not make the game look busy.
+        assert response.context["analysis_pending"] == 0
+        assert "Analysis in progress" not in body
 
     def test_the_card_at_the_end_reviews_the_last_move_played(
         self, auth_client, user
@@ -1237,68 +1155,97 @@ class TestAnalyzeWholeGame:
         assert response.status_code == 404
         mock_task.delay.assert_not_called()
 
-    def test_progress_is_shown_on_the_page(self, mock_task, auth_client, user):
+    def test_a_part_analysed_game_still_offers_the_button(
+        self, mock_task, auth_client, user
+    ):
+        """The counts stay in the context — they pick the branch — but the page
+        says only which state it is in."""
         _make_game(user)
         _make_suggestion(user, _ply_fen(0))
 
         response = auth_client.get("/game/944768131")
+        body = response.content.decode()
 
         assert response.context["analysis_total"] == 2
         assert response.context["analysis_done"] == 1
         assert response.context["analysis_complete"] is False
-        assert b"Analyse this game" in response.content
-        assert b'hx-select="#gr-analyse"' not in response.content
+        assert "Not analysed yet" in body
+        assert "Analyse this game" in body
 
-    def test_progress_polls_itself_while_moves_are_queued(
+    def test_an_analysis_in_progress_is_shown_without_counters(
         self, mock_task, auth_client, user
     ):
-        """The progress block is the only thing that knows the queue is draining.
-
-        It is not among the fragments the coach card swaps out-of-band, and the
-        card does not poll at all on an un-analysed ply, so without a poll of its
-        own the counter would sit frozen until the user navigated."""
+        """A count that moves only when you press a button reads as a stalled
+        count, so the page reports the state and nothing else."""
         _make_game(user)
         _make_suggestion(user, _ply_fen(0))
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
 
         response = auth_client.get("/game/944768131")
+        body = response.content.decode()
 
         assert response.context["analysis_pending"] == 1
-        assert b'id="gr-analyse"' in response.content
-        assert b'hx-select="#gr-analyse"' in response.content
+        assert "Analysis in progress" in body
+        assert "spinner" in body
+        assert "of 2" not in body
+        assert "queued" not in body
         # No control to press while the queue drains — pressing it would queue
-        # nothing anyway, since every ply already has a row.
-        assert b"Analyse this game" not in response.content
-        assert b"Analysing" in response.content
+        # nothing anyway, since every ply already has a row. Refresh is beside it.
+        assert "Analyse this game" not in body
+        assert "Analysing&hellip;" in body
 
-    def test_the_progress_poll_also_refreshes_the_history_and_the_grid(
-        self, mock_task, auth_client, user
-    ):
-        """The counter must not run ahead of the timeline it is counting.
-
-        `hx-select` swaps the progress block alone, so without `hx-select-oob` the
-        analysis history and the move badges would sit at their old state while
-        the counter climbed — and the coach card, which owns those fragments'
-        out-of-band swaps, does not poll unless the *selected* ply is in flight."""
-        _make_game(user)
-        _make_suggestion(user, _ply_fen(0))
-        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
-
-        content = auth_client.get("/game/944768131").content
-
-        assert b'hx-select-oob="#gr-history,#gr-moves-panel,#gr-evalfill"' in content
-
-    def test_progress_stops_polling_once_the_queue_is_empty(
+    def test_a_complete_analysis_is_shown_without_counters(
         self, mock_task, auth_client, user
     ):
         _make_game(user)
         _make_suggestion(user, _ply_fen(0))
         _make_suggestion(user, _ply_fen(2))
 
-        response = auth_client.get("/game/944768131")
+        body = auth_client.get("/game/944768131").content.decode()
 
-        assert response.context["analysis_pending"] == 0
-        assert b'hx-select="#gr-analyse"' not in response.content
+        assert "Analysis complete" in body
+        assert "of 2" not in body
+
+    def test_a_failed_move_is_re_queued_without_force(
+        self, mock_task, auth_client, user
+    ):
+        """The per-move retry is gone, so the plain button has to be the way back:
+        a failed ply keeps the game off "complete", which is what leaves that
+        button — rather than the forced re-run — on the page."""
+        _make_game(user)
+        done = _make_suggestion(user, _ply_fen(0), analysis="a good line")
+        failed = _make_suggestion(
+            user,
+            _ply_fen(2),
+            status=CoachSuggestion.Status.FAILED,
+            eval_cp=None,
+            best_move_san=None,
+            best_move_uci=None,
+            analysis="boom",
+        )
+
+        response = auth_client.post("/game/944768131/analyze-game")
+
+        assert response.status_code == 200
+        assert mock_task.delay.call_count == 1
+        failed.refresh_from_db()
+        assert failed.status == CoachSuggestion.Status.PENDING
+        assert failed.attempts == 0
+        assert failed.analysis == ""
+        # And the good analysis beside it is untouched: this is a retry, not a
+        # re-run of the whole game.
+        done.refresh_from_db()
+        assert done.status == CoachSuggestion.Status.DONE
+        assert done.analysis == "a good line"
+
+    def test_analysis_never_calls_chess_com(self, mock_task, auth_client, user):
+        """Everything the analysis needs is in the stored game."""
+        _make_game(user)
+
+        with patch("chessdotcom_ai_coach.services.chess_client.Client") as mock_client:
+            auth_client.post("/game/944768131/analyze-game")
+
+        mock_client.assert_not_called()
 
     def test_a_finished_game_offers_a_re_analysis(self, mock_task, auth_client, user):
         """A fully analysed game is not a dead end: the button becomes a re-run."""
@@ -1309,6 +1256,7 @@ class TestAnalyzeWholeGame:
         response = auth_client.get("/game/944768131")
 
         assert response.context["analysis_complete"] is True
+        assert b"Analysis complete" in response.content
         assert b"Re-analyse this game" in response.content
         assert b"force=1" in response.content
 
@@ -1374,7 +1322,9 @@ class TestTemplateSyntaxNeverLeaks:
 
         self._assert_clean(auth_client.get("/game/944768131"))
         self._assert_clean(auth_client.get("/game/944768131/view", {"sel": "3"}))
-        self._assert_clean(auth_client.get("/game/944768131/analyze", {"sel": "3"}))
+        self._assert_clean(
+            auth_client.get("/game/944768131/view", {"sel": "3", "refresh": "1"})
+        )
 
     def test_error_page_is_clean(self, auth_client, user):
         _make_game(user, is_active=True)

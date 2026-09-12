@@ -81,7 +81,7 @@ inventing their own.
 | --- | --- |
 | **Stockfish** | `chess.engine.popen_uci` — returns `(transport, engine)`, so the stub returns a pair of mocks with `engine.play` as an `AsyncMock`. No subprocess is ever spawned. |
 | **LLM** | `AsyncOpenAI` — the response shape the code reads is `response.choices[0].message.content`. Making the call raise exercises the Stockfish-only fallback branch. |
-| **Celery** | `analyze_game_task` at its *import site* — `chessdotcom_ai_coach.services.sync.analyze_game_task`, `...services.analysis.analyze_game_task`, `chessdotcom_ai_coach.views.analyze_game_task`. Tests assert on `.delay` calls; nothing is ever enqueued. `sync_user_task` is the exception: `request_sync` imports it *inside the function* to break a cycle, so it is patched at `chessdotcom_ai_coach.tasks.sync_user_task`. |
+| **Celery** | `analyze_game_task` at its *import site* — `chessdotcom_ai_coach.services.sync.analyze_game_task` and `...services.analysis.analyze_game_task`. Tests assert on `.delay` calls; nothing is ever enqueued. `sync_user_task` is the exception: `request_sync` imports it *inside the function* to break a cycle, so it is patched at `chessdotcom_ai_coach.tasks.sync_user_task`. |
 
 Chess.com is patched the same way, at the import site:
 `chessdotcom_ai_coach.services.sync.Client`.
@@ -89,7 +89,8 @@ Chess.com is patched the same way, at the import site:
 Two seams are stateful and reset by autouse fixtures: `sync._last_recovery` (the
 recovery throttle is a module global, so it outlives a test) and
 `views.sync.recover_stuck_analyses` (patched out wholesale in `test_views.py`, so
-the coach card's poll doesn't reach for the broker).
+the Refresh button doesn't reach for the broker — two tests take the mock as an
+argument to pin which requests run the sweeps).
 
 Note the pattern: **patch where the name is used, not where it's defined.** This
 is also why [`tasks.py`](../chessdotcom_ai_coach/tasks.py) was kept as a thin

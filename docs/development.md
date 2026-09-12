@@ -71,8 +71,7 @@ From [`urls.py`](../chessdotcom_ai_coach/urls.py):
 | `/` | `home` | Full page — a page of the finished games available to review |
 | `/games` | `game_list` | **HTMX fragment** — the game grid, for the Sync button, the time-control filter (`?time_class=`) and the pager (`?page=`) |
 | `/game/<id>` | `game_detail` | Full page — the review board. **404** for a game still in progress |
-| `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N` |
-| `/game/<id>/analyze` | `analyze_position` | **HTMX fragment** — `GET` is the pending self-poll (2s), `POST` requests analysis of one move |
+| `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N`; also the **Refresh** button (`?refresh=1`), which additionally runs the stuck-analysis sweeps |
 | `/game/<id>/analyze-game` | `analyze_game` | **HTMX fragment** — `POST` queues every move you played in the game |
 | `/login`, `/logout` | Django `LoginView`, `logout_view` | Session auth |
 | `/admin/` | Django admin | Where you link the Chess.com account |
@@ -103,8 +102,8 @@ uv run python manage.py analyze_game <game_id> [--user <username>]
 ```
 
 The command-line half of the **Analyse this game** button: it enqueues analysis
-for **every** move you played in the game. Also the way to re-run a game whose
-analyses were retired as `FAILED`.
+for **every** move you played in the game. A move retired as `FAILED` is queued
+again either way — `--force` is for re-running moves that already *succeeded*.
 
 It reads the stored game (no Chess.com call) and is idempotent: moves already
 analysed or queued are skipped, so re-running is safe. `--user` is only needed
@@ -133,8 +132,8 @@ follows consistently, not enforced rules.
 - `from __future__ import annotations` plus `typing` in the newer service
   modules; `TypedDict` for structured returns crossing a boundary.
 - **Templates carry `{% comment %}` blocks** explaining their swap semantics —
-  worth reading before changing `partials/coach_card.html` or
-  `partials/position.html`, which use `hx-swap-oob`.
+  worth reading before changing `partials/position.html`, which is swapped whole,
+  or `partials/game_list.html`, which uses `hx-swap-oob`.
 - **Commit style:** short imperative subject with the PR number, e.g.
   `Analyse every move you played — on a schedule, not once (#44)`.
   Comments, commit messages and PR descriptions are written in English.
@@ -152,11 +151,11 @@ templates/
     ├── game_list.html     # the home Sync target
     ├── position.html      # the whole review view (#gr-view)
     ├── board.html         # 64 cells
-    ├── coach_card.html    # coach panel + the 2s pending self-poll
+    ├── coach_card.html    # coach panel — read-only, no controls of its own
     ├── moves_grid.html    # move list — played moves only
     ├── history_list.html  # analysis timeline
-    ├── _evalfill.html     # eval bar (swapped out-of-band)
-    └── _arrows_svg.html   # SVG arrow overlay (swapped out-of-band)
+    ├── _evalfill.html     # eval bar
+    └── _arrows_svg.html   # SVG arrow overlay
 ```
 
 Styling is hand-written CSS in [`theme/static/css/styles.css`](../theme/static/css/styles.css)

@@ -6,7 +6,7 @@ scheduler.
   same import, and hands it to the worker.
 * `requeue_stale_analyses` / `requeue_orphaned_analyses` — reviving analyses whose
   worker, or whose broker message, never came back, and `recover_stuck_analyses`
-  which throttles them on the coach card's poll.
+  which throttles them behind the detail page's Refresh button.
 
 **Nothing here enqueues analysis** — that is on demand, from the detail page.
 `TestSyncUser.test_never_enqueues_analysis` pins it down.
@@ -348,7 +348,7 @@ class TestRequestSync:
 
 @pytest.mark.django_db
 class TestRecoverStuckAnalyses:
-    """The throttle in front of the two sweeps, called from the coach card poll."""
+    """The throttle in front of the two sweeps, called from the Refresh button."""
 
     @pytest.fixture(autouse=True)
     def _user(self, django_user_model):
@@ -369,7 +369,8 @@ class TestRecoverStuckAnalyses:
 
     @patch("chessdotcom_ai_coach.services.sync.requeue_stale_analyses")
     def test_a_second_call_inside_the_interval_is_a_no_op(self, mock_stale):
-        """The card polls every 2s; the sweeps must not follow it."""
+        """A waiting user can press Refresh as fast as they like; each sweep
+        reads the broker's queue depth, so they must not follow every press."""
         mock_stale.return_value = 0
         recover_stuck_analyses(self.user)
         mock_stale.reset_mock()
@@ -378,9 +379,9 @@ class TestRecoverStuckAnalyses:
         mock_stale.assert_not_called()
 
     @patch("chessdotcom_ai_coach.services.sync.requeue_stale_analyses")
-    def test_a_sweep_failure_never_reaches_the_card(self, mock_stale):
+    def test_a_sweep_failure_never_reaches_the_page(self, mock_stale):
         """This sits in front of a fragment render: a broker outage must cost a
-        card that keeps spinning, not a 500."""
+        page that shows what the database holds, not a 500."""
         mock_stale.side_effect = RuntimeError("broker down")
 
         with patch(

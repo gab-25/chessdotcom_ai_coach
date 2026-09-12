@@ -9,7 +9,6 @@ from .services import analysis as analysis_service
 from .services import board as board_utils
 from .services import game_store
 from .services import sync
-from .tasks import analyze_game_task
 
 _START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
@@ -64,8 +63,8 @@ def _in_flight(row):
     """True while the analysis is queued or running — both render as "pending".
 
     The two are worth distinguishing to the recovery sweeps (only a RUNNING row
-    can time out) but not on the card: either way the answer isn't there yet and
-    the fragment self-polls until it is.
+    can time out) but not on the card: either way the answer isn't there yet, and
+    the page says so in one word until the user presses Refresh.
     """
     return row.status in (
         CoachSuggestion.Status.PENDING,
@@ -77,14 +76,14 @@ def _failed_coach(row, san=""):
     """Card state for a position the coach gave up on.
 
     Rendering a failure through the "analyzed" branch would show an empty
-    recommendation and claim the coach preferred nothing, so it gets its own state —
-    carrying the FEN, so the user can ask for the analysis again rather than being
-    left with a dead card.
+    recommendation and claim the coach preferred nothing, so it gets its own
+    state, saying which move failed and why. The way back is the whole-game
+    button: `analysis.enqueue_game_analysis` re-queues a FAILED row without
+    `force`, so there is nothing for the card itself to offer.
     """
     return {
         "mode": "failed",
         "san": san,
-        "fen": row.fen,
         # A row retired by the recovery sweep carries no prose — it never got far
         # enough to produce any — so say why instead of showing a bare card.
         "reason": row.analysis
@@ -157,12 +156,9 @@ def _position_context(user, game, sel):
     else:
         s = ply["suggestion"]
         if s is None:
-            coach = {"mode": "unanalyzed", "san": ply["san"], "fen": ply["fen_before"]}
+            coach = {"mode": "unanalyzed", "san": ply["san"]}
         elif _in_flight(s):
-            # `s.fen`, not `ply["fen_before"]`: the row was joined on the ply, so it
-            # may hold Chess.com's spelling of this position. Posting its own FEN
-            # makes a later retry hit that row instead of creating a duplicate.
-            coach = {"mode": "pending", "san": ply["san"], "fen": s.fen}
+            coach = {"mode": "pending", "san": ply["san"]}
         elif s.status == CoachSuggestion.Status.FAILED:
             coach = _failed_coach(s, san=ply["san"])
         else:
@@ -204,8 +200,11 @@ def _position_context(user, game, sel):
             }
         )
 
-    # Whole-game analysis progress, for the "Analyse this game" control. Counted
-    # off `moves_view` rather than re-queried: it already holds the per-ply state.
+    # Whole-game analysis state, for the controls in the coach column. Counted off
+    # `moves_view` rather than re-queried: it already holds the per-ply state. The
+    # page shows only which of the three states this is — running, complete, or
+    # neither — never the counts: a number that moves only when you press Refresh
+    # reads as a stalled number.
     analysis_total = sum(1 for m in moves if m["color"] == orientation)
     analysis_done = sum(1 for m in moves_view if m["analyzed"])
     analysis_pending = sum(1 for m in moves_view if m["pending"])
@@ -371,10 +370,25 @@ def game_detail(request, id):
 
 @login_required
 def game_position(request, id):
-    """HTMX fragment: the position view for a given ply (nav / move-click)."""
+    """HTMX fragment: the position view for a ply — navigation, and Refresh.
+
+    `refresh` is the Refresh button naming itself, the way `after_sync` does in
+    `game_list`. The page carries no poll of any kind, so this is the one request
+    whose meaning is "show me where the analysis got to" — which makes it the
+    right place for the recovery sweeps, until now hung off the coach card's own
+    poll. Navigation is left as a pure read: a stuck analysis is not what the
+    arrow keys are about, and the sweeps read the broker's queue depth.
+
+    `recover_stuck_analyses` throttles itself and never raises, so a broker that
+    is down costs a page that stays where it was, not a 500.
+    """
     game, _message = _reviewable_game(request.user, id)
     if game is None:
         return HttpResponse(status=404)
+
+    if request.GET.get("refresh"):
+        sync.recover_stuck_analyses(request.user)
+
     sel = _int(request.GET.get("sel"), 0)
     return render(request, "partials/position.html", _position_context(request.user, game, sel))
 
@@ -392,6 +406,8 @@ def analyze_game(request, id):
     `force` is the other half of that: it is what the "Re-analyse this game"
     button sends, and it asks for every move to be queued again, overwriting the
     analyses already on record. Without it a finished game would be a dead end.
+    A move the coach *failed* on needs no `force` — the service re-queues it on
+    the plain press, which is what keeps that move from being a dead end too.
     """
     game, _message = _reviewable_game(request.user, id)
     if game is None:
@@ -407,64 +423,6 @@ def analyze_game(request, id):
     return render(
         request, "partials/position.html", _position_context(request.user, game, sel)
     )
-
-
-@login_required
-def analyze_position(request, id):
-    """HTMX endpoint: the coach card for a ply, requesting analysis on demand.
-
-    ``POST`` enqueues background analysis for the ply's position (idempotent),
-    reusing the same Celery task; ``GET`` is the pending self-poll. Both return
-    the coach-card fragment for the current state. Analysis is read/enqueued from
-    the stored snapshot, so it never triggers a Chess.com call.
-
-    Only a finished game is accepted. The position is always one the player
-    actually played, because the FEN comes from ``coach["fen"]`` and only the
-    played-ply modes carry one.
-    """
-    game, _message = _reviewable_game(request.user, id)
-    if game is None:
-        return HttpResponse(status=404)
-
-    if request.method == "GET":
-        # The GET is the pending card's self-poll, and that card only renders while
-        # a position is in flight — so this runs exactly when an analysis might be
-        # stuck, and nowhere else. It never raises; a card that keeps spinning is
-        # the worst a broker outage may cost here.
-        sync.recover_stuck_analyses(request.user)
-
-    sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
-    context = _position_context(request.user, game, sel)
-
-    if request.method == "POST":
-        fen = context["coach"].get("fen")
-        if fen:
-            row = CoachSuggestion.objects.filter(
-                user=request.user, game_id=id, fen=fen
-            ).first()
-            if row is None:
-                CoachSuggestion.objects.create(
-                    user=request.user,
-                    game_id=id,
-                    fen=fen,
-                    status=CoachSuggestion.Status.PENDING,
-                    move_no=board_utils.fullmove_number(fen),
-                    eval_text="",
-                    analysis="",
-                )
-            else:
-                # Re-enqueue whatever state the row is in, in-flight ones included:
-                # an explicit click is exactly the signal to break a lock that
-                # `sync.ANALYSIS_TIMEOUT` hasn't expired yet. Shared with the
-                # whole-game re-analysis, which resets the same fields.
-                analysis_service.reset_for_reanalysis(row)
-            analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
-            context = _position_context(request.user, game, sel)
-
-    # Standalone card render: carry the eval bar and board arrows out-of-band so
-    # a freshly-arrived analysis updates the board without a full #gr-view swap.
-    context["oob"] = True
-    return render(request, "partials/coach_card.html", context)
 
 
 def _int(value, default):

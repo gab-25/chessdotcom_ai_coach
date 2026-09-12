@@ -43,7 +43,7 @@ how the worker behaves under restart:
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `sync.requeue_stale_analyses` — run from the pending card's own poll — is the guarantee that actually holds. |
+| `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `sync.requeue_stale_analyses` — run from the detail page's Refresh button — is the guarantee that actually holds. |
 | `CELERY_TASK_REJECT_ON_WORKER_LOST` | `True` | Makes the above cover a worker killed outright (an OOM kill), not just a clean shutdown. |
 | `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. |
 

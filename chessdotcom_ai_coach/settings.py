@@ -152,8 +152,8 @@ CELERY_TASK_ALWAYS_EAGER = False
 # `unacked` set, and kombu only re-delivers them after its visibility timeout
 # (an hour by default). The guarantee that actually holds in that case is
 # app-side — `sync.requeue_stale_analyses` returns any row left RUNNING for
-# `ANALYSIS_TIMEOUT` to the queue, swept from the coach card's own poll. Don't
-# rely on the broker for it.
+# `ANALYSIS_TIMEOUT` to the queue, swept from the detail page's Refresh button.
+# Don't rely on the broker for it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 # One task reserved at a time: an analysis takes seconds to minutes, so

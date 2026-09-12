@@ -1421,6 +1421,14 @@ input {
 .gr-analyse__state .fa-circle-check {
   color: var(--green);
 }
+/* The block is space-between, so the two controls need a box of their own to
+   stay together on the right instead of spreading across the row. */
+.gr-analyse__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 .gr-hist {
   list-style: none;

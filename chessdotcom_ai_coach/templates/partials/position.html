@@ -1,10 +1,11 @@
 {% comment %}
-  The move-by-move "position view" — the whole #gr-view swapped by navigation.
-  Rendered from the stored snapshot of a finished game (no Chess.com call, and no
-  live poll: a game in progress is never shown).
+  The move-by-move "position view" — the whole #gr-view, swapped by navigation,
+  by the analysis controls and by Refresh. Rendered from the stored snapshot of a
+  finished game (no Chess.com call) and from the suggestion rows on record. There
+  is no poll anywhere on this page: every swap is something the user pressed.
 {% endcomment %}
 <div id="gr-view">
-  <div class="game-layout" id="gr-root">
+  <div class="game-layout">
 
     <!-- LEFT: board column -->
     <div>
@@ -62,71 +63,79 @@
           <h3 class="coach__title">Coach suggestion</h3>
           <span class="coach__tag">{{ move_label }}</span>
         </div>
-        <div class="coach__body" id="gr-coach">{% include "partials/coach_card.html" %}</div>
+        <div class="coach__body">{% include "partials/coach_card.html" %}</div>
       </div>
 
       {% comment %}
-        Whole-game analysis. Nothing queues analysis on a schedule — an imported
-        archive is far more games than a worker could ever get through — so this
-        is where it starts. The POST is idempotent (`enqueue_game_analysis` skips
-        what is already queued or done), so a second press costs nothing.
+        Whole-game analysis, and the page's only two controls. Nothing queues
+        analysis on a schedule — an imported archive is far more games than a
+        worker could ever get through — so this is where it starts. The POST is
+        idempotent (`enqueue_game_analysis` skips what is already queued or done),
+        so a second press costs nothing. Once every move is analysed the button
+        turns into a re-run: the same endpoint with `force=1`.
 
-        Once every move is analysed the button turns into a re-run: the same
-        endpoint with `force=1`, which queues every move again and overwrites the
-        analyses on record. That is the one thing the idempotent POST cannot do,
-        and without it a finished game has nothing left to offer.
+        Nothing polls. The state is whatever the database said when this fragment
+        was rendered, and Refresh is how the user asks again — which is also what
+        runs the stuck-analysis sweeps, in `views.game_position`.
 
-        While the queue drains this block polls itself. It has to: the coach card
-        is what normally refreshes the page's fragments, and it does not poll at
-        all unless the *selected* ply is in flight — press "Analyse this game"
-        from the starting position and nothing would ever move.
-
-        `hx-select` picks this block back out of the full position view, and
-        `hx-select-oob` takes with it the three fragments a completed analysis
-        also changes: the history gets its new entry, the grid its badge, the bar
-        its eval. Without them the counter would climb while the timeline it is
-        counting stayed empty. Everything else — board, coach card, nav — is left
-        alone, so the card's own 2s poll is not disturbed and nothing the user is
-        looking at is replaced under them. The replacement markup carries the
-        trigger only while something is still queued, so the poll stops by itself.
+        The state line says which of three things is true and no more: a count
+        that only moves when you press a button reads as a stalled count. The
+        third state — nothing queued, something still un-analysed — is both the
+        game nobody has analysed yet and the game with a move the coach gave up
+        on, and the plain button is the way out of either: the service re-queues
+        a FAILED row without `force`.
       {% endcomment %}
       {% if analysis_total %}
-      <div class="gr-analyse" id="gr-analyse"
-           {% if analysis_pending %}hx-get="{% url 'game_position' id %}?sel={{ sel }}"
-           hx-trigger="every 3s" hx-select="#gr-analyse"
-           hx-select-oob="#gr-history,#gr-moves-panel,#gr-evalfill"
-           hx-target="#gr-analyse" hx-swap="outerHTML"{% endif %}>
+      <div class="gr-analyse">
         <div class="gr-analyse__state">
           {% if analysis_complete %}
-            <i class="fa-solid fa-circle-check"></i> All {{ analysis_total }} of your moves analysed
+            <i class="fa-solid fa-circle-check"></i> Analysis complete
           {% elif analysis_pending %}
-            <span class="spinner"></span> {{ analysis_done }} of {{ analysis_total }} analysed · {{ analysis_pending }} queued
+            <span class="spinner"></span> Analysis in progress
           {% else %}
-            {{ analysis_done }} of {{ analysis_total }} of your moves analysed
+            Not analysed yet
           {% endif %}
         </div>
-        {% if analysis_complete %}
-        <button type="button" class="btn btn--ghost btn--sm"
-                hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
-                hx-target="#gr-view" hx-swap="outerHTML">
-          <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
-        </button>
-        {% elif analysis_pending %}
-        {% comment %}
-          Nothing to press while the queue drains: every remaining ply already has
-          a row, so the POST would queue nothing. The state line beside it carries
-          the spinner and the count.
-        {% endcomment %}
-        <button type="button" class="btn btn--ghost btn--sm" disabled>
-          <i class="fa-solid fa-hourglass-half"></i> Analysing…
-        </button>
-        {% else %}
-        <button type="button" class="btn btn--accent btn--sm"
-                hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
-                hx-target="#gr-view" hx-swap="outerHTML">
-          <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
-        </button>
-        {% endif %}
+        <div class="gr-analyse__actions">
+          {% if analysis_complete %}
+          <button type="button" class="btn btn--ghost btn--sm"
+                  hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
+                  hx-target="#gr-view" hx-swap="outerHTML">
+            <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
+          </button>
+          {% elif analysis_pending %}
+          {% comment %}
+            Nothing to press while the queue drains: every remaining ply already
+            has a row, so the POST would queue nothing. Refresh, beside it, is
+            what the user presses instead.
+          {% endcomment %}
+          <button type="button" class="btn btn--ghost btn--sm" disabled>
+            <i class="fa-solid fa-hourglass-half"></i> Analysing&hellip;
+          </button>
+          {% else %}
+          <button type="button" class="btn btn--accent btn--sm"
+                  hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
+                  hx-target="#gr-view" hx-swap="outerHTML">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
+          </button>
+          {% endif %}
+          {% comment %}
+            Never disabled, unlike the home page's Sync button: that one reports
+            work it queued in a worker, this one only re-reads the database — and
+            while an analysis runs it is the only way to see that it has moved,
+            as well as the only thing that unsticks it.
+
+            It carries `sel`, so the refresh comes back on the move being
+            reviewed, and an id of its own, because htmx re-focuses a replaced
+            element only when it has one — so a keyboard user stays on Refresh.
+          {% endcomment %}
+          <button type="button" class="btn btn--ghost btn--sm" id="gr-refresh"
+                  title="Re-read this page from the database"
+                  hx-get="{% url 'game_position' id %}?sel={{ sel }}&amp;refresh=1"
+                  hx-target="#gr-view" hx-swap="outerHTML">
+            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+          </button>
+        </div>
       </div>
       {% endif %}
 

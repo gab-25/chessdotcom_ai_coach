@@ -189,15 +189,20 @@ enqueue **only** when they created the row. A position already queued, running o
 done is skipped for free, which is what makes a second press of the button cost
 nothing and removes any need to guard against a double click.
 
-What deliberately bypasses it is an explicit request for a fresh take: the
-per-move **re-analyze** button ([`views.py::analyze_position`](../chessdotcom_ai_coach/views.py))
-and the whole-game **Re-analyse this game** button, which posts the same
-`analyze-game` endpoint with `force=1`. Both go through
-[`analysis.reset_for_reanalysis`](../chessdotcom_ai_coach/services/analysis.py):
-the row is reset to `PENDING` with its fields and `attempts` cleared and
-re-enqueued whatever state it was in, in-flight included. That's a user asking
-for a new answer, not a duplicate — and it's the manual way out of the deadlock
-described next.
+Two things bypass it, both through
+[`analysis.reset_for_reanalysis`](../chessdotcom_ai_coach/services/analysis.py),
+which resets the row to `PENDING` with its fields and `attempts` cleared and
+re-enqueues it whatever state it was in, in-flight included — the manual way out
+of the deadlock described next:
+
+- **Re-analyse this game** — the same `analyze-game` endpoint with `force=1`. An
+  explicit request for a fresh take on moves already analysed, which is the one
+  thing the idempotent call will not give you.
+- **A `FAILED` row, with or without `force`.** There is no analysis on record to
+  protect, and nothing else would ever pick the move up: a failed ply never
+  counts as analysed, so the page keeps offering the plain **Analyse this game**
+  button rather than the forced re-run. Skipping it would make the move a dead
+  end.
 
 The forced whole-game path resets each row **under the FEN the row is keyed on**
 rather than the one derived from the PGN. The two can differ (see
@@ -208,8 +213,9 @@ competing for the single slot `annotate_moves` joins them into.
 
 Making the row the lock has one failure mode: if the analysis never completes,
 nothing ever writes the row to `DONE`. It stays in flight, every later
-`get_or_create` finds it and enqueues nothing, and the coach card self-polls for
-ever. The lock is held by a task that no longer exists.
+`get_or_create` finds it and enqueues nothing, and the page reports an analysis
+in progress however often it is refreshed. The lock is held by a task that no
+longer exists.
 
 Two mechanisms cover it, and they split along a line worth understanding: **is
 there a worker on this row or not?**
@@ -226,7 +232,8 @@ there a worker on this row or not?**
   losing the queue, say. The row still reads `PENDING`, so every reconciliation
   pass finds it and enqueues nothing: the position is locked by work that does
   not exist. `sync.requeue_orphaned_analyses()` is the way out — run from the
-  pending card's own poll, so opening the stuck position is what triggers it —
+  detail page's **Refresh** button, so asking after a stuck analysis is what
+  unsticks it —
   and it detects the state by comparison rather than by age, because age cannot tell a
   stranded row from one merely queued behind a long scan. **If the broker's queue
   is empty and no row is `RUNNING`, then no `PENDING` row can have a message** —
@@ -247,8 +254,9 @@ reacting to, and burn the retry budget of analyses that never failed.
 `attempts` is counted by the **worker**, not by whoever enqueued the task, for the
 same reason: a queue wait is not an attempt. The fourth claim on a position
 retires it as `FAILED` instead of running it, which is what stops a task that
-kills its worker from being redelivered for ever. A `FAILED` row renders as a card
-with a "Try again" button rather than a spinner that never resolves.
+kills its worker from being redelivered for ever. A `FAILED` row renders as a
+card saying which move failed and why, rather than a spinner that never resolves;
+the next press of **Analyse this game** queues it again.
 
 ### Status lifecycle
 
@@ -262,8 +270,8 @@ stateDiagram-v2
     RUNNING --> FAILED: retired at MAX_ANALYSIS_ATTEMPTS
     PENDING --> PENDING: broker redelivers a lost task
     PENDING --> PENDING: requeue_orphaned_analyses<br/>empty queue, nothing running
-    DONE --> PENDING: user clicks "Re-analyze"
-    FAILED --> PENDING: user clicks "Try again"
+    DONE --> PENDING: user clicks "Re-analyse this game"<br/>(force=1)
+    FAILED --> PENDING: re-queued by "Analyse this game"<br/>(no force needed)
 ```
 
 A row in flight for a few seconds is normal. One that stays `PENDING` across many
