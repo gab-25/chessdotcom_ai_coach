@@ -191,35 +191,6 @@ input {
   gap: 16px;
 }
 
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--chrome-ink-dim);
-  background: var(--green-soft);
-  border: 1px solid var(--green-line);
-  padding: 6px 11px;
-  border-radius: 20px;
-}
-.status-pill--watch {
-  background: rgba(208, 70, 59, 0.16);
-  border-color: rgba(208, 70, 59, 0.4);
-}
-.status-pill__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #7bd88f;
-  animation: gm-pulse 1.6s infinite;
-}
-.status-pill--watch .status-pill__dot {
-  background: #e8635a;
-}
-
 .user-chip {
   display: flex;
   align-items: center;
@@ -308,12 +279,20 @@ input {
   opacity: 0.7;
   cursor: default;
 }
-/* In-flight state while HTMX is fetching (e.g. the home Refresh button) */
+/* In-flight state while HTMX is fetching (e.g. the home Sync button) */
 .btn.htmx-request {
   opacity: 0.7;
   cursor: default;
 }
-.btn.htmx-request .fa-arrows-rotate {
+/* Sync reads as running for as long as the import runs (`is-syncing`), not for
+   the length of the request that queued it — two milliseconds, too short for a
+   one-second pulse to show at all. */
+.btn.is-syncing {
+  opacity: 0.7;
+  cursor: default;
+}
+.btn.htmx-request .fa-arrows-rotate,
+.btn.is-syncing .fa-arrows-rotate {
   animation: gm-pulse 1s linear infinite;
 }
 
@@ -330,25 +309,6 @@ input {
   background: var(--green-soft);
   padding: 4px 8px;
   border-radius: 5px;
-}
-.badge--live {
-  color: var(--ink-mute);
-  background: transparent;
-  padding: 0;
-}
-.badge--live .badge__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--live-red);
-  animation: gm-pulse 1.6s infinite;
-}
-.badge--turn {
-  color: var(--chrome);
-  background: var(--brass);
-}
-.badge--turn i {
-  font-size: 9px;
 }
 /* Past-game outcome badges (win / loss / draw), relative to the user. */
 .badge--win {
@@ -441,14 +401,51 @@ input {
   gap: 10px;
   flex-wrap: wrap;
 }
+
+/* ---- Time-control filter ----------------------------------------------
+   Chips sit between the page head and the grid. They read as controls, not
+   badges, so they borrow the ghost button's shape; the selected one takes the
+   board green the rest of the app uses for "this is the one". */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
 .filter-chip {
+  font-family: var(--font-body);
   font-size: 13px;
-  color: #5c5346;
+  color: var(--ink-2);
   background: var(--paper);
   border: 1px solid var(--line);
-  padding: 9px 14px;
-  border-radius: 8px;
-  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.filter-chip:hover {
+  border-color: var(--green-line);
+  color: var(--green-dark);
+}
+.filter-chip--on {
+  color: var(--green-dark);
+  background: var(--green-soft);
+  border-color: var(--green-line);
+  font-weight: 600;
+}
+
+/* ---- Pager ------------------------------------------------------------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 28px;
+}
+.pager__at {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
 }
 
 .games-grid {
@@ -473,13 +470,6 @@ input {
   box-shadow: var(--shadow-lift);
   color: inherit;
 }
-.gm-card--your-turn {
-  border-color: var(--brass);
-  box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.35), var(--shadow-card);
-}
-.gm-card--your-turn:hover {
-  box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.45), var(--shadow-lift);
-}
 .gm-card__head {
   display: flex;
   align-items: center;
@@ -491,14 +481,6 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.gm-card__live {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--ink-mute);
 }
 .gm-card__player {
   display: flex;
@@ -537,14 +519,6 @@ input {
   font-size: 11px;
   color: var(--ink-mute);
   font-family: var(--font-mono);
-}
-.gm-card__turn {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--green);
-  white-space: nowrap;
 }
 .gm-card__board {
   padding: 2px 14px;
@@ -1198,20 +1172,6 @@ input {
   background: var(--green-soft);
 }
 
-/* ===================== Past games ===================== */
-.past-games {
-  margin-top: 36px;
-}
-.past-games__title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--ink);
-  margin: 0 0 16px;
-}
 .gm-card--past {
   opacity: 0.9;
 }
@@ -1262,27 +1222,6 @@ input {
 .gr-nav {
   display: flex;
   gap: 6px;
-}
-/* Jump-to-live button (shown while browsing behind a live game) */
-.gr-live-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--paper);
-  background: var(--live-red);
-  border: 0;
-  padding: 6px 11px;
-  border-radius: 20px;
-  cursor: pointer;
-}
-.gr-live-btn[hidden] {
-  display: none;
-}
-.gr-live-btn .status-pill__dot {
-  background: #ffd7d3;
 }
 .gr-nav button {
   width: 34px;
@@ -1457,6 +1396,40 @@ input {
   font-weight: 600;
   letter-spacing: 0;
 }
+/* ---- Whole-game analysis ----------------------------------------------
+   Sits under the coach card. Quieter than the card on purpose: it is the
+   control that starts the work, not the work itself. */
+.gr-analyse {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 18px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.gr-analyse__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+.gr-analyse__state .fa-circle-check {
+  color: var(--green);
+}
+/* The block is space-between, so the two controls need a box of their own to
+   stay together on the right instead of spreading across the row. */
+.gr-analyse__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .gr-hist {
   list-style: none;
   margin: 0;
@@ -1562,11 +1535,6 @@ input {
   background: #f0e9d6;
   box-shadow: 0 0 0 2px rgba(183, 142, 84, 0.7);
 }
-/* The move you're about to play on a live game — provisional, not yet a ply. */
-.gr-move--live {
-  background: rgba(183, 142, 84, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(183, 142, 84, 0.45);
-}
 .gr-move__no {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1577,10 +1545,6 @@ input {
   font-family: var(--font-display);
   font-weight: 600;
   color: var(--ink);
-}
-.gr-move__san--live {
-  font-weight: 400;
-  color: var(--ink-mute);
 }
 .gr-badge {
   margin-left: auto;
@@ -1598,10 +1562,6 @@ input {
   background: rgba(74, 122, 82, 0.14);
 }
 .gr-badge--differed {
-  color: #8a6a2e;
-  background: rgba(183, 142, 84, 0.16);
-}
-.gr-badge--live {
   color: #8a6a2e;
   background: rgba(183, 142, 84, 0.16);
 }
@@ -1660,12 +1620,7 @@ input {
   .brand__version {
     display: none;
   }
-  .status-pill {
-    padding: 6px;
-    gap: 0;
-  }
-  .back-link__label,
-  .status-pill__label {
+  .back-link__label {
     position: absolute;
     width: 1px;
     height: 1px;

@@ -1,3 +1,12 @@
+{% comment %}
+  The line under the home title. One of the two head elements that live outside
+  #game-list (see sync_button.html for the other), so game_list.html swaps it
+  back in out of band whenever the grid is refreshed, paged or filtered.
+{% endcomment %}
 <p class="home__sub" id="home-count"{% if oob %} hx-swap-oob="true"{% endif %}>
-  {{ games|length }} game{{ games|length|pluralize }} in progress from players you follow.
+  {% if total %}
+    Showing {{ page.start_index }}–{{ page.end_index }} of {{ total }} finished game{{ total|pluralize }}{% if time_class %} ({{ time_class }}){% endif %}.
+  {% else %}
+    No finished games{% if time_class %} in {{ time_class }}{% endif %} yet.
+  {% endif %}
 </p>

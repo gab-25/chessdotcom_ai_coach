@@ -62,7 +62,7 @@ class TestAnalyzeGameTask:
         assert row.move_no == 1
 
     def test_overwrites_pending_row(self, mock_coach, user):
-        # The scheduler pre-created a PENDING row; the task fills it in.
+        # The enqueue path pre-created a PENDING row; the task fills it in.
         CoachSuggestion.objects.create(
             user=user,
             game_id="944768131",
@@ -103,7 +103,7 @@ class TestAnalyzeGameTask:
     def test_retires_a_position_past_the_attempt_cap(self, mock_coach, user):
         """`task_acks_late` means the broker redelivers a task that killed its
         worker, so the cap has to stop that loop here and not only in the
-        scheduler."""
+        recovery sweep."""
         row = _pending_row(user, attempts=MAX_ANALYSIS_ATTEMPTS)
 
         analyze_game_task(user.id, "944768131", FEN, pgn=None)
@@ -167,7 +167,7 @@ class TestAnalyzeGameTask:
 @pytest.mark.django_db
 class TestClaim:
     """The hand-off itself: what the row looks like while the worker is on it, which
-    is what `scheduler.requeue_stale_analyses` times out against."""
+    is what `sync.requeue_stale_analyses` times out against."""
 
     def test_marks_the_row_running(self, user):
         row = _pending_row(user)

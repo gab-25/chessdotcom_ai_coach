@@ -1,16 +1,17 @@
 """Enqueue coach analysis for every one of a user's moves in a single game.
 
-The scheduler already reconciles every game towards "every user move analysed" —
-active ones each 5s tick, finished ones every 10 minutes — so this is the
-"don't wait for it" trigger, and the way to re-run a game whose analyses were
-retired as FAILED. Reads the stored snapshot and enqueues the same Celery tasks
-the app uses — no Chess.com call. Idempotent: already-analysed (or already-queued)
-moves are skipped, so it's safe to re-run.
+Analysis is on demand — nothing analyses a game until it is asked to — so this
+is the command-line half of the "Analyse this game" button. Reads the stored game
+and enqueues the same Celery tasks the app uses — no Chess.com call. Idempotent:
+already-analysed (or already-queued) moves are skipped, so it's safe to re-run.
 
-    python manage.py analyze_game <game_id> [--user <username>]
+    python manage.py analyze_game <game_id> [--user <username>] [--force]
 
 ``--user`` is required only when the same game id is stored for more than one
-user (game ids are unique per user, not globally).
+user (game ids are unique per user, not globally). ``--force`` is the
+"Re-analyse this game" button's half: it queues every move again and overwrites
+the analyses on record, which is what you want after a prompt or model change —
+without it a game the coach has finished with is skipped entirely.
 """
 
 from django.core.management.base import BaseCommand, CommandError
@@ -28,6 +29,11 @@ class Command(BaseCommand):
             "--user",
             dest="username",
             help="App username owning the game (needed only if the id is not unique).",
+        )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Re-analyse every move, overwriting the analyses already on record.",
         )
 
     def handle(self, *args, **options):
@@ -50,11 +56,12 @@ class Command(BaseCommand):
             )
 
         user = next(iter(owners.values()))
-        result = enqueue_game_analysis(user, game_id)
+        force = options["force"]
+        result = enqueue_game_analysis(user, game_id, force=force)
         # `owners` was built from the same id, so the game exists for this user.
         self.stdout.write(
             self.style.SUCCESS(
-                f"Queued {result['enqueued']} new analyses "
+                f"Queued {result['enqueued']} {'' if force else 'new '}analyses "
                 f"({result['total']} of {user.get_username()}'s moves) for game {game_id}."
             )
         )

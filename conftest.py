@@ -13,6 +13,9 @@ import tempfile
 # Defaults for env vars read at import time.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
+# Point the broker at localhost, not the compose hostname: a test that reaches it
+# by accident then fails at once on a closed port instead of hanging on DNS.
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import pytest
 

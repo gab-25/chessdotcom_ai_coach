@@ -1,25 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Live games · Chessdotcom AI Coach{% endblock %}
+{% block title %}Game review · Chessdotcom AI Coach{% endblock %}
 
 {% block content %}
 <div class="page">
   <div class="home__head">
     <div>
-      <h1 class="home__title">Live games</h1>
+      <h1 class="home__title">Game review</h1>
       {% include "partials/home_count.html" %}
     </div>
     <div class="home__filters">
-      <span class="filter-chip">Sort: Most recent &#9662;</span>
-      <span class="filter-chip">All time controls &#9662;</span>
-      <button type="button" class="btn btn--ghost btn--sm"
-              hx-get="{% url 'game_list' %}"
-              hx-target="#game-list"
-              hx-swap="innerHTML">
-        <i class="fa-solid fa-arrows-rotate"></i>Refresh
-      </button>
+      {% include "partials/sync_button.html" %}
     </div>
   </div>
 
+  {% comment %}
+    The wrapper carries no behaviour of its own. This page is a plain DB read —
+    it claims no sync, so there is nothing for it to wait on — and every control
+    that swaps the grid either lives inside the fragment or is swapped back in
+    out of band.
+  {% endcomment %}
   <div id="game-list">
     {% include "partials/game_list.html" %}
   </div>

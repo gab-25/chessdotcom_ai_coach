@@ -1,0 +1,31 @@
+{% comment %}
+  The Sync button: the app's only sync trigger, and the one control that cannot
+  live inside #game-list, since it is the element issuing the swap. So it is
+  swapped back in out of band, exactly like the count line — which is what keeps
+  its `time_class` in step with the filter the user picked instead of frozen at
+  whatever the page was first loaded with.
+
+  The id sits on the button itself, not on a wrapper: htmx re-focuses a replaced
+  element only when it has an id of its own, so a keyboard user stays on Sync.
+  It shares a line with the oob flag and the hx-get so that a test can pin all
+  three at once — the "rapid" filter chip renders the same hx-get, and the id is
+  the only thing that tells them apart.
+
+  It carries no `page`: "fetch my games" means show me the newest, which is page 1.
+  The one-shot re-fetch in game_list.html does carry one, its job being the
+  opposite — reproduce the view already on screen.
+
+  `sync_started` — not htmx's own `htmx-request` class — is what makes it read as
+  running. The two measure different things: the class lives for the length of
+  this request, and this request is a DB read that answers in a couple of
+  milliseconds, whereas the import it queued goes on in the worker for seconds.
+  So the state is rendered, and it ends when the re-fetch swaps an idle button
+  back in six seconds later. `disabled` while it runs is free: a second press
+  inside the cooldown would claim nothing anyway.
+{% endcomment %}
+<button type="button" class="btn btn--ghost btn--sm{% if sync_started %} is-syncing{% endif %}"
+        id="home-sync"{% if oob %} hx-swap-oob="true"{% endif %} hx-get="{% url 'game_list' %}?time_class={{ time_class }}"
+        hx-target="#game-list"
+        hx-swap="innerHTML"{% if sync_started %} disabled aria-busy="true"{% endif %}>
+  <i class="fa-solid fa-arrows-rotate"></i>Sync
+</button>

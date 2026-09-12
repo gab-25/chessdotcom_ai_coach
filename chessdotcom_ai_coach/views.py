@@ -1,29 +1,31 @@
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 
 from .models import CoachSuggestion
+from .services import analysis as analysis_service
 from .services import board as board_utils
 from .services import game_store
-from .tasks import analyze_game_task
+from .services import sync
 
 _START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
+# Games per page on the home grid. An imported archive runs to thousands of rows,
+# so the list is paged rather than rendered whole.
+GAMES_PER_PAGE = 24
 
-def _decorate_games(games, username):
-    """Attach board cells, move number, side-to-move and turn ownership to `Game` rows.
 
-    Used for both the current and past-games sections of the home page (both
-    plain DB reads). `turn` reproduces the side-to-move from the stored FEN, and
-    `is_user_turn` highlights games awaiting the logged-in user's move.
+def _decorate_games(games):
+    """Attach the mini-board cells and the move number to `Game` rows.
+
+    Used by the home page's game grid (a plain DB read). Both come from the stored
+    FEN, which for an imported game is the final position from the archive.
     """
     for game in games:
         game.cells = board_utils.fen_to_cells(game.fen)
         game.move_no = board_utils.fullmove_number(game.fen)
-        game.turn = board_utils.active_color(game.fen)
-        orientation = "white" if game.white_name.lower() == username.lower() else "black"
-        game.is_user_turn = game.turn == orientation
     return games
 
 
@@ -60,9 +62,9 @@ def _arrow(from_sq, to_sq, color, marker, flipped):
 def _in_flight(row):
     """True while the analysis is queued or running — both render as "pending".
 
-    The two are worth distinguishing in the scheduler (only a RUNNING row can time
-    out) but not on the card: either way the answer isn't there yet and the
-    fragment self-polls until it is.
+    The two are worth distinguishing to the recovery sweeps (only a RUNNING row
+    can time out) but not on the card: either way the answer isn't there yet, and
+    the page says so in one word until the user presses Refresh.
     """
     return row.status in (
         CoachSuggestion.Status.PENDING,
@@ -74,16 +76,16 @@ def _failed_coach(row, san=""):
     """Card state for a position the coach gave up on.
 
     Rendering a failure through the "analyzed" branch would show an empty
-    recommendation and claim the coach preferred nothing, so it gets its own state —
-    carrying the FEN, so the user can ask for the analysis again rather than being
-    left with a dead card.
+    recommendation and claim the coach preferred nothing, so it gets its own
+    state, saying which move failed and why. The way back is the whole-game
+    button: `analysis.enqueue_game_analysis` re-queues a FAILED row without
+    `force`, so there is nothing for the card itself to offer.
     """
     return {
         "mode": "failed",
         "san": san,
-        "fen": row.fen,
-        # A row retired by the scheduler carries no prose — it never got far enough
-        # to produce any — so say why instead of showing a bare card.
+        # A row retired by the recovery sweep carries no prose — it never got far
+        # enough to produce any — so say why instead of showing a bare card.
         "reason": row.analysis
         or row.eval_text
         or "The background analysis did not complete.",
@@ -106,12 +108,13 @@ def _suggestion_fields(row):
 def _position_context(user, game, sel):
     """Everything the position fragment needs to render one ply of a game.
 
-    Reads entirely from the stored ``Game`` snapshot (kept fresh by the
-    scheduler) and the persisted ``CoachSuggestion`` rows — no Chess.com call —
-    so navigation, the live poll and the review of a finished game are all cheap
-    DB reads. ``sel`` is the 0-based ply cursor (0 = starting position, ``head``
-    = the last played ply, ``live_sel`` = the end of the timeline — the live
-    "your move" slot when it's your turn, ``head`` otherwise).
+    Reads entirely from the stored ``Game`` snapshot and the persisted
+    ``CoachSuggestion`` rows — no Chess.com call — so navigation and review are
+    cheap DB reads. ``sel`` is the 0-based ply cursor: 0 is the starting position
+    and ``head`` (the number of plies in the PGN) is the last played ply, which is
+    also the end of the timeline. There is deliberately no cursor past ``head``:
+    the coach comments on moves that were played, so a position the player never
+    reached has nothing to show.
     """
     username = user.chess_username
     orientation = "white" if (game.white_name or "").lower() == username.lower() else "black"
@@ -121,80 +124,41 @@ def _position_context(user, game, sel):
     moves = board_utils.moves_from_pgn(pgn)
     positions = board_utils.positions_from_pgn(pgn) or [game.fen or _START_FEN]
     history = list(CoachSuggestion.objects.filter(user=user, game_id=game.game_id))
+    # Joins on (move_no, side to move) against the plies in the PGN, so a row left
+    # over for a position that was never played has no ply to attach to and is not
+    # rendered anywhere. That is what keeps such rows invisible without filtering.
     board_utils.annotate_moves(moves, history)
-    by_fen = {row.fen: row for row in history}
 
     head = len(moves)
-    is_live = game.is_active
-    head_row = by_fen.get(game.fen)
-    user_to_move = board_utils.active_color(game.fen) == orientation if game.fen else False
-    # The move you're about to play gets its own cursor one past the last played
-    # ply, so the opponent's final move stays reviewable at `head`. `live_sel` is
-    # therefore the end of the timeline; `head` stays the PGN ply count (what the
-    # live poll compares against).
-    has_live_slot = is_live and user_to_move
-    live_sel = head + 1 if has_live_slot else head
-    sel = max(0, min(live_sel, sel))
-    ply_idx = min(sel, head)  # the live slot sits on the board of the last ply
-    ply = moves[ply_idx - 1] if ply_idx > 0 else None
+    sel = max(0, min(head, sel))
+    ply = moves[sel - 1] if sel > 0 else None
 
     # Board + last-move highlight for the selected ply.
-    board_fen = positions[ply_idx] if ply_idx < len(positions) else (game.fen or _START_FEN)
+    board_fen = positions[sel] if sel < len(positions) else (game.fen or _START_FEN)
     highlight = _uci_to_squares(ply["uci"]) if ply else []
     cells = board_utils.fen_to_cells(board_fen, highlight=highlight, flipped=flipped)
 
     # Eval bar: carry the last analysed value forward across un-analysed plies.
     eval_fill = 50
-    for i in range(1, ply_idx + 1):
+    for i in range(1, sel + 1):
         m = moves[i - 1]
         s = m["suggestion"]
         if m["color"] == orientation and s is not None and s.status == CoachSuggestion.Status.DONE:
             eval_fill = _eval_fill(s.eval_cp)
 
-    at_live_head = is_live and sel == live_sel
-    # At the live head, take over the display only when it's genuinely the
-    # player's decision point (your move) or there's no played user move to
-    # review. When the player has just moved and the opponent is on the clock,
-    # fall through to the review branch so the move keeps its arrows and coach
-    # comparison — matching how the same ply looks once the game is finished.
-    live_head_view = at_live_head and (
-        user_to_move or ply is None or ply["color"] != orientation
-    )
-
     coach = {"mode": "start"}
     arrows = []
 
-    if live_head_view:
-        # The position you're about to play (or waiting on the opponent).
-        if not user_to_move:
-            coach = {"mode": "live_waiting"}
-        elif head_row is None:
-            coach = {"mode": "live_request", "fen": game.fen}
-        elif _in_flight(head_row):
-            # Carry the FEN so a card that comes back FAILED can re-enqueue this
-            # exact position rather than creating a duplicate row.
-            coach = {"mode": "live_pending", "fen": head_row.fen}
-        elif head_row.status == CoachSuggestion.Status.FAILED:
-            coach = _failed_coach(head_row)
-        else:
-            fields = _suggestion_fields(head_row)
-            coach = {"mode": "live_analyzed", **fields}
-            eval_fill = fields["fill"]
-            if fields["rec_from"] and fields["rec_to"]:
-                arrows.append(_arrow(fields["rec_from"], fields["rec_to"], "#b78e54", "url(#gr-ah-brass)", flipped))
-    elif ply is None:
+    if ply is None:
         coach = {"mode": "start"}
     elif ply["color"] != orientation:
         coach = {"mode": "opponent", "san": ply["san"]}
     else:
         s = ply["suggestion"]
         if s is None:
-            coach = {"mode": "unanalyzed", "san": ply["san"], "fen": ply["fen_before"]}
+            coach = {"mode": "unanalyzed", "san": ply["san"]}
         elif _in_flight(s):
-            # `s.fen`, not `ply["fen_before"]`: the row was joined on the ply, so it
-            # may hold Chess.com's spelling of this position. Posting its own FEN
-            # makes a later retry hit that row instead of creating a duplicate.
-            coach = {"mode": "pending", "san": ply["san"], "fen": s.fen}
+            coach = {"mode": "pending", "san": ply["san"]}
         elif s.status == CoachSuggestion.Status.FAILED:
             coach = _failed_coach(s, san=ply["san"])
         else:
@@ -236,21 +200,14 @@ def _position_context(user, game, sel):
             }
         )
 
-    # Live "your move" slot: at the head of a live game, while it's your turn, the
-    # coach's suggestion has no played ply to badge yet. Give it a provisional item
-    # at the end of the grid, on its own `live_sel` cursor, so the pending state and
-    # the recommendation are visible before you move.
-    live_move = None
-    if has_live_slot:
-        done = head_row is not None and head_row.status == CoachSuggestion.Status.DONE
-        live_move = {
-            "sel": live_sel,
-            "no": board_utils.fullmove_number(game.fen),
-            "color": orientation,
-            "pending": head_row is not None and _in_flight(head_row),
-            "rec_san": (head_row.best_move_san if done else "") or "",
-            "selected": at_live_head,
-        }
+    # Whole-game analysis state, for the controls in the coach column. Counted off
+    # `moves_view` rather than re-queried: it already holds the per-ply state. The
+    # page shows only which of the three states this is — running, complete, or
+    # neither — never the counts: a number that moves only when you press Refresh
+    # reads as a stalled number.
+    analysis_total = sum(1 for m in moves if m["color"] == orientation)
+    analysis_done = sum(1 for m in moves_view if m["analyzed"])
+    analysis_pending = sum(1 for m in moves_view if m["pending"])
 
     # Analysis-history timeline (analysed user moves, in order).
     history_view = []
@@ -272,29 +229,19 @@ def _position_context(user, game, sel):
 
     last_move = None
     sel_text = "Starting position"
-    if at_live_head:
-        sel_text = "Live · your move" if user_to_move else "Live · opponent to move"
-    elif ply is not None:
+    move_label = ""
+    if ply is not None:
         ref = f"{ply['move_no']}{'. ' if ply['color'] == 'white' else '… '}{ply['san']}"
         last_move = ref
         sel_text = f"Reviewing: {ref}"
-
-    if ply is not None:
         move_label = f"Move {ply['move_no']} · {'White' if ply['color'] == 'white' else 'Black'}"
-    elif at_live_head:
-        move_label = "Live position"
-    else:
-        move_label = ""
 
     return {
         "id": game.game_id,
-        "is_live": is_live,
         "sel": sel,
         "head": head,
-        "live_sel": live_sel,
-        "behind": max(0, head - sel),
         "prev_sel": max(0, sel - 1),
-        "next_sel": min(live_sel, sel + 1),
+        "next_sel": min(head, sel + 1),
         "orientation": orientation,
         "flipped": flipped,
         "white_name": game.white_name or "White",
@@ -310,144 +257,172 @@ def _position_context(user, game, sel):
         "arrows": arrows,
         "coach": coach,
         "moves": moves_view,
-        "live_move": live_move,
         "history": history_view,
         "history_count": len(history_view),
         "last_move": last_move,
         "sel_text": sel_text,
         "move_label": move_label,
-        "at_live_head": at_live_head,
+        "analysis_total": analysis_total,
+        "analysis_done": analysis_done,
+        "analysis_pending": analysis_pending,
+        "analysis_complete": analysis_total > 0 and analysis_done >= analysis_total,
+    }
+
+
+_IN_PROGRESS_MESSAGE = (
+    "This game is still in progress. It becomes available for review once it ends."
+)
+
+
+def _reviewable_game(user, game_id):
+    """The stored game if it can be reviewed, else the reason it can't.
+
+    Returns ``(game, None)`` or ``(None, message)``. A game still in progress is
+    refused: the coach only comments on moves that were played, so nothing about
+    a running game is shown — and since the home page no longer links one, this
+    is what closes the hand-typed URL.
+    """
+    game = game_store.stored_game(user, game_id)
+    if game is None:
+        return None, "Game not found."
+    if game.is_active:
+        return None, _IN_PROGRESS_MESSAGE
+    return game, None
+
+
+def _games_page(request):
+    """The home grid's context: one page of finished games, plus its controls.
+
+    Paging and filtering are done by the database (`game_store.past_games`
+    returns a queryset), because a fully imported archive is thousands of rows
+    and rendering or counting them in Python would not survive it.
+    """
+    time_class = request.GET.get("time_class", "")
+    games = game_store.past_games(request.user, time_class=time_class)
+    paginator = Paginator(games, GAMES_PER_PAGE)
+    # `get_page` clamps: a junk or out-of-range page number lands on a real page
+    # instead of raising, which matters because the page number is in a URL.
+    page = paginator.get_page(request.GET.get("page"))
+
+    _decorate_games(page.object_list)
+    return {
+        "games": page.object_list,
+        "page": page,
+        "total": paginator.count,
+        "time_class": time_class,
+        "time_classes": game_store.time_classes(request.user),
     }
 
 
 @login_required
 def home(request):
-    """Home page: lists the user's current games plus the past-games history."""
-    username = request.user.chess_username
-    games = _decorate_games(game_store.current_games(request.user), username)
-    past = _decorate_games(game_store.past_games(request.user), username)
-    return render(request, "home.html", {"games": games, "past_games": past})
+    """Home page: the user's finished games, the ones there is something to review.
+
+    A plain DB read. It starts nothing: the archive import is claimed by the
+    Sync button (`game_list`), because that is the one control whose meaning is
+    "fetch my games". Opening a page used to claim it too, which made every return
+    to the home page a potential Chess.com fetch and left the empty state
+    announcing an import that a cooled-down load had not actually queued.
+    """
+    return render(request, "home.html", _games_page(request))
 
 
 @login_required
 def game_list(request):
-    """HTMX endpoint: current games + past-games history fragment, on demand."""
-    username = request.user.chess_username
-    games = _decorate_games(game_store.current_games(request.user), username)
-    past = _decorate_games(game_store.past_games(request.user), username)
-    return render(
-        request,
-        "partials/game_list.html",
-        {"games": games, "past_games": past, "oob": True},
-    )
+    """HTMX endpoint: the finished-games fragment — refresh, paging and filtering.
+
+    Also the app's only sync trigger. `request_sync` rate-limits the claim and
+    hands the work to the worker, so this stays a DB read; its return value is
+    what puts the single delayed re-fetch in the fragment, six seconds later,
+    by which time the import has had a moment to land.
+
+    Paging and filtering arrive here too and will normally lose the claim. When
+    one of them wins it — the cooldown has lapsed — it gets the same one-shot
+    re-fetch, which is right rather than a leak: the re-fetch reproduces the very
+    view the user is looking at.
+    """
+    # `after_sync` is that re-fetch identifying itself, and it must never claim.
+    # Otherwise a deployment with SYNC_COOLDOWN_SECONDS under 6 would turn one
+    # re-fetch into a 6-second poll *and* a 6-second re-import. The cooldown makes
+    # that impossible today; this makes it impossible by construction, which is
+    # what the old trigger got from sitting on a wrapper the swap never replaced.
+    after_sync = bool(request.GET.get("after_sync"))
+    context = _games_page(request)
+    context["sync_started"] = False if after_sync else sync.request_sync(request.user)
+    context["oob"] = True
+    return render(request, "partials/game_list.html", context)
 
 
 @login_required
 def game_detail(request, id):
-    """The one detail page — move-by-move over a game, live or finished.
+    """The detail page — move-by-move review over a finished game.
 
-    The full page renders the shell plus the initial position fragment (the live
-    head for a game in progress, the opening for a finished one). Navigation, the
-    live poll and analysis are all htmx fragment swaps from here on.
+    The full page renders the shell plus the opening position; navigation and
+    analysis are htmx fragment swaps from here on. A game still in progress is
+    refused (see `_reviewable_game`).
     """
-    game = game_store.stored_game(request.user, id)
+    game, message = _reviewable_game(request.user, id)
     if game is None:
-        return render(request, "error.html", {"message": "Game not found."}, status=404)
+        return render(request, "error.html", {"message": message}, status=404)
 
-    moves = board_utils.moves_from_pgn(game.pgn)
-    # +1 lands on the live "your move" slot when it's your turn; clamped otherwise.
-    sel = len(moves) + 1 if game.is_active else 0
-    context = _position_context(request.user, game, sel)
-    return render(request, "game_detail.html", context)
+    return render(request, "game_detail.html", _position_context(request.user, game, 0))
 
 
 @login_required
 def game_position(request, id):
-    """HTMX fragment: the position view for a given ply (nav / move-click)."""
-    game = game_store.stored_game(request.user, id)
+    """HTMX fragment: the position view for a ply — navigation, and Refresh.
+
+    `refresh` is the Refresh button naming itself, the way `after_sync` does in
+    `game_list`. The page carries no poll of any kind, so this is the one request
+    whose meaning is "show me where the analysis got to" — which makes it the
+    right place for the recovery sweeps, until now hung off the coach card's own
+    poll. Navigation is left as a pure read: a stuck analysis is not what the
+    arrow keys are about, and the sweeps read the broker's queue depth.
+
+    `recover_stuck_analyses` throttles itself and never raises, so a broker that
+    is down costs a page that stays where it was, not a 500.
+    """
+    game, _message = _reviewable_game(request.user, id)
     if game is None:
         return HttpResponse(status=404)
+
+    if request.GET.get("refresh"):
+        sync.recover_stuck_analyses(request.user)
+
     sel = _int(request.GET.get("sel"), 0)
     return render(request, "partials/position.html", _position_context(request.user, game, sel))
 
 
 @login_required
-def game_live(request, id):
-    """HTMX poll: swap in new moves for a live game, or 204 when nothing changed.
+def analyze_game(request, id):
+    """HTMX endpoint: queue the coach on every move the user played in this game.
 
-    The client sends its current ``sel`` and the ``head`` it already knows. When
-    a new move has appeared we re-render the position — following the live head if
-    the user was sitting on it, otherwise leaving them on the move they're
-    reviewing (with the moves grid refreshed and a jump-to-live button shown).
+    Analysis is on demand — nothing queues it in the background — so this is the
+    control that starts it. `analysis.enqueue_game_analysis` is idempotent, so pressing it
+    twice queues nothing the second time and there is no need to guard against a
+    double click. Returns the position fragment, which re-renders with the plies
+    now showing as pending.
+
+    `force` is the other half of that: it is what the "Re-analyse this game"
+    button sends, and it asks for every move to be queued again, overwriting the
+    analyses already on record. Without it a finished game would be a dead end.
+    A move the coach *failed* on needs no `force` — the service re-queues it on
+    the plain press, which is what keeps that move from being a dead end too.
     """
-    game = game_store.stored_game(request.user, id)
-    if game is None:
-        return HttpResponse(status=204)
-
-    sel = _int(request.GET.get("sel"), 0)
-    known_head = _int(request.GET.get("head"), 0)
-    head = len(board_utils.moves_from_pgn(game.pgn))
-    if head == known_head and game.is_active:
-        return HttpResponse(status=204)  # no new move — keep polling
-
-    following = sel >= known_head
-    # Following the head means following the live slot too (clamped when the
-    # opponent is the one on the clock).
-    render_sel = head + 1 if following else sel
-    return render(request, "partials/position.html", _position_context(request.user, game, render_sel))
-
-
-@login_required
-def analyze_position(request, id):
-    """HTMX endpoint: the coach card for a ply, requesting analysis on demand.
-
-    ``POST`` enqueues background analysis for the ply's position (idempotent),
-    reusing the same Celery task; ``GET`` is the pending self-poll. Both return
-    the coach-card fragment for the current state. Analysis is read/enqueued from
-    the stored snapshot, so a finished game never triggers a Chess.com call.
-    """
-    game = game_store.stored_game(request.user, id)
+    game, _message = _reviewable_game(request.user, id)
     if game is None:
         return HttpResponse(status=404)
-    sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
-    context = _position_context(request.user, game, sel)
 
     if request.method == "POST":
-        fen = context["coach"].get("fen")
-        if fen:
-            row = CoachSuggestion.objects.filter(
-                user=request.user, game_id=id, fen=fen
-            ).first()
-            if row is None:
-                CoachSuggestion.objects.create(
-                    user=request.user,
-                    game_id=id,
-                    fen=fen,
-                    status=CoachSuggestion.Status.PENDING,
-                    move_no=board_utils.fullmove_number(fen),
-                    eval_text="",
-                    analysis="",
-                )
-            else:
-                # Re-enqueue whatever state the row is in, in-flight ones included:
-                # an explicit click is exactly the signal to break a lock the
-                # scheduler hasn't timed out yet. `attempts` restarts too, so the
-                # user's retry isn't spent by earlier failures.
-                row.status = CoachSuggestion.Status.PENDING
-                row.attempts = 0
-                row.eval_text = ""
-                row.eval_cp = None
-                row.best_move_san = None
-                row.best_move_uci = None
-                row.analysis = ""
-                row.save()
-            analyze_game_task.delay(request.user.id, id, fen, game.pgn or None)
-            context = _position_context(request.user, game, sel)
+        # htmx posts the button's parameters in the query string, so read `force`
+        # the way `sel` is read below.
+        force = bool(request.GET.get("force") or request.POST.get("force"))
+        analysis_service.enqueue_game_analysis(request.user, id, force=force)
 
-    # Standalone card render: carry the eval bar and board arrows out-of-band so
-    # a freshly-arrived analysis updates the board without a full #gr-view swap.
-    context["oob"] = True
-    return render(request, "partials/coach_card.html", context)
+    sel = _int(request.GET.get("sel") or request.POST.get("sel"), 0)
+    return render(
+        request, "partials/position.html", _position_context(request.user, game, sel)
+    )
 
 
 def _int(value, default):

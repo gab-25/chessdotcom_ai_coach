@@ -1,12 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Something went wrong · Chessdotcom AI Coach{% endblock %}
+{% comment %}
+  The one error page. `message` carries the whole explanation — the reasons are
+  not all failures (a game still in progress is simply not reviewable yet), so
+  nothing here should assume something went wrong.
+{% endcomment %}
+{% block title %}Not available · Chessdotcom AI Coach{% endblock %}
 {% block content %}
 <div class="error-wrap">
   <div class="error-card">
-    <h3><i class="fa-solid fa-triangle-exclamation" style="color:var(--brass)"></i> Something went wrong</h3>
-    <p style="color:var(--ink-dim); margin:0 0 20px; line-height:1.55">
-      We couldn't reach Chess.com just now.
-    </p>
+    <h3><i class="fa-solid fa-circle-info" style="color:var(--brass)"></i> Not available</h3>
     <div class="alert alert--danger" style="margin-bottom:22px">{{ message }}</div>
     <a href="{% url 'home' %}" class="btn btn--ghost btn--sm">
       <i class="fa-solid fa-arrow-left"></i> Back to games

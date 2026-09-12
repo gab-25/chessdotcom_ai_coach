@@ -134,8 +134,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 
 # --- Celery ----------------------------------------------------------------
-# Redis is the broker and result backend. The scheduler (APScheduler) enqueues
-# `analyze_game_task`; a dedicated worker executes it out of the request path.
+# Redis is the broker and result backend. Both of the app's background jobs are
+# enqueued from the request path — `analyze_game_task` when the user asks for an
+# analysis, `sync_user_task` when a Sync press claims the user's archive sync —
+# and a dedicated worker executes them out of it. Nothing is scheduled.
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
@@ -149,8 +151,9 @@ CELERY_TASK_ALWAYS_EAGER = False
 # A *hard* kill is slower to recover, not faster: the messages sit in Redis'
 # `unacked` set, and kombu only re-delivers them after its visibility timeout
 # (an hour by default). The guarantee that actually holds in that case is
-# app-side — `scheduler.requeue_stale_analyses` returns any row left RUNNING for
-# `ANALYSIS_TIMEOUT` to the queue. Don't rely on the broker for it.
+# app-side — `sync.requeue_stale_analyses` returns any row left RUNNING for
+# `ANALYSIS_TIMEOUT` to the queue, swept from the detail page's Refresh button.
+# Don't rely on the broker for it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 # One task reserved at a time: an analysis takes seconds to minutes, so
@@ -164,3 +167,9 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 # lives with the worker command in `docker-compose.yaml` (`--concurrency=2`),
 # since it depends on the machine and the LLM runtime rather than on the app.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# How long a user's archive sync claim holds, in seconds. Requests to Chess.com
+# are now paid only while somebody is using the app, so this is a per-active-user
+# rate rather than the old scheduler's per-linked-user-forever one: raise it to be
+# gentler on Chess.com, lower it to see finished games sooner.
+SYNC_COOLDOWN_SECONDS = int(os.getenv("SYNC_COOLDOWN_SECONDS", "300"))

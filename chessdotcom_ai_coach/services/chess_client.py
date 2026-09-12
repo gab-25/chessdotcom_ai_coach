@@ -1,8 +1,22 @@
-import re
-from typing import Dict, List, Optional
+"""Chess.com IO: pure HTTP + shape normalisation, no DB and no Django models.
+
+Everything comes from the monthly archives:
+
+* ``/player/{u}/games/archives`` (``archive_months``) — one URL per month the
+  player was active, which is how far back an account goes.
+* ``/player/{u}/games/{yyyy}/{mm}`` (``finished_games``) — every finished game of
+  that month, live and daily alike, with its final PGN and result.
+
+Notably *not* used: ``/player/{u}/games``, the endpoint most Chess.com
+integrations start from. It serves "Daily Chess games that a player is currently
+playing" — no live games, and nothing finished — so it can neither list a
+player's games nor complete one. The archives can do both.
+"""
+
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 from chessdotcom import ChessDotComClient
-from django.utils import timezone
 
 # Chess.com per-side `result` strings that mean the game was drawn. Anything that
 # isn't one of these and isn't "win" is treated as a loss for that side.
@@ -30,6 +44,51 @@ _RESULT_DETAIL = {
     "timevsinsufficient": "timeout vs insufficient",
 }
 
+# Chess.com variants share the archive with standard games. The coach evaluates
+# with Stockfish on a standard `chess.Board` and `board.moves_from_pgn` replays
+# the movetext on one too, so a crazyhouse PGN (which carries drops, "@") would
+# stop at its first illegal ply and a Chess960 game would start from the wrong
+# position. Importing them would mean truncated games and wrong evaluations, not
+# extra coverage — so only `rules == "chess"` is kept.
+STANDARD_RULES = "chess"
+
+
+def _outcome(mine: dict, theirs: dict) -> Tuple[str, str]:
+    """Map a pair of archive player entries to ``(result, detail)`` for `mine`.
+
+    Chess.com states the outcome per side: the winner simply reads "win", so the
+    *reason* a game ended always lives on the losing side.
+    """
+    my_result = str(mine.get("result", ""))
+    if not my_result:
+        return "", ""
+    if my_result == "win":
+        return "win", _RESULT_DETAIL.get(str(theirs.get("result", "")), "")
+    if my_result in _DRAW_RESULTS:
+        return "draw", ""
+    return "loss", _RESULT_DETAIL.get(my_result, "")
+
+
+def _archive_player(side: dict) -> dict:
+    """The ``{username, rating}`` shape the `Game` rows are written from."""
+    return {
+        "username": str(side.get("username", "")),
+        "rating": str(side.get("rating", "")),
+    }
+
+
+def _game_id(url: str) -> str:
+    """The Chess.com game id: the last segment of the game URL."""
+    return url.split("/")[-1] if url else ""
+
+
+def _end_time(value) -> Optional[datetime]:
+    """The archive's unix `end_time` as an aware datetime, or None."""
+    try:
+        return datetime.fromtimestamp(int(value), timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
 
 class Client:
     """
@@ -42,115 +101,44 @@ class Client:
         )
         self.username = username
 
-    def my_current_games(self) -> List:
+    def archive_months(self) -> List[Tuple[int, int]]:
+        """Every month the player has an archive for, oldest first.
+
+        Chess.com publishes one archive URL per month the player was active
+        (``.../games/2024/06``), in ascending chronological order, and the list
+        is the only way to know how far back an account goes. Months with no
+        games simply are not listed, so walking this is exact rather than a
+        guess at a start date.
         """
-        Returns the current games for the authenticated user.
+        response = self._chessdotcomclient.get_player_game_archives(self.username)  # pyright: ignore[reportAttributeAccessIssue]
+        data = response.json
+        urls = data.get("archives", []) if isinstance(data, dict) else []
+
+        months: List[Tuple[int, int]] = []
+        for url in urls:
+            parts = str(url).rstrip("/").split("/")
+            if len(parts) < 2:
+                continue
+            try:
+                months.append((int(parts[-2]), int(parts[-1])))
+            except ValueError:
+                continue  # not a .../yyyy/mm archive URL
+        return months
+
+    def finished_games(self, year: int, month: int) -> List[Dict]:
+        """The user's finished games for one month, ready to be stored.
+
+        The app's only source of games. Each entry is normalised into the shape a
+        ``Game`` row is written from: ``game_id``, ``url``, ``pgn`` (the *final*
+        movetext), ``fen`` (the final position), ``time_class``, ``end_time``,
+        ``white``/``black`` as ``{username, rating}`` dicts, plus ``result`` and
+        ``result_detail`` from this user's point of view.
+
+        Two kinds of entry are skipped: games under ``rules`` other than
+        ``chess`` (see `STANDARD_RULES`), and games where neither side matches
+        the username — the archive can hold games played under an alias we have
+        no way to attribute.
         """
-        response = self._chessdotcomclient.get_player_current_games(self.username)  # pyright: ignore[reportAttributeAccessIssue]
-        # The chessdotcom library returns an object with a .json attribute (property or dictionary)
-        games_data = response.json
-        raw_games = games_data.get("games", []) if isinstance(games_data, dict) else []
-
-        processed_games = []
-        for game in raw_games:
-            pgn = game.get("pgn", "")
-
-            # Extract White and Black info from PGN
-            white_match = re.search(r'\[White "(.*?)"\]', pgn)
-            black_match = re.search(r'\[Black "(.*?)"\]', pgn)
-            white_elo_match = re.search(r'\[WhiteElo "(.*?)"\]', pgn)
-            black_elo_match = re.search(r'\[BlackElo "(.*?)"\]', pgn)
-
-            # Fallback to URL if PGN parsing fails for username
-            white_user = "Unknown"
-            if white_match:
-                white_user = white_match.group(1)
-            elif "white" in game and isinstance(game["white"], str):
-                white_user = game["white"].split("/")[-1]
-
-            black_user = "Unknown"
-            if black_match:
-                black_user = black_match.group(1)
-            elif "black" in game and isinstance(game["black"], str):
-                black_user = game["black"].split("/")[-1]
-
-            game["white"] = {
-                "username": white_user,
-                "rating": white_elo_match.group(1) if white_elo_match else "?",
-            }
-            game["black"] = {
-                "username": black_user,
-                "rating": black_elo_match.group(1) if black_elo_match else "?",
-            }
-            game["is_my_turn"] = game.get("turn", "").lower() == (
-                "white" if white_user.lower() == self.username.lower() else "black"
-            )
-
-            # Extract game ID from URL
-            # Example URL: https://www.chess.com/game/daily/944768131
-            game_url = game.get("url", "")
-            game_id = game_url.split("/")[-1] if game_url else ""
-            game["game_id"] = game_id
-
-            processed_games.append(game)
-
-        return processed_games
-
-    def game_detail(self, id: str) -> Dict | None:
-        """
-        Returns the game detail for a given game ID.
-        """
-        response = self._chessdotcomclient.get_player_current_games(self.username)  # pyright: ignore[reportAttributeAccessIssue]
-        games_data = response.json
-        games = games_data.get("games", []) if isinstance(games_data, dict) else []
-
-        # Find the specific game by ID (last part of the URL)
-        game_detail = next((g for g in games if g.get("url", "").split("/")[-1] == id), None)
-
-        if not game_detail:
-            return None
-
-        # Process PGN for player names and ratings
-        pgn = game_detail.get("pgn", "")
-        white_match = re.search(r'\[White "(.*?)"\]', pgn)
-        black_match = re.search(r'\[Black "(.*?)"\]', pgn)
-        white_elo_match = re.search(r'\[WhiteElo "(.*?)"\]', pgn)
-        black_elo_match = re.search(r'\[BlackElo "(.*?)"\]', pgn)
-
-        white_name = white_match.group(1) if white_match else "White"
-        black_name = black_match.group(1) if black_match else "Black"
-
-        return {
-            "game": game_detail,
-            "white_name": white_name,
-            "black_name": black_name,
-            "white_rating": white_elo_match.group(1) if white_elo_match else None,
-            "black_rating": black_elo_match.group(1) if black_elo_match else None,
-        }
-
-    def finished_game_results(
-        self, year: Optional[int] = None, month: Optional[int] = None
-    ) -> Dict[str, dict]:
-        """Outcomes of the user's finished games for one month, from the archives.
-
-        Chess.com drops a game from ``current_games`` the moment it ends, so the
-        snapshot we hold has a PGN with Result "*". The monthly-archive endpoint is
-        the reliable source for the final result: unlike current games (where
-        ``white``/``black`` are URL strings), each archived game carries
-        ``white``/``black`` as dicts with a ``result`` code.
-
-        Returns ``{game_id: {"result", "detail", "pgn"}}`` keyed by the Chess.com
-        game id (last URL segment), covering only the games the user played.
-        ``pgn`` is the archive's *final* movetext: our own snapshot was taken while
-        the game was still current, so it can be missing the last moves played
-        between two scheduler ticks — the caller uses this to complete it.
-        Defaults to the current month when ``year``/``month`` are None.
-        """
-        # The chessdotcom library requires both year and month (or a datetime);
-        # passing None for either raises ValueError, so default to the current month.
-        if year is None or month is None:
-            now = timezone.now()
-            year, month = now.year, now.month
         response = self._chessdotcomclient.get_player_games_by_month(  # pyright: ignore[reportAttributeAccessIssue]
             self.username, year, month
         )
@@ -158,8 +146,11 @@ class Client:
         games = data.get("games", []) if isinstance(data, dict) else []
 
         me = self.username.lower()
-        results: Dict[str, dict] = {}
+        finished: List[Dict] = []
         for game in games:
+            if str(game.get("rules", STANDARD_RULES)) != STANDARD_RULES:
+                continue
+
             white = game.get("white") or {}
             black = game.get("black") or {}
             if not isinstance(white, dict) or not isinstance(black, dict):
@@ -170,30 +161,30 @@ class Client:
             elif str(black.get("username", "")).lower() == me:
                 mine, theirs = black, white
             else:
-                continue  # archive can include games under an alias we don't match
-
-            my_result = str(mine.get("result", ""))
-            if not my_result:
                 continue
 
-            if my_result == "win":
-                outcome = "win"
-                # The decisive reason lives on the losing side.
-                detail = _RESULT_DETAIL.get(str(theirs.get("result", "")), "")
-            elif my_result in _DRAW_RESULTS:
-                outcome = "draw"
-                detail = ""
-            else:
-                outcome = "loss"
-                detail = _RESULT_DETAIL.get(my_result, "")
+            result, detail = _outcome(mine, theirs)
+            if not result:
+                continue  # no per-side result: nothing to record
 
-            game_url = game.get("url", "")
-            game_id = game_url.split("/")[-1] if game_url else ""
-            if game_id:
-                results[game_id] = {
-                    "result": outcome,
-                    "detail": detail,
-                    "pgn": game.get("pgn", ""),
+            url = str(game.get("url", ""))
+            game_id = _game_id(url)
+            if not game_id:
+                continue
+
+            finished.append(
+                {
+                    "game_id": game_id,
+                    "url": url,
+                    "pgn": game.get("pgn", "") or "",
+                    "fen": game.get("fen", "") or "",
+                    "time_class": game.get("time_class", "") or "",
+                    "end_time": _end_time(game.get("end_time")),
+                    "white": _archive_player(white),
+                    "black": _archive_player(black),
+                    "result": result,
+                    "result_detail": detail,
                 }
+            )
 
-        return results
+        return finished

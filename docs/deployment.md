@@ -13,8 +13,8 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 
 | Service | Image / build | Role |
 | --- | --- | --- |
-| `web` | built from [`Dockerfile`](../Dockerfile) | Gunicorn **plus** the APScheduler process, started by [`entrypoint.sh`](../entrypoint.sh). Exposes `8000`. |
-| `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish and calls the LLM. |
+| `web` | built from [`Dockerfile`](../Dockerfile) | Gunicorn, started by [`entrypoint.sh`](../entrypoint.sh). Exposes `8000`. Stateless — **scale it freely**. |
+| `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish, calls the LLM, and imports Chess.com archives. |
 | `redis` | `redis:7-alpine` | Celery broker and result backend, with append-only persistence on the `redis-data` volume (see [Volumes](#volumes)). Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
 | `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Needs a one-off model pull, see below. |
@@ -41,10 +41,10 @@ seconds.
 A **hard** kill (OOM, `docker kill`) is different: nothing gets to hand anything
 back, and Redis only re-delivers those messages after kombu's visibility timeout,
 an hour by default. You'll see it as an `unacked` count stuck above the worker's
-concurrency. The recovery there is app-side and takes 10 minutes: the scheduler
-returns any row left `RUNNING` past `ANALYSIS_TIMEOUT` to the queue. Behind that
-sits the 10-minute finished-game scan, which re-queues analyses that went missing
-entirely.
+concurrency. The recovery there is app-side and takes 10 minutes:
+`sync.requeue_stale_analyses` returns any row left `RUNNING` past
+`ANALYSIS_TIMEOUT` to the queue. It runs from the detail page's **Refresh**
+button, so asking after the affected analysis is what triggers it.
 
 So a redeploy costs at most the mid-flight analyses, redone — never a gap in the
 history — but budget minutes, not seconds, when the worker died badly.
@@ -68,9 +68,10 @@ Once only, per `ollama-data` volume. Details and how to switch model in
 - **`redis-data`** — the task queue, with `--appendonly yes`. Without it a
   restart of the `redis` container empties the queue, and every analysis waiting
   in it is orphaned: the `CoachSuggestion` row still reads `PENDING`, so the
-  reconciliation passes skip it as already queued and nothing ever runs it. The
-  scheduler does recover that state (`requeue_orphaned_analyses`), but only once
-  the queue is fully drained — keeping the volume avoids the situation.
+  reconciliation passes skip it as already queued and nothing ever runs it.
+  `sync.requeue_orphaned_analyses` does recover that state when you open the
+  position, but only once the queue is fully drained — keeping the volume avoids
+  the situation.
 
 ## The container entrypoint
 
@@ -79,30 +80,24 @@ Once only, per `ollama-data` volume. Details and how to switch model in
 ```sh
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
-python manage.py run_scheduler &
 exec gunicorn chessdotcom_ai_coach.wsgi:application --bind 0.0.0.0:8000 --timeout 180
 ```
-
-Two decisions worth preserving:
-
-**The scheduler is backgrounded here, once per container** — not started
-in-process by Django. Gunicorn forks workers; an in-process scheduler would start
-once per worker and enqueue duplicate analyses. Backgrounding it from the
-entrypoint means exactly one instance exists, and it runs after `migrate`, so the
-tables it polls already exist.
 
 **`--timeout 180`** rather than Gunicorn's 30s default. A synchronous analysis
 path costs ~2s of Stockfish plus 20–30s of CPU inference; the default worker
 timeout would kill the request. Analysis now runs in Celery, but the generous
 timeout stays as a safety margin.
 
-If you scale the `web` service to more than one replica, **the scheduler will run
-in each of them.** Duplicate ticks are mostly harmless — the `get_or_create` lock
-on `CoachSuggestion` deduplicates the enqueues (see
-[data-model.md](data-model.md#the-row-is-the-lock)) — but you'd be making
-redundant Chess.com calls. To scale out properly, build a separate service that
-runs `python manage.py run_scheduler` alone and drop the background line from the
-entrypoint.
+Note what is *not* here: no background process. The archive import is claimed
+from the request path (`services.sync.request_sync`) and executed by the worker,
+so `web` holds no state of its own and `docker compose up --scale web=3` is
+safe — the claim is a conditional `UPDATE` on `User.last_synced_at`, so three
+replicas racing on the same user still produce one import.
+
+**`worker` is the one to keep at a single replica**, and not because of the
+import: Ollama serves one request at a time, so parallel analyses queue behind it
+until they exceed the coach's 150s timeout. See the `--concurrency` note in
+[`docker-compose.yaml`](../docker-compose.yaml).
 
 ## The image
 

@@ -1,18 +1,22 @@
 # Documentation
 
-Chessdotcom AI Coach is a Django web app that keeps a local mirror of your
-Chess.com games, renders the board server-side, and — whenever it's your turn —
-runs Stockfish and a local LLM to produce a grandmaster-style comment on the
-position. There is no client-side JavaScript framework: every screen is a
-server-rendered HTML fragment swapped in by HTMX.
+Chessdotcom AI Coach mirrors your whole Chess.com archive locally — **every
+finished game, live and daily** — and replays any of them move by move. Ask it to
+analyse a game and, for each move you played, it runs Stockfish and a local LLM
+to produce a grandmaster-style comment on the position you faced.
+
+It is a review tool, not a live assistant: a game you are still playing does not
+appear until it ends, a move you have not played is never analysed, and nothing
+is analysed until you ask. There is no client-side JavaScript framework: every
+screen is a server-rendered HTML fragment swapped in by HTMX.
 
 For a "clone and run" quickstart, see the [root README](../README.md). These
 pages cover the parts that don't fit there.
 
 | Page | What it covers |
 | --- | --- |
-| [Architecture](architecture.md) | The five cooperating processes, the analysis flow end to end, and the layering rules between modules |
-| [Data model](data-model.md) | `User`, `Game`, `CoachSuggestion` — fields, constraints, and the invariants the code relies on |
+| [Architecture](architecture.md) | The four cooperating processes, how games arrive and how they get analysed, and the layering rules between modules |
+| [Data model](data-model.md) | `User`, `Game`, `CoachSuggestion`, `ArchiveImport` — fields, constraints, and the invariants the code relies on |
 | [Configuration](configuration.md) | Every environment variable, what Docker overrides, Stockfish and LLM setup |
 | [Development](development.md) | Running locally, the four processes you need, URL map, management commands, code conventions |
 | [Deployment](deployment.md) | Docker Compose, the container entrypoint, CI/CD, running behind a reverse proxy |

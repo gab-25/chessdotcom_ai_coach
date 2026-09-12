@@ -1,28 +1,84 @@
 {% load static %}
-{# On a manual refresh the game count lives outside this fragment, so update it out of band. #}
-{% if oob %}{% include "partials/home_count.html" %}{% endif %}
+{% comment %}
+  The home grid: finished games only — a game in progress has nothing to review
+  yet, so it is not listed. One page of games, with the time-control filter and
+  the pager; an imported archive runs to thousands of rows, so the page and the
+  count both come from the database.
+
+  Every control here targets #game-list and carries the *other* control's state in
+  its query string (the filter keeps no page, the pager keeps the filter), so the
+  two never cancel each other out. Two head elements live outside this fragment
+  and are swapped back in out of band: the count line and the Sync button.
+
+  Sync is the sync trigger itself; the filter and the pager merely share its endpoint
+  and are DB reads, which is why only a request that actually claimed the sync
+  (`sync_started`) renders the one-shot re-fetch below.
+{% endcomment %}
+{% if oob %}{% include "partials/home_count.html" %}{% include "partials/sync_button.html" %}{% endif %}
+
+{% if sync_started %}
+{% comment %}
+  One shot, never a poll. `sync_started` is set only when this request won the
+  per-user claim, and the request this element makes names itself with
+  `after_sync`, which `views.game_list` never lets claim — so the fragment that
+  comes back cannot contain this element and the chain is two requests long by
+  construction. htmx helps twice more: `load` fires once per node, and a request
+  from a node that has left the DOM is dropped, so a filter or a page pressed in
+  the meantime cancels the pending re-fetch instead of being overwritten by it.
+
+  hx-target and hx-swap are required here, unlike the wrapper-based trigger this
+  replaced: the element sits *inside* #game-list, so the default target would be
+  itself and the fragment would nest.
+{% endcomment %}
+<div hidden
+     hx-get="{% url 'game_list' %}?after_sync=1&amp;page={{ page.number }}&amp;time_class={{ time_class }}"
+     hx-trigger="load delay:6s"
+     hx-target="#game-list"
+     hx-swap="innerHTML"></div>
+{% endif %}
+
+{% if time_classes %}
+<div class="filters" role="group" aria-label="Filter by time control">
+  <button type="button" class="filter-chip{% if not time_class %} filter-chip--on{% endif %}"
+          hx-get="{% url 'game_list' %}" hx-target="#game-list" hx-swap="innerHTML">All</button>
+  {% for tc in time_classes %}
+  <button type="button" class="filter-chip{% if time_class == tc %} filter-chip--on{% endif %}"
+          hx-get="{% url 'game_list' %}?time_class={{ tc }}" hx-target="#game-list" hx-swap="innerHTML">{{ tc|capfirst }}</button>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="games-grid">
   {% if not games %}
   <div class="empty">
     <i class="fa-solid fa-circle-info"></i>
     <div>
-      <h3>No active games</h3>
-      <p>You don't have any ongoing games on Chess.com right now.</p>
+      <h3>No games to review</h3>
+      {% comment %}
+        The grid reports what it holds, nothing more: an import — running, due, or
+        never started — is the Sync button's to speak for, so no branch here reads
+        the sync state. The only distinction left is the one the grid itself drew,
+        a filter that hides every row.
+      {% endcomment %}
+      {% if time_class %}
+        <p>No finished {{ time_class }} games. Try another time control.</p>
+      {% else %}
+        <p>None of your Chess.com games are here yet.</p>
+      {% endif %}
     </div>
   </div>
   {% else %}
   {% for game in games %}
-  <a href="{% url 'game_detail' game.game_id %}" class="gm-card{% if game.is_user_turn %} gm-card--your-turn{% endif %}">
+  <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
     <div class="gm-card__head">
       <span class="gm-card__head-left">
         <span class="badge">{{ game.time_class|capfirst }}</span>
-        {% if game.is_user_turn %}
-        <span class="badge badge--turn"><i class="fa-solid fa-bell"></i>Your turn</span>
+        {% if game.has_result %}
+        <span class="badge badge--{{ game.result }}">{{ game.result_label }}{% if game.result_detail %} · {{ game.result_detail }}{% endif %}</span>
         {% endif %}
       </span>
-      <span class="gm-card__live">
-        <span class="badge badge--live"><span class="badge__dot"></span></span>
-        LIVE{% if game.move_no %} · move {{ game.move_no }}{% endif %}
+      <span class="gm-card__ended">
+        {% if game.end_time %}{{ game.end_time|date:"j M Y" }}{% else %}<i class="fa-solid fa-magnifying-glass"></i> REVIEW{% endif %}
       </span>
     </div>
 
@@ -33,7 +89,6 @@
         <span class="gm-card__name">{{ game.black_name }}</span>
         <span class="gm-card__meta">{{ game.black_rating|default:"—" }}</span>
       </span>
-      {% if game.turn == 'black' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>
 
     <!-- Board -->
@@ -50,55 +105,24 @@
         <span class="gm-card__name">{{ game.white_name }}</span>
         <span class="gm-card__meta">{{ game.white_rating|default:"—" }}</span>
       </span>
-      {% if game.turn == 'white' %}<span class="gm-card__turn">to move</span>{% endif %}
     </div>
   </a>
   {% endfor %}
   {% endif %}
 </div>
 
-{% if past_games %}
-<div class="past-games">
-  <h2 class="past-games__title"><i class="fa-solid fa-clock-rotate-left"></i> Past games</h2>
-  <div class="games-grid">
-    {% for game in past_games %}
-    <a href="{% url 'game_detail' game.game_id %}" class="gm-card gm-card--past">
-      <div class="gm-card__head">
-        <span class="gm-card__head-left">
-          <span class="badge">{{ game.time_class|capfirst }}</span>
-          {% if game.has_result %}
-          <span class="badge badge--{{ game.result }}">{{ game.result_label }}{% if game.result_detail %} · {{ game.result_detail }}{% endif %}</span>
-          {% endif %}
-        </span>
-        <span class="gm-card__ended"><i class="fa-solid fa-magnifying-glass"></i> REVIEW{% if game.move_no %} · move {{ game.move_no }}{% endif %}</span>
-      </div>
-
-      <!-- Black -->
-      <div class="gm-card__player">
-        <span class="gm-card__avatar gm-card__avatar--b"></span>
-        <span class="gm-card__id">
-          <span class="gm-card__name">{{ game.black_name }}</span>
-          <span class="gm-card__meta">{{ game.black_rating|default:"—" }}</span>
-        </span>
-      </div>
-
-      <!-- Board -->
-      <div class="gm-card__board">
-        <div class="gm-card__board-frame">
-          {% include "partials/board.html" with cells=game.cells board_class="board--mini" %}
-        </div>
-      </div>
-
-      <!-- White -->
-      <div class="gm-card__player gm-card__player--white">
-        <span class="gm-card__avatar gm-card__avatar--w"></span>
-        <span class="gm-card__id">
-          <span class="gm-card__name">{{ game.white_name }}</span>
-          <span class="gm-card__meta">{{ game.white_rating|default:"—" }}</span>
-        </span>
-      </div>
-    </a>
-    {% endfor %}
-  </div>
-</div>
+{% if page.paginator.num_pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% if page.has_previous %}
+  <button type="button" class="btn btn--ghost btn--sm"
+          hx-get="{% url 'game_list' %}?page={{ page.previous_page_number }}&amp;time_class={{ time_class }}"
+          hx-target="#game-list" hx-swap="innerHTML">&lsaquo; Newer</button>
+  {% endif %}
+  <span class="pager__at">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}
+  <button type="button" class="btn btn--ghost btn--sm"
+          hx-get="{% url 'game_list' %}?page={{ page.next_page_number }}&amp;time_class={{ time_class }}"
+          hx-target="#game-list" hx-swap="innerHTML">Older &rsaquo;</button>
+  {% endif %}
+</nav>
 {% endif %}

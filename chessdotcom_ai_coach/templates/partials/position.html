@@ -1,15 +1,11 @@
 {% comment %}
-  The move-by-move "position view" — the whole #gr-view swapped by navigation and
-  the live poll. Rendered from the stored snapshot (no Chess.com call). When it is
-  an htmx response it also keeps the header pill in sync via an out-of-band swap.
+  The move-by-move "position view" — the whole #gr-view, swapped by navigation,
+  by the analysis controls and by Refresh. Rendered from the stored snapshot of a
+  finished game (no Chess.com call) and from the suggestion rows on record. There
+  is no poll anywhere on this page: every swap is something the user pressed.
 {% endcomment %}
-{% if request.htmx %}
-<span id="gr-pill" hx-swap-oob="true" class="status-pill{% if is_live %} status-pill--watch{% endif %}">
-  <span class="status-pill__dot"></span><span class="status-pill__label">{% if is_live %}WATCHING LIVE{% else %}REVIEW{% endif %}</span>
-</span>
-{% endif %}
 <div id="gr-view">
-  <div class="game-layout" id="gr-root">
+  <div class="game-layout">
 
     <!-- LEFT: board column -->
     <div>
@@ -49,17 +45,11 @@
       <div class="movebar">
         <span class="movebar__last">Last: {{ last_move|default:"—" }}</span>
         <div class="gr-navwrap">
-          {% if is_live and sel < live_sel %}
-          <button type="button" class="gr-live-btn" title="Jump to the live position"
-                  hx-get="{% url 'game_position' id %}?sel={{ live_sel }}" hx-target="#gr-view" hx-swap="outerHTML">
-            <span class="status-pill__dot"></span>{% if behind %}{{ behind }} new · {% endif %}live
-          </button>
-          {% endif %}
           <div class="gr-nav">
             <button type="button" title="Start" hx-get="{% url 'game_position' id %}?sel=0" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='Home'] from:body">«</button>
             <button type="button" title="Back (←)" hx-get="{% url 'game_position' id %}?sel={{ prev_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowLeft'] from:body">‹</button>
             <button type="button" title="Forward (→)" hx-get="{% url 'game_position' id %}?sel={{ next_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='ArrowRight'] from:body">›</button>
-            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ live_sel }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
+            <button type="button" title="End" hx-get="{% url 'game_position' id %}?sel={{ head }}" hx-target="#gr-view" hx-swap="outerHTML" hx-trigger="click, keydown[key=='End'] from:body">»</button>
           </div>
         </div>
       </div>
@@ -73,16 +63,85 @@
           <h3 class="coach__title">Coach suggestion</h3>
           <span class="coach__tag">{{ move_label }}</span>
         </div>
-        <div class="coach__body" id="gr-coach">{% include "partials/coach_card.html" %}</div>
+        <div class="coach__body">{% include "partials/coach_card.html" %}</div>
       </div>
+
+      {% comment %}
+        Whole-game analysis, and the page's only two controls. Nothing queues
+        analysis on a schedule — an imported archive is far more games than a
+        worker could ever get through — so this is where it starts. The POST is
+        idempotent (`enqueue_game_analysis` skips what is already queued or done),
+        so a second press costs nothing. Once every move is analysed the button
+        turns into a re-run: the same endpoint with `force=1`.
+
+        Nothing polls. The state is whatever the database said when this fragment
+        was rendered, and Refresh is how the user asks again — which is also what
+        runs the stuck-analysis sweeps, in `views.game_position`.
+
+        The state line says which of three things is true and no more: a count
+        that only moves when you press a button reads as a stalled count. The
+        third state — nothing queued, something still un-analysed — is both the
+        game nobody has analysed yet and the game with a move the coach gave up
+        on, and the plain button is the way out of either: the service re-queues
+        a FAILED row without `force`.
+      {% endcomment %}
+      {% if analysis_total %}
+      <div class="gr-analyse">
+        <div class="gr-analyse__state">
+          {% if analysis_complete %}
+            <i class="fa-solid fa-circle-check"></i> Analysis complete
+          {% elif analysis_pending %}
+            <span class="spinner"></span> Analysis in progress
+          {% else %}
+            Not analysed yet
+          {% endif %}
+        </div>
+        <div class="gr-analyse__actions">
+          {% if analysis_complete %}
+          <button type="button" class="btn btn--ghost btn--sm"
+                  hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
+                  hx-target="#gr-view" hx-swap="outerHTML">
+            <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
+          </button>
+          {% elif analysis_pending %}
+          {% comment %}
+            Nothing to press while the queue drains: every remaining ply already
+            has a row, so the POST would queue nothing. Refresh, beside it, is
+            what the user presses instead.
+          {% endcomment %}
+          <button type="button" class="btn btn--ghost btn--sm" disabled>
+            <i class="fa-solid fa-hourglass-half"></i> Analysing&hellip;
+          </button>
+          {% else %}
+          <button type="button" class="btn btn--accent btn--sm"
+                  hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
+                  hx-target="#gr-view" hx-swap="outerHTML">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
+          </button>
+          {% endif %}
+          {% comment %}
+            Never disabled, unlike the home page's Sync button: that one reports
+            work it queued in a worker, this one only re-reads the database — and
+            while an analysis runs it is the only way to see that it has moved,
+            as well as the only thing that unsticks it.
+
+            It carries `sel`, so the refresh comes back on the move being
+            reviewed, and an id of its own, because htmx re-focuses a replaced
+            element only when it has one — so a keyboard user stays on Refresh.
+          {% endcomment %}
+          <button type="button" class="btn btn--ghost btn--sm" id="gr-refresh"
+                  title="Re-read this page from the database"
+                  hx-get="{% url 'game_position' id %}?sel={{ sel }}&amp;refresh=1"
+                  hx-target="#gr-view" hx-swap="outerHTML">
+            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+          </button>
+        </div>
+      </div>
+      {% endif %}
 
       {% include "partials/history_list.html" %}
     </div>
   </div>
 
   {% include "partials/moves_grid.html" %}
-
-  {% if is_live %}
-  <div hx-get="{% url 'game_live' id %}?sel={{ sel }}&head={{ head }}" hx-trigger="every 5s" hx-target="#gr-view" hx-swap="outerHTML"></div>
-  {% endif %}
 </div>

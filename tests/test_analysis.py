@@ -82,12 +82,15 @@ class TestEnqueueGameAnalysis:
             CoachSuggestion.objects.filter(user=user, game_id="g1").values_list("fen", flat=True)
         ) == set(black_fens)
 
-    def test_skips_a_ply_the_live_coach_analysed_under_a_different_fen(
+    def test_skips_a_ply_already_covered_under_a_different_fen(
         self, mock_task, user
     ):
-        """The live scheduler stores Chess.com's FEN spelling, this module stores
-        python-chess's. They can differ in the halfmove clock for the very same ply,
-        so matching on the raw FEN alone would re-analyse every move played live."""
+        """A ply can be on record under a second FEN spelling.
+
+        Chess.com's FEN and python-chess's can differ in the halfmove clock for
+        the very same position — rows written by the app's earlier live path are
+        still in the database in that spelling — so matching on the raw FEN alone
+        would re-analyse a move the coach has already handled."""
         _game(user)
         first = _white_fens()[0]
         # Same position, halfmove clock bumped — Chess.com's spelling of the ply.
@@ -135,18 +138,154 @@ class TestEnqueueGameAnalysis:
 
         assert result["enqueued"] == 2  # both of White's moves are untouched
 
-    def test_limit_caps_what_a_single_call_enqueues(self, mock_task, user):
-        """The finished-game scan sweeps the whole history, so it spreads a large
-        backlog over several runs instead of dumping it on the worker at once."""
-        _game(user)
+    def test_a_failed_row_is_requeued_without_force(self, mock_task, user):
+        """A move the coach gave up on is the one row the skip must not keep.
 
-        result = enqueue_game_analysis(user, "g1", limit=1)
+        It holds no analysis to protect, and a failed ply never counts as
+        analysed — so the page goes on offering the plain button rather than the
+        forced re-run, and without this the move could never be retried."""
+        _game(user)
+        fen = _white_fens()[0]
+        row = CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=fen,
+            move_no=board_utils.fullmove_number(fen),
+            status=CoachSuggestion.Status.FAILED,
+            attempts=3,
+            analysis="Error during Stockfish analysis: boom",
+        )
+
+        result = enqueue_game_analysis(user, "g1")
+
+        assert result["enqueued"] == 2  # the failed move and the un-analysed one
+        row.refresh_from_db()
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.attempts == 0
+        assert row.analysis == ""
+
+    def test_a_failed_row_is_requeued_under_its_own_fen(self, mock_task, user):
+        """The retry must land on the row, not beside it.
+
+        A row left by the app's earlier live path holds Chess.com's spelling of
+        the position; queuing `fen_before` instead would create a second row for
+        the same ply, and the two would compete for one slot in `annotate_moves`."""
+        _game(user)
+        first = _white_fens()[0]
+        fields = first.split(" ")
+        fields[4] = "7"
+        other_spelling = " ".join(fields)
+        assert other_spelling != first
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=other_spelling,
+            move_no=board_utils.fullmove_number(first),
+            status=CoachSuggestion.Status.FAILED,
+            analysis="boom",
+        )
+
+        enqueue_game_analysis(user, "g1")
+
+        assert CoachSuggestion.objects.filter(user=user, game_id="g1").count() == 2
+        queued = [call.args[2] for call in mock_task.delay.call_args_list]
+        assert other_spelling in queued
+        assert first not in queued
+
+    def test_an_analysed_row_survives_a_failed_neighbour(self, mock_task, user):
+        """Retrying the failed move must not take the good analyses with it."""
+        _game(user)
+        first, second = _white_fens()
+        done = CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=first,
+            move_no=board_utils.fullmove_number(first),
+            status=CoachSuggestion.Status.DONE,
+            best_move_san="e4",
+            analysis="a good line",
+        )
+        CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=second,
+            move_no=board_utils.fullmove_number(second),
+            status=CoachSuggestion.Status.FAILED,
+            analysis="boom",
+        )
+
+        result = enqueue_game_analysis(user, "g1")
 
         assert result["enqueued"] == 1
-        assert result["total"] == 2
-        assert mock_task.delay.call_count == 1
-        # The other move is simply left for the next call — nothing is marked.
-        assert CoachSuggestion.objects.filter(user=user, game_id="g1").count() == 1
+        done.refresh_from_db()
+        assert done.status == CoachSuggestion.Status.DONE
+        assert done.analysis == "a good line"
+
+    def test_force_re_enqueues_an_already_analysed_move(self, mock_task, user):
+        """`force` is what asks for a second opinion on a move already analysed,
+        the one thing the idempotent call will not do."""
+        _game(user)
+        fen = _white_fens()[0]
+        row = CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=fen,
+            move_no=board_utils.fullmove_number(fen),
+            status=CoachSuggestion.Status.DONE,
+            attempts=2,
+            eval_text="+0.3",
+            eval_cp=0.3,
+            best_move_san="e4",
+            best_move_uci="e2e4",
+            analysis="x",
+        )
+
+        result = enqueue_game_analysis(user, "g1", force=True)
+
+        # Both of the user's moves, not just the one that had no row.
+        assert result["enqueued"] == 2
+        assert mock_task.delay.call_count == 2
+        assert CoachSuggestion.objects.filter(user=user, game_id="g1").count() == 2
+        row.refresh_from_db()
+        assert row.status == CoachSuggestion.Status.PENDING
+        assert row.attempts == 0  # the request isn't spent by earlier failures
+        assert row.eval_text == ""
+        assert row.eval_cp is None
+        assert row.best_move_san is None
+        assert row.best_move_uci is None
+        assert row.analysis == ""
+
+    def test_force_reuses_a_row_stored_under_another_fen_spelling(
+        self, mock_task, user
+    ):
+        """Forcing resets the ply's row rather than adding a second one beside it.
+
+        `board_utils.annotate_moves` joins on (move_no, colour), so two rows for
+        the same ply would leave the template silently rendering one of them."""
+        _game(user)
+        first = _white_fens()[0]
+        fields = first.split(" ")
+        fields[4] = "7"
+        other_spelling = " ".join(fields)
+        row = CoachSuggestion.objects.create(
+            user=user,
+            game_id="g1",
+            fen=other_spelling,
+            move_no=board_utils.fullmove_number(first),
+            status=CoachSuggestion.Status.DONE,
+            best_move_san="e4",
+            analysis="x",
+        )
+
+        enqueue_game_analysis(user, "g1", force=True)
+
+        assert CoachSuggestion.objects.filter(user=user, game_id="g1").count() == 2
+        row.refresh_from_db()
+        assert row.status == CoachSuggestion.Status.PENDING
+        # Queued under the spelling the row is keyed on, so the worker claims it.
+        queued = {call.args[2] for call in mock_task.delay.call_args_list}
+        assert other_spelling in queued
+        assert first not in queued
 
     def test_returns_none_when_game_missing(self, mock_task, user):
         assert enqueue_game_analysis(user, "nope") is None
@@ -164,6 +303,40 @@ class TestAnalyzeGameCommand:
 
         assert "Queued 2 new analyses" in out.getvalue()
         assert mock_task.delay.call_count == 2
+
+    def test_force_requeues_an_already_analysed_game(self, mock_task, user):
+        _game(user)
+        for fen in _white_fens():
+            CoachSuggestion.objects.create(
+                user=user,
+                game_id="g1",
+                fen=fen,
+                move_no=board_utils.fullmove_number(fen),
+                status=CoachSuggestion.Status.DONE,
+                analysis="x",
+            )
+        out = StringIO()
+
+        call_command("analyze_game", "g1", "--user", "MyUser", "--force", stdout=out)
+
+        assert mock_task.delay.call_count == 2
+        assert "Queued 2 analyses" in out.getvalue()
+
+    def test_without_force_an_analysed_game_queues_nothing(self, mock_task, user):
+        _game(user)
+        for fen in _white_fens():
+            CoachSuggestion.objects.create(
+                user=user,
+                game_id="g1",
+                fen=fen,
+                move_no=board_utils.fullmove_number(fen),
+                status=CoachSuggestion.Status.DONE,
+                analysis="x",
+            )
+
+        call_command("analyze_game", "g1", "--user", "MyUser", stdout=StringIO())
+
+        mock_task.delay.assert_not_called()
 
     def test_errors_when_game_not_found(self, mock_task, user):
         with pytest.raises(CommandError, match="No stored game"):

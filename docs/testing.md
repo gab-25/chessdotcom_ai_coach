@@ -31,7 +31,7 @@ and `pytest-django`.
 | Module | Covers |
 | --- | --- |
 | [`test_views.py`](../tests/test_views.py) | 64 tests — the largest by far. Grouped into classes per concern: `TestHome`, `TestGameDetail`, `TestAnalyzePosition`, `TestCoachCardModes`, `TestMovesGrid`, `TestLiveMoveSlot`, `TestHistoryList`, … |
-| [`test_scheduler.py`](../tests/test_scheduler.py) | Both jobs: syncing, result backfill, enqueue deduplication, the finished-game scan, and the timeout that revives a stuck analysis |
+| [`test_sync.py`](../tests/test_sync.py) | The request-driven jobs: which archive months a sync reads (including resuming an interrupted backfill), the per-user sync claim, and the two sweeps that revive a stuck analysis |
 | [`test_chess_client.py`](../tests/test_chess_client.py) | Chess.com response parsing, including the archive result codes |
 | [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch and the LLM fallback |
 | [`test_board.py`](../tests/test_board.py) | FEN/PGN expansion |
@@ -81,10 +81,16 @@ inventing their own.
 | --- | --- |
 | **Stockfish** | `chess.engine.popen_uci` — returns `(transport, engine)`, so the stub returns a pair of mocks with `engine.play` as an `AsyncMock`. No subprocess is ever spawned. |
 | **LLM** | `AsyncOpenAI` — the response shape the code reads is `response.choices[0].message.content`. Making the call raise exercises the Stockfish-only fallback branch. |
-| **Celery** | `analyze_game_task` at its *import site* — `chessdotcom_ai_coach.services.scheduler.analyze_game_task`, `...services.analysis.analyze_game_task`, `chessdotcom_ai_coach.views.analyze_game_task`. Tests assert on `.delay` calls; nothing is ever enqueued. |
+| **Celery** | `analyze_game_task` at its *import site* — `chessdotcom_ai_coach.services.sync.analyze_game_task` and `...services.analysis.analyze_game_task`. Tests assert on `.delay` calls; nothing is ever enqueued. `sync_user_task` is the exception: `request_sync` imports it *inside the function* to break a cycle, so it is patched at `chessdotcom_ai_coach.tasks.sync_user_task`. |
 
 Chess.com is patched the same way, at the import site:
-`chessdotcom_ai_coach.services.scheduler.Client`.
+`chessdotcom_ai_coach.services.sync.Client`.
+
+Two seams are stateful and reset by autouse fixtures: `sync._last_recovery` (the
+recovery throttle is a module global, so it outlives a test) and
+`views.sync.recover_stuck_analyses` (patched out wholesale in `test_views.py`, so
+the Refresh button doesn't reach for the broker — two tests take the mock as an
+argument to pin which requests run the sweeps).
 
 Note the pattern: **patch where the name is used, not where it's defined.** This
 is also why [`tasks.py`](../chessdotcom_ai_coach/tasks.py) was kept as a thin
@@ -105,9 +111,10 @@ case — the fixtures and helper builders there are the fastest path:
   Find the class matching the concern (`TestCoachCardModes` for a new coach card
   state, `TestMovesGrid` for grid rendering) and add to it. Assertions are mostly
   against rendered HTML.
-- **Scheduler behaviour?** [`test_scheduler.py`](../tests/test_scheduler.py) —
+- **Archive import or recovery behaviour?** [`test_sync.py`](../tests/test_sync.py) —
   patch `Client` and `analyze_game_task`, then assert on `.delay` call counts.
   The deduplication tests are the model for anything touching the enqueue lock.
+  Anything about *when* work is started belongs in `TestRequestSync`.
 - **A new evaluation branch?** [`test_coach.py`](../tests/test_coach.py), reusing
   the `_engine` helper.
 - **Pure FEN/PGN logic?** [`test_board.py`](../tests/test_board.py) — no DB, no
