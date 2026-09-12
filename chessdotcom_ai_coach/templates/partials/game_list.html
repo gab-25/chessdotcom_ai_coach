@@ -55,18 +55,15 @@
     <div>
       <h3>No games to review</h3>
       {% comment %}
-        A running import is the button's to report, not the grid's, so nothing
-        here speaks for it — which is also why the "look again" nudge is gated on
-        `sync_started`: within the cooldown it is honest, and under a sync it
-        would be asking for the press already in flight. An unlinked account is a
-        different problem, and the one the grid does have to explain.
+        The grid reports what it holds, nothing more: an import — running, due, or
+        never started — is the Sync button's to speak for, so no branch here reads
+        the sync state. The only distinction left is the one the grid itself drew,
+        a filter that hides every row.
       {% endcomment %}
       {% if time_class %}
         <p>No finished {{ time_class }} games. Try another time control.</p>
-      {% elif not user.chessdotcom_username %}
-        <p>No Chess.com account is linked to this profile, so there is no archive to import.</p>
-      {% elif not sync_started %}
-        <p>None of your Chess.com games are here yet. Sync to look again.</p>
+      {% else %}
+        <p>None of your Chess.com games are here yet.</p>
       {% endif %}
     </div>
   </div>

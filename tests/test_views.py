@@ -308,21 +308,26 @@ class TestGameListSync:
         self, mock_task, linked_client
     ):
         """The grid says only that it is empty; the button says why. Two places
-        reporting the same import is what this avoids."""
+        reporting the same import is what this avoids, so the message is the same
+        under a claimed sync as inside the cooldown that claims nothing."""
         client, _user = linked_client
 
         running = client.get("/games").content
+        idle = client.get("/games").content
 
         assert b"No games to review" in running
-        assert b"Sync to look again" not in running
-        # The cooldown makes the second press claim nothing, so the nudge is
-        # honest again: there is no import for it to contradict.
-        assert b"Sync to look again" in client.get("/games").content
+        assert b"None of your Chess.com games are here yet." in running
+        assert idle.count(b"None of your Chess.com games are here yet.") == 1
 
-    def test_the_empty_state_asks_an_unlinked_user_to_link(
+    def test_the_empty_state_reads_the_same_for_an_unlinked_user(
         self, mock_task, auth_client, user
     ):
-        assert b"No Chess.com account is linked" in auth_client.get("/").content
+        """An unlinked account has no archive to import, but that is the Sync
+        button's story too: the grid still says only that it holds nothing."""
+        content = auth_client.get("/").content
+
+        assert b"No games to review" in content
+        assert b"None of your Chess.com games are here yet." in content
 
     def test_a_broker_outage_still_renders_the_games_fragment(
         self, mock_task, linked_client
