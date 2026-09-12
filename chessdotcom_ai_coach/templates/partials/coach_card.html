@@ -25,12 +25,13 @@
 
 {% elif coach.mode == "pending" %}
 {% comment %}
-  The card no longer waits for the answer to arrive — the page does not poll —
-  so it must not promise one is coming: it says where to press instead.
+  The card no longer waits for the answer to arrive — the page does not poll, and
+  nothing on it re-reads the database — so it must not promise one is coming: it
+  says what to do instead.
 {% endcomment %}
 <div class="coach__placeholder">
   <span class="spinner"></span>
-  <p>Analysing <b>{{ coach.san }}</b> in the background. Press <b>Refresh</b> to see whether it has landed.</p>
+  <p>Analysing <b>{{ coach.san }}</b> in the background. Reload the page to see whether it has landed.</p>
 </div>
 
 {% elif coach.mode == "failed" %}

@@ -9,8 +9,8 @@ enqueued.
 
 The ``user`` fixture links no Chess.com account, so `sync.request_sync` returns
 early and no view here reaches the broker — which matters for ``/games``, the one
-endpoint that still calls it. The other exception is the detail page's Refresh
-button, which runs the recovery sweeps — patched out in `_no_recovery_sweep`.
+endpoint that still calls it. The other exception is the detail page load, which
+runs the recovery sweeps — patched out in `_no_recovery_sweep`.
 """
 
 from datetime import timedelta
@@ -45,10 +45,10 @@ def auth_client(client, user):
 
 @pytest.fixture(autouse=True)
 def _no_recovery_sweep():
-    """The Refresh button runs the recovery sweeps, which read the broker.
+    """Loading the detail page runs the recovery sweeps, which read the broker.
 
     They have their own tests in `test_sync.py`; here they would only add a
-    connection attempt. The mock is handed to the two tests that pin *when* the
+    connection attempt. The mock is handed to the three tests that pin *when* the
     sweeps run, which is the whole of what the view decides.
     """
     with patch("chessdotcom_ai_coach.views.sync.recover_stuck_analyses") as mock:
@@ -453,7 +453,7 @@ class TestGameDetail:
         """Not one `hx-trigger="every …"` anywhere on the page.
 
         Progress used to arrive on two timers — the coach card's and the analysis
-        block's — and now arrives when the user presses Refresh. Matching the
+        block's — and now arrives when the user reloads the page. Matching the
         bare `every ` is what keeps a third one from being added quietly."""
         _make_game(user)
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
@@ -506,21 +506,10 @@ class TestGameDetail:
         assert "hx-swap-oob" not in body
         assert body.count('id="gr-view"') == 1
 
-    def test_the_refresh_button_re_reads_the_page(self, auth_client, user):
-        """The page's only way to pick up work the worker has finished."""
-        _make_game(user)
-        _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
-
-        body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
-
-        assert "Refresh" in body
-        assert 'hx-get="/game/944768131/view?sel=3&amp;refresh=1"' in body
-        assert 'id="gr-refresh"' in body
-        assert 'hx-target="#gr-view"' in body
-
-    def test_the_refresh_button_survives_every_state(self, auth_client, user):
-        """It is never disabled and never conditional: while an analysis runs it
-        is the only control on the page that does anything."""
+    def test_there_is_no_refresh_button(self, auth_client, user):
+        """The page is a snapshot of the database as of the load, and reloading
+        is how a newer one is taken — so nothing on it re-reads in place. The
+        button this replaces was the last control that did."""
         _make_game(user)
         states = (
             [],
@@ -537,19 +526,19 @@ class TestGameDetail:
 
             body = auth_client.get("/game/944768131").content.decode()
 
-            assert 'id="gr-refresh"' in body, rows
-            button = body.split('id="gr-refresh"')[1].split("</button>")[0]
-            assert "disabled" not in button, rows
+            assert 'id="gr-refresh"' not in body, rows
+            assert "refresh=1" not in body, rows
+            assert "Refresh" not in body, rows
 
-    def test_refresh_runs_the_recovery_sweeps(
+    def test_loading_the_page_runs_the_recovery_sweeps(
         self, auth_client, user, _no_recovery_sweep
     ):
-        """Refresh is the one request that means "where did the analysis get to",
-        so it is where the stuck-analysis sweeps live now that the card's poll
-        that used to carry them is gone."""
+        """The page load is the one request that means "where did the analysis
+        get to", so it is where the stuck-analysis sweeps live now that the
+        Refresh button that used to carry them is gone."""
         _make_game(user)
 
-        auth_client.get("/game/944768131/view", {"sel": "3", "refresh": "1"})
+        auth_client.get("/game/944768131")
 
         _no_recovery_sweep.assert_called_once_with(user)
 
@@ -560,7 +549,17 @@ class TestGameDetail:
         _make_game(user)
 
         auth_client.get("/game/944768131/view", {"sel": "3"})
-        auth_client.get("/game/944768131")
+
+        _no_recovery_sweep.assert_not_called()
+
+    def test_a_game_we_refuse_to_review_runs_no_sweeps(
+        self, auth_client, user, _no_recovery_sweep
+    ):
+        """The sweeps hang off the 404 check, not in front of it: a page that
+        refuses the game is not somebody asking after an analysis."""
+        _make_game(user, is_active=True)
+
+        assert auth_client.get("/game/944768131").status_code == 404
 
         _no_recovery_sweep.assert_not_called()
 
@@ -652,9 +651,9 @@ class TestCoachCardModes:
         assert "No suggestion for <b>Nf3</b> yet" in body
         assert "Analyse this game" in body
 
-    def test_pending_waits_to_be_refreshed(self, auth_client, user):
+    def test_pending_waits_to_be_reloaded(self, auth_client, user):
         """It used to promise the suggestion would "appear shortly", which a page
-        that no longer polls cannot keep: it says where to press instead."""
+        that no longer polls cannot keep: it says what to do instead."""
         _make_game(user)
         _make_suggestion(
             user, _ply_fen(2), status=CoachSuggestion.Status.PENDING
@@ -665,7 +664,7 @@ class TestCoachCardModes:
 
         assert response.context["coach"]["mode"] == "pending"
         assert "spinner" in body
-        assert "Press <b>Refresh</b>" in body
+        assert "Reload the page" in body
         assert "every " not in body
 
     def test_running_renders_as_pending(self, auth_client, user):
@@ -681,8 +680,9 @@ class TestCoachCardModes:
         assert "Analysing <b>Nf3</b>" in response.content.decode()
 
     def test_pending_does_not_offer_a_retry(self, auth_client, user):
-        """The recovery sweep unsticks an analysis on its own, and Refresh is what
-        runs it — nothing here invites breaking a lock on work still running."""
+        """The recovery sweep unsticks an analysis on its own, and the page load
+        is what runs it — nothing here invites breaking a lock on work still
+        running."""
         _make_game(user)
         _make_suggestion(user, _ply_fen(2), status=CoachSuggestion.Status.PENDING)
 
@@ -1190,7 +1190,7 @@ class TestAnalyzeWholeGame:
         assert "of 2" not in body
         assert "queued" not in body
         # No control to press while the queue drains — pressing it would queue
-        # nothing anyway, since every ply already has a row. Refresh is beside it.
+        # nothing anyway, since every ply already has a row. Reloading is the move.
         assert "Analyse this game" not in body
         assert "Analysing&hellip;" in body
 
@@ -1322,9 +1322,6 @@ class TestTemplateSyntaxNeverLeaks:
 
         self._assert_clean(auth_client.get("/game/944768131"))
         self._assert_clean(auth_client.get("/game/944768131/view", {"sel": "3"}))
-        self._assert_clean(
-            auth_client.get("/game/944768131/view", {"sel": "3", "refresh": "1"})
-        )
 
     def test_error_page_is_clean(self, auth_client, user):
         _make_game(user, is_active=True)

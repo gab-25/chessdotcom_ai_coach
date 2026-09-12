@@ -43,8 +43,8 @@ back, and Redis only re-delivers those messages after kombu's visibility timeout
 an hour by default. You'll see it as an `unacked` count stuck above the worker's
 concurrency. The recovery there is app-side and takes 10 minutes:
 `sync.requeue_stale_analyses` returns any row left `RUNNING` past
-`ANALYSIS_TIMEOUT` to the queue. It runs from the detail page's **Refresh**
-button, so asking after the affected analysis is what triggers it.
+`ANALYSIS_TIMEOUT` to the queue. It runs when the detail page is loaded, so
+asking after the affected analysis is what triggers it.
 
 So a redeploy costs at most the mid-flight analyses, redone — never a gap in the
 history — but budget minutes, not seconds, when the worker died badly.

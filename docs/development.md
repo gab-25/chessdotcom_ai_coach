@@ -70,8 +70,8 @@ From [`urls.py`](../chessdotcom_ai_coach/urls.py):
 | --- | --- | --- |
 | `/` | `home` | Full page — a page of the finished games available to review |
 | `/games` | `game_list` | **HTMX fragment** — the game grid, for the Sync button, the time-control filter (`?time_class=`) and the pager (`?page=`) |
-| `/game/<id>` | `game_detail` | Full page — the review board. **404** for a game still in progress |
-| `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N`; also the **Refresh** button (`?refresh=1`), which additionally runs the stuck-analysis sweeps |
+| `/game/<id>` | `game_detail` | Full page — the review board. **404** for a game still in progress. Also runs the stuck-analysis sweeps: reloading it is how you ask where an analysis got to |
+| `/game/<id>/view` | `game_position` | **HTMX fragment** — position at ply `?sel=N`. A pure read: no Chess.com call, no broker |
 | `/game/<id>/analyze-game` | `analyze_game` | **HTMX fragment** — `POST` queues every move you played in the game |
 | `/login`, `/logout` | Django `LoginView`, `logout_view` | Session auth |
 | `/admin/` | Django admin | Where you link the Chess.com account |

@@ -64,7 +64,7 @@ def _in_flight(row):
 
     The two are worth distinguishing to the recovery sweeps (only a RUNNING row
     can time out) but not on the card: either way the answer isn't there yet, and
-    the page says so in one word until the user presses Refresh.
+    the page says so in one word until the user loads it again.
     """
     return row.status in (
         CoachSuggestion.Status.PENDING,
@@ -203,7 +203,7 @@ def _position_context(user, game, sel):
     # Whole-game analysis state, for the controls in the coach column. Counted off
     # `moves_view` rather than re-queried: it already holds the per-ply state. The
     # page shows only which of the three states this is — running, complete, or
-    # neither — never the counts: a number that moves only when you press Refresh
+    # neither — never the counts: a number that moves only when you reload the page
     # reads as a stalled number.
     analysis_total = sum(1 for m in moves if m["color"] == orientation)
     analysis_done = sum(1 for m in moves_view if m["analyzed"])
@@ -360,34 +360,40 @@ def game_detail(request, id):
     The full page renders the shell plus the opening position; navigation and
     analysis are htmx fragment swaps from here on. A game still in progress is
     refused (see `_reviewable_game`).
+
+    This load is also where the recovery sweeps run. The page carries no poll and
+    no Refresh button, so loading it is the one request whose meaning is "show me
+    where the analysis got to" — which makes it the right place to unstick one,
+    rather than waiting out a scheduler tick that does not exist. Navigation is
+    left as a pure read: a stuck analysis is not what the arrow keys are about,
+    and the sweeps read the broker's queue depth.
+
+    It comes after the 404: a game the user cannot review is not them asking
+    after an analysis. `recover_stuck_analyses` throttles itself and never
+    raises, so a broker that is down costs a page that renders what the database
+    holds, not a 500.
     """
     game, message = _reviewable_game(request.user, id)
     if game is None:
         return render(request, "error.html", {"message": message}, status=404)
+
+    sync.recover_stuck_analyses(request.user)
 
     return render(request, "game_detail.html", _position_context(request.user, game, 0))
 
 
 @login_required
 def game_position(request, id):
-    """HTMX fragment: the position view for a ply — navigation, and Refresh.
+    """HTMX fragment: the position view for a ply — navigation, and nothing else.
 
-    `refresh` is the Refresh button naming itself, the way `after_sync` does in
-    `game_list`. The page carries no poll of any kind, so this is the one request
-    whose meaning is "show me where the analysis got to" — which makes it the
-    right place for the recovery sweeps, until now hung off the coach card's own
-    poll. Navigation is left as a pure read: a stuck analysis is not what the
-    arrow keys are about, and the sweeps read the broker's queue depth.
-
-    `recover_stuck_analyses` throttles itself and never raises, so a broker that
-    is down costs a page that stays where it was, not a 500.
+    A pure read of the stored game and its suggestion rows. It touches neither
+    Chess.com nor the broker: stepping through a game is the most repeated action
+    on the page, and the recovery sweeps belong to the request that means "show me
+    where the analysis got to", which is the page load (`game_detail`).
     """
     game, _message = _reviewable_game(request.user, id)
     if game is None:
         return HttpResponse(status=404)
-
-    if request.GET.get("refresh"):
-        sync.recover_stuck_analyses(request.user)
 
     sel = _int(request.GET.get("sel"), 0)
     return render(request, "partials/position.html", _position_context(request.user, game, sel))

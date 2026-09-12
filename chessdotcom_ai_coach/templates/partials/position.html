@@ -1,8 +1,9 @@
 {% comment %}
-  The move-by-move "position view" — the whole #gr-view, swapped by navigation,
-  by the analysis controls and by Refresh. Rendered from the stored snapshot of a
-  finished game (no Chess.com call) and from the suggestion rows on record. There
-  is no poll anywhere on this page: every swap is something the user pressed.
+  The move-by-move "position view" — the whole #gr-view, swapped by navigation and
+  by the analysis control. Rendered from the stored snapshot of a finished game (no
+  Chess.com call) and from the suggestion rows on record. There is no poll anywhere
+  on this page and no Refresh button either: every swap is something the user
+  pressed, and what it shows is what the database held when the page was loaded.
 {% endcomment %}
 <div id="gr-view">
   <div class="game-layout">
@@ -67,16 +68,17 @@
       </div>
 
       {% comment %}
-        Whole-game analysis, and the page's only two controls. Nothing queues
+        Whole-game analysis, and the page's only control. Nothing queues
         analysis on a schedule — an imported archive is far more games than a
         worker could ever get through — so this is where it starts. The POST is
         idempotent (`enqueue_game_analysis` skips what is already queued or done),
         so a second press costs nothing. Once every move is analysed the button
         turns into a re-run: the same endpoint with `force=1`.
 
-        Nothing polls. The state is whatever the database said when this fragment
-        was rendered, and Refresh is how the user asks again — which is also what
-        runs the stuck-analysis sweeps, in `views.game_position`.
+        Nothing polls and nothing re-reads in place. The state is whatever the
+        database said when the page was loaded, and reloading the page is how the
+        user asks again — which is also what runs the stuck-analysis sweeps, in
+        `views.game_detail`.
 
         The state line says which of three things is true and no more: a count
         that only moves when you press a button reads as a stalled count. The
@@ -96,46 +98,28 @@
             Not analysed yet
           {% endif %}
         </div>
-        <div class="gr-analyse__actions">
-          {% if analysis_complete %}
-          <button type="button" class="btn btn--ghost btn--sm"
-                  hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
-                  hx-target="#gr-view" hx-swap="outerHTML">
-            <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
-          </button>
-          {% elif analysis_pending %}
-          {% comment %}
-            Nothing to press while the queue drains: every remaining ply already
-            has a row, so the POST would queue nothing. Refresh, beside it, is
-            what the user presses instead.
-          {% endcomment %}
-          <button type="button" class="btn btn--ghost btn--sm" disabled>
-            <i class="fa-solid fa-hourglass-half"></i> Analysing&hellip;
-          </button>
-          {% else %}
-          <button type="button" class="btn btn--accent btn--sm"
-                  hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
-                  hx-target="#gr-view" hx-swap="outerHTML">
-            <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
-          </button>
-          {% endif %}
-          {% comment %}
-            Never disabled, unlike the home page's Sync button: that one reports
-            work it queued in a worker, this one only re-reads the database — and
-            while an analysis runs it is the only way to see that it has moved,
-            as well as the only thing that unsticks it.
-
-            It carries `sel`, so the refresh comes back on the move being
-            reviewed, and an id of its own, because htmx re-focuses a replaced
-            element only when it has one — so a keyboard user stays on Refresh.
-          {% endcomment %}
-          <button type="button" class="btn btn--ghost btn--sm" id="gr-refresh"
-                  title="Re-read this page from the database"
-                  hx-get="{% url 'game_position' id %}?sel={{ sel }}&amp;refresh=1"
-                  hx-target="#gr-view" hx-swap="outerHTML">
-            <i class="fa-solid fa-arrows-rotate"></i> Refresh
-          </button>
-        </div>
+        {% if analysis_complete %}
+        <button type="button" class="btn btn--ghost btn--sm"
+                hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
+                hx-target="#gr-view" hx-swap="outerHTML">
+          <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
+        </button>
+        {% elif analysis_pending %}
+        {% comment %}
+          Nothing to press while the queue drains: every remaining ply already has
+          a row, so the POST would queue nothing. The state line beside it is the
+          whole of what this block has to say until the page is loaded again.
+        {% endcomment %}
+        <button type="button" class="btn btn--ghost btn--sm" disabled>
+          <i class="fa-solid fa-hourglass-half"></i> Analysing&hellip;
+        </button>
+        {% else %}
+        <button type="button" class="btn btn--accent btn--sm"
+                hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
+                hx-target="#gr-view" hx-swap="outerHTML">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
+        </button>
+        {% endif %}
       </div>
       {% endif %}
 
