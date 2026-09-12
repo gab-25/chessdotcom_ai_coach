@@ -11,10 +11,10 @@ Two entry points, and they deliberately run in different places:
   Celery worker (`tasks.sync_user_task`). The import is slow IO (one HTTP request
   per archive month), so it must not happen inside the request.
 * `recover_stuck_analyses` — runs the two recovery sweeps *inline* in the web
-  process, from the detail page's Refresh button. They are cheap (one indexed
-  query, one Redis `LLEN`), and more to the point `requeue_stale_analyses` exists
-  to rescue analyses from a wedged worker: queued behind that same worker it
-  would be unable to run in exactly the case it was written for.
+  process, when the detail page is loaded. They are cheap (one indexed query, one
+  Redis `LLEN`), and more to the point `requeue_stale_analyses` exists to rescue
+  analyses from a wedged worker: queued behind that same worker it would be
+  unable to run in exactly the case it was written for.
 
 **Nothing here enqueues analysis of its own accord.** A full archive is thousands
 of games at dozens of analyses each, which no worker is going to finish, so the
@@ -66,11 +66,11 @@ TASK_QUEUE_NAME = "celery"
 SYNC_COOLDOWN = timedelta(seconds=settings.SYNC_COOLDOWN_SECONDS)
 
 # How often the recovery sweeps may run in one web process. They hang off the
-# detail page's Refresh button, which a waiting user can press as fast as they
-# like, and each run costs a Redis `LLEN`. The throttle is per process rather
-# than per user, so a refresh inside the interval can sweep nothing at all — the
-# cost of that is one more press, since the sweeps only act on rows RUNNING past
-# ANALYSIS_TIMEOUT or on an empty queue, neither of which goes away on its own.
+# detail page load, which a waiting user can repeat as fast as they like, and each
+# run costs a Redis `LLEN`. The throttle is per process rather than per user, so a
+# load inside the interval can sweep nothing at all — the cost of that is one more
+# reload, since the sweeps only act on rows RUNNING past ANALYSIS_TIMEOUT or on an
+# empty queue, neither of which goes away on its own.
 RECOVERY_INTERVAL = timedelta(seconds=30)
 
 # When the sweeps last ran in *this* process. Deliberately not shared across
@@ -369,11 +369,11 @@ def requeue_orphaned_analyses(user=None) -> int:
 def recover_stuck_analyses(user) -> int:
     """Run both recovery sweeps for `user`, at most once per `RECOVERY_INTERVAL`.
 
-    Called from the detail page's Refresh button (`views.game_position` with
-    `refresh`), which is the one request that means "show me where the analysis
-    got to" — so the check runs exactly when somebody is waiting on an answer,
-    and a stuck analysis is unstuck by the same press that asks after it, rather
-    than waiting out a scheduler tick. Navigation deliberately does not call it.
+    Called when the detail page is loaded (`views.game_detail`), which is the one
+    request that means "show me where the analysis got to" — so the check runs
+    exactly when somebody is waiting on an answer, and a stuck analysis is unstuck
+    by the same load that asks after it, rather than waiting out a scheduler tick.
+    Navigating between plies deliberately does not call it.
 
     Never raises. This sits in front of a fragment render, and a broker that is
     down must degrade to a page that shows what the database holds, not to a 500.

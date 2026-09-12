@@ -51,7 +51,7 @@ graph TD
         LLM["Ollama<br/><i>OpenAI-compatible</i>"]
     end
 
-    Browser -->|"navigation, paging, analyse request<br/>Refresh (re-read + recovery sweeps)"| Web
+    Browser -->|"navigation, paging, analyse request<br/>detail page load (+ recovery sweeps)"| Web
     Web --> PG
     Web -->|"enqueue analysis <i>when you ask</i><br/>enqueue sync <i>when you press Sync</i>"| Redis
     Redis --> Worker
@@ -124,8 +124,8 @@ sequenceDiagram
     end
 
     rect rgba(180,150,120,0.10)
-    Note over B,Q: the detail page's Refresh button, at most every 30s
-    B->>Web: GET /game/<id>/view?sel=N&refresh=1
+    Note over B,Q: the detail page load, at most every 30s
+    B->>Web: GET /game/<id>
     Web->>DB: requeue_stale_analyses() — rows RUNNING past ANALYSIS_TIMEOUT
     Web->>Q: requeue_orphaned_analyses() — queue empty + nothing RUNNING?
     Note over Web,Q: then no PENDING row can still have a message,<br/>so hand them back (Redis lost the queue)
@@ -151,8 +151,8 @@ sequenceDiagram
     W->>DB: update_or_create → status DONE
 
     Note over B,DB: nothing tells the browser. The page is a snapshot,
-    B->>DB: GET /game/<id>/view?sel=N&refresh=1 (the user presses Refresh)
-    DB-->>B: the whole position view, as fresh as that read
+    B->>DB: GET /game/<id> (the user reloads the page)
+    DB-->>B: the whole page, as fresh as that read
 ```
 
 ### Why the import is a reconciliation, not a one-off
@@ -199,10 +199,10 @@ So the broker is *not* the guarantee in the case that matters most. That is
 `ANALYSIS_TIMEOUT` to the queue — 10 minutes, whatever the broker is doing.
 Treat re-delivery as an optimisation on top of it, not the mechanism.
 
-It runs **in the web process**, from the detail page's Refresh button, and that
-is not an accident: its job is to rescue analyses from a wedged worker, so queued
-behind that same worker it would be unable to run in exactly the case it exists
-for. Refresh is also the only request that means "where did the analysis get
+It runs **in the web process**, from the detail page load, and that is not an
+accident: its job is to rescue analyses from a wedged worker, so queued behind
+that same worker it would be unable to run in exactly the case it exists for.
+Loading that page is also the only request that means "where did the analysis get
 to", so the sweep runs when somebody is actually waiting on one.
 
 Either way a task can be run more than once, so `attempts` bounds it: the worker
@@ -215,7 +215,7 @@ position as FAILED instead of running it again.
 | --- | --- | --- |
 | Sync claim | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `request_sync` — called from `views.game_list` only; `views.home` starts nothing. One conditional `UPDATE` on `User.last_synced_at`, so N web replicas produce one import per `SYNC_COOLDOWN`. Publishes with `retry=False`: nothing in a request may wait on the broker. **Enqueues no analysis.** |
 | Archive import | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `sync_user` — where games come from, run in the worker as `tasks.sync_user_task`. `_due_months` asks for every month with no `ArchiveImport` row plus the current one, so a first sync reads the whole history and an interrupted one resumes at the gaps. `import_all_archives` re-reads regardless, behind `manage.py import_archives`. |
-| Stuck-analysis recovery | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `recover_stuck_analyses`, called from `views.game_position` when the request carries `refresh` (the detail page's **Refresh** button), at most every `RECOVERY_INTERVAL`. Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). Never raises. |
+| Stuck-analysis recovery | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `recover_stuck_analyses`, called from `views.game_detail` once the game is known to be reviewable (the detail page load), at most every `RECOVERY_INTERVAL`. Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). Never raises. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
 | Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |
 | Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `archive_months()` and `finished_games(y, m)` — the archives, and the only endpoints used. Pure IO + shape normalisation, no DB access. |
@@ -284,14 +284,14 @@ There is no custom JavaScript. Everything is a fragment swap:
   string (the filter drops the page, the pager keeps the filter), so they never
   cancel out. Sync differs from the other two in one way: it is the request
   that claims the sync.
-- **Detail** (`partials/position.html`) does not poll at all. Every swap is
-  something the user pressed: navigation, the **Analyse this game** POST, and
-  **Refresh**, which re-reads the same view from the database. Analysis runs in a
-  worker and finishes silently, so the page is a snapshot and Refresh is how the
-  user takes a newer one — which is also what runs the recovery sweeps.
+- **Detail** (`partials/position.html`) does not poll at all, and carries nothing
+  that re-reads the database in place. Every swap is something the user pressed:
+  navigation and the **Analyse this game** POST. Analysis runs in a worker and
+  finishes silently, so the page is a snapshot and reloading it is how the user
+  takes a newer one — which is also what runs the recovery sweeps.
 - **The coach card** (`partials/coach_card.html`) is read-only. Analysis is asked
   for once, for the whole game, so no card state carries a button; a card for a
-  ply in flight says so and points at Refresh. PENDING and RUNNING both render as
+  ply in flight says so and points at the reload. PENDING and RUNNING both render as
   that same pending card — the distinction matters to the recovery sweeps, not to
   someone waiting for an answer.
 - **The analysis state** is reported as one of three things — in progress,

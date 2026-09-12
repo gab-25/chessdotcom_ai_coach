@@ -231,9 +231,8 @@ there a worker on this row or not?**
   What that does *not* cover is the message going missing altogether — Redis
   losing the queue, say. The row still reads `PENDING`, so every reconciliation
   pass finds it and enqueues nothing: the position is locked by work that does
-  not exist. `sync.requeue_orphaned_analyses()` is the way out — run from the
-  detail page's **Refresh** button, so asking after a stuck analysis is what
-  unsticks it —
+  not exist. `sync.requeue_orphaned_analyses()` is the way out — run when the
+  detail page is loaded, so asking after a stuck analysis is what unsticks it —
   and it detects the state by comparison rather than by age, because age cannot tell a
   stranded row from one merely queued behind a long scan. **If the broker's queue
   is empty and no row is `RUNNING`, then no `PENDING` row can have a message** —

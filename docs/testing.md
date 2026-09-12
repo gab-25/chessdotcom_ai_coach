@@ -89,8 +89,8 @@ Chess.com is patched the same way, at the import site:
 Two seams are stateful and reset by autouse fixtures: `sync._last_recovery` (the
 recovery throttle is a module global, so it outlives a test) and
 `views.sync.recover_stuck_analyses` (patched out wholesale in `test_views.py`, so
-the Refresh button doesn't reach for the broker — two tests take the mock as an
-argument to pin which requests run the sweeps).
+loading the detail page doesn't reach for the broker — three tests take the mock
+as an argument to pin which requests run the sweeps).
 
 Note the pattern: **patch where the name is used, not where it's defined.** This
 is also why [`tasks.py`](../chessdotcom_ai_coach/tasks.py) was kept as a thin
