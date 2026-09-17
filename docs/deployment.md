@@ -17,12 +17,10 @@ The app is served on http://localhost:8000. Create a user through the admin (see
 | `worker` | same image | `celery -A chessdotcom_ai_coach worker -l info`. Runs Stockfish, calls the LLM, and imports Chess.com archives. |
 | `redis` | `redis:7-alpine` | Celery broker and result backend, with append-only persistence on the `redis-data` volume (see [Volumes](#volumes)). Health-checked with `redis-cli ping`. |
 | `postgres` | `postgres:18-alpine` | Health-checked with `pg_isready`. |
-| `ollama` | `ollama/ollama:latest` | OpenAI-compatible endpoint on `11434/v1`. Needs a one-off model pull, see below. |
 
-`web` and `worker` both wait for `postgres` and `redis` to be **healthy**, but
-only for `ollama` to have **started** — the coach degrades gracefully to
-Stockfish-only text when the LLM isn't answering yet, so blocking on it would be
-pointless.
+`web` and `worker` both wait for `postgres` and `redis` to be **healthy**. There
+is nothing else to wait for: the LLM is [OpenRouter](https://openrouter.ai), a
+remote API, not a container in this stack.
 
 ### Restarting the worker
 
@@ -49,22 +47,18 @@ asking after the affected analysis is what triggers it.
 So a redeploy costs at most the mid-flight analyses, redone — never a gap in the
 history — but budget minutes, not seconds, when the worker died badly.
 
-### After the first start: pull the model
+### Before the first start: the API key
 
-Ollama ships no model. Until you run it, analyses complete on the Stockfish-only
-fallback:
+`OPENROUTER_API_KEY` must be in `.env` before you bring the stack up. Without it
+`web` and `worker` exit at `migrate` with an `ImproperlyConfigured` naming the
+variable — there is no degraded mode to fall back into. See
+[configuration.md](configuration.md#the-api-key).
 
-```bash
-docker compose exec ollama ollama pull llama3.2:3b
-```
-
-Once only, per `ollama-data` volume. Details and how to switch model in
-[configuration.md](configuration.md#pulling-the-model).
+There is no model to download and no first-install step beyond that.
 
 ### Volumes
 
 - **`postgres-data`** — the database.
-- **`ollama-data`** — the model store. Keep it, or you have to re-pull ~2GB.
 - **`redis-data`** — the task queue, with `--appendonly yes`. Without it a
   restart of the `redis` container empties the queue, and every analysis waiting
   in it is orphaned: the `CoachSuggestion` row still reads `PENDING`, so the
@@ -94,10 +88,12 @@ so `web` holds no state of its own and `docker compose up --scale web=3` is
 safe — the claim is a conditional `UPDATE` on `User.last_synced_at`, so three
 replicas racing on the same user still produce one import.
 
-**`worker` is the one to keep at a single replica**, and not because of the
-import: Ollama serves one request at a time, so parallel analyses queue behind it
-until they exceed the coach's 150s timeout. See the `--concurrency` note in
-[`docker-compose.yaml`](../docker-compose.yaml).
+**`worker` scales too**, now that the LLM is a remote API rather than a local
+runtime serving one request at a time. Celery is left at its default of one
+process per core, and the real ceiling is CPU: each analysis runs a Stockfish
+subprocess for ~2s. Size the replicas against cores, and against your OpenRouter
+rate limit — a burst that trips it does not fail anything, it just returns
+Stockfish-only prose for the moves that got a `429`.
 
 ## The image
 
@@ -148,7 +144,9 @@ than following `latest`.
 - Neither Redis nor Postgres is authenticated or firewalled in the Compose file,
   and both publish their ports to the host. Fine locally; not fine on a public
   machine.
-- Give the LLM host enough RAM: ~2GB while the 3B model is loaded. Thanks to
-  `OLLAMA_KEEP_ALIVE=30s` that is a *peak* during and just after an analysis, not
-  a permanent floor — Ollama unloads the weights once the window closes. See
-  [configuration.md](configuration.md#keep-alive--why-ollama-and-not-llama-server).
+- Treat `OPENROUTER_API_KEY` as a real secret: it is injected from `.env` and
+  never named in [`docker-compose.yaml`](../docker-compose.yaml), so keep it out
+  of the image and out of version control. Analysis is billed per request — one
+  per analysed move — so watch the spend, and remember that FEN and PGN of the
+  analysed games are sent to a third party. See
+  [configuration.md](configuration.md#the-api-key).

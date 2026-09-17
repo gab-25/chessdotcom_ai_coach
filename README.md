@@ -14,10 +14,12 @@ until you ask — a full archive is more games than any worker would get through
 
 - **Django 5** — ORM, templates, admin, session auth (custom `User` model)
 - **PostgreSQL** — via `psycopg2-binary`
-- **Ollama** — serves the local LLM behind an OpenAI-compatible API on `/v1`; the
-  app reaches it with the `openai` async client for the AI coach prose
-  (`chessdotcom_ai_coach/services/coach.py`). `OLLAMA_KEEP_ALIVE` unloads the
-  model between analyses, so the ~2GB of weights don't sit in RAM permanently
+- **OpenRouter** — the LLM behind the AI coach prose, reached with the `openai`
+  async client against its OpenAI-compatible `/v1`
+  (`chessdotcom_ai_coach/services/coach.py`). It is the **only** provider: an
+  `OPENROUTER_API_KEY` is required and the app will not start without one. That
+  makes the coach a paid, networked dependency — each analysed move is one billed
+  request, and the FEN and PGN of the game go to a third party
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
@@ -55,24 +57,24 @@ until you ask — a full archive is more games than any worker would get through
 
 ```bash
 cp .env.example .env
+# put your OpenRouter key in .env, then:
 docker compose up --build
-docker compose exec ollama ollama pull llama3.2:3b   # once, ~2GB
 ```
 
 Compose starts the whole stack: `web` (Gunicorn, started by `entrypoint.sh`
 after `migrate`/`collectstatic`), a `worker` running the Celery worker, plus
-`redis`, `postgres` and `ollama`. The app is served on
-http://localhost:8000.
+`redis` and `postgres`. The app is served on http://localhost:8000.
 
-Compose overrides `POSTGRES_HOST`, `LLM_BASE_URL`, `LLM_MODEL`, `REDIS_URL` and
-`STOCKFISH_PATH` so the containers reach each other by service name; everything
-else comes from `.env`.
+Compose overrides `POSTGRES_HOST`, `REDIS_URL` and `STOCKFISH_PATH` so the
+containers reach each other by service name; everything else, the OpenRouter key
+included, comes from `.env`.
 
-**The `ollama` service starts empty** — it downloads no model on its own, so the
-pull above is required. It is stored in the `ollama-data` volume and survives
-restarts, so you only do it once. Skip it and the app still works, but every
-analysis falls back to Stockfish-only text with no coach prose. See
-[configuration.md](docs/configuration.md#pulling-the-model) for how to use a
+**`OPENROUTER_API_KEY` is required** — get one at
+[openrouter.ai/keys](https://openrouter.ai/keys). Leave it empty and `web` and
+`worker` exit at `migrate` with an error naming the variable, rather than booting
+into a coach that can only recite Stockfish. There is no model to download and no
+other first-install step. See
+[configuration.md](docs/configuration.md#choosing-a-model) for how to use a
 different model.
 
 Then create a user (see [First run](#first-run) below).
@@ -89,10 +91,12 @@ docker compose logs -f worker      # live task log
 The line to watch for is `Task ... succeeded in Ns`. Reading the log:
 
 - **Nothing but `received`, never `succeeded`** → tasks are arriving but not
-  finishing. Check the LLM: `docker compose logs ollama`.
+  finishing. Stockfish is the local suspect; the LLM call is capped at 60s and
+  falls back rather than hanging.
 - **`LLM Error` followed by a task that still succeeds** → the analysis fell back
-  to Stockfish-only text. If those come in bursts, the worker is outrunning
-  Ollama — see the `--concurrency` note in `docker-compose.yaml`.
+  to Stockfish-only text. A `401` means the key is wrong or revoked; a `429` in
+  bursts means you are past your OpenRouter rate limit, and the fix is fewer
+  `worker` replicas or a higher limit.
 - **`Giving up on analysis ... after 3 attempts`** → that position is `failed`
   and is not retried automatically. Use the card's "Try again", or
   `manage.py analyze_game <game_id>`.
@@ -154,7 +158,7 @@ that queue, and the games you actually want to review would sit behind years of
 ones you don't.
 
 Expect a game to fill in gradually rather than at once: a whole game is dozens of
-analyses, each a few seconds of Stockfish plus an LLM call, so the card for each
+analyses, each a couple of seconds of Stockfish plus one OpenRouter call, so the card for each
 move turns from pending to answered as the worker gets to it. Pressing the button
 again costs nothing — the enqueue is idempotent. The command-line equivalent, and
 the way to retry a game whose analyses were given up on:

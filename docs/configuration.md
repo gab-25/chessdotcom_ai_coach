@@ -17,23 +17,26 @@ Copy [`.env.example`](../.env.example) to `.env` and edit.
 | `POSTGRES_PASSWORD` | Database password | `password` | `password` |
 | `POSTGRES_HOST` | Database host | `localhost` | `localhost` |
 | `POSTGRES_PORT` | Database port | `5432` | `5432` |
-| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint | `http://ollama:11434/v1` | `http://localhost:11434/v1` |
-| `LLM_MODEL` | Model tag sent with each request | `llama3.2:3b` | same |
+| `OPENROUTER_API_KEY` | OpenRouter API key | **none — required**, the app will not start without it | same |
+| `LLM_MODEL` | Model slug sent with each request | `anthropic/claude-haiku-4.5` | same |
 | `REDIS_URL` | Celery broker **and** result backend | `redis://redis:6379/0` | `redis://localhost:6379/0` |
 | `SYNC_COOLDOWN_SECONDS` | How long a user's archive-sync claim holds | `300` | same |
 | `STOCKFISH_PATH` | Path to the engine binary | `stockfish` (resolved on `PATH`) | `./stockfish` |
 
 Note that the **defaults are the Docker values**, not the local ones —
-`ollama:11434` and `redis:6379` are Compose service names. A local run with an
-incomplete `.env` therefore fails by trying to reach hostnames that only exist
-inside the Compose network, rather than by complaining about a missing setting.
-If analysis silently never completes locally, check `LLM_BASE_URL` and
-`REDIS_URL` first.
+`redis:6379` is a Compose service name. A local run with an incomplete `.env`
+therefore fails by trying to reach a hostname that only exists inside the Compose
+network; if analysis silently never completes locally, check `REDIS_URL` first.
 
-`LLM_BASE_URL` and `LLM_MODEL` are read directly by
+`OPENROUTER_API_KEY` is the exception, and deliberately so: it has no default and
+an incomplete `.env` fails **immediately, by name** (see [The API key](#the-api-key)).
+
+`LLM_MODEL` and `OPENROUTER_API_KEY` are read directly by
 [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) at import time
-(`os.getenv`), not through Django settings — `settings.LLM_BASE_URL` exists but
-is informational.
+(`os.getenv`), not through Django settings — which keeps that module importable
+without a configured Django. [`settings.py`](../chessdotcom_ai_coach/settings.py)
+does not store the key, it only *insists* on it, because it is the one module
+every entry point loads.
 
 ## Celery settings
 
@@ -45,7 +48,7 @@ how the worker behaves under restart:
 | --- | --- | --- |
 | `CELERY_TASK_ACKS_LATE` | `True` | Acknowledge a task after it ran, not when it was delivered, so an in-flight analysis isn't lost with its worker. A graceful stop hands the message straight back; after a hard kill it waits on kombu's visibility timeout (an hour), which is why the 10-minute `sync.requeue_stale_analyses` — run when the detail page is loaded — is the guarantee that actually holds. |
 | `CELERY_TASK_REJECT_ON_WORKER_LOST` | `True` | Makes the above cover a worker killed outright (an OOM kill), not just a clean shutdown. |
-| `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. |
+| `CELERY_WORKER_PREFETCH_MULTIPLIER` | `1` | Reserve one task at a time. An analysis takes seconds to minutes, so prefetching a batch would hide those tasks from an idle worker and, with `acks_late`, return the whole batch to the queue when one worker dies. This bounds what a worker *reserves*, not what it *runs*: concurrency is a separate knob, left at Celery's default of one process per core, since the only local ceiling is CPU-bound Stockfish — OpenRouter serves the LLM calls in parallel. |
 
 Because a task can therefore run more than once, `attempts` is capped: one that
 kills its worker would otherwise be retried for ever. See
@@ -54,20 +57,19 @@ kills its worker would otherwise be retried for ever. See
 ## What Docker Compose overrides
 
 [`docker-compose.yaml`](../docker-compose.yaml) passes `.env` through to the
-`web` and `worker` services via `env_file`, then overrides five keys on both so
+`web` and `worker` services via `env_file`, then overrides three keys on both so
 the containers reach each other by service name:
 
 ```yaml
 environment:
   - POSTGRES_HOST=postgres
-  - LLM_BASE_URL=http://ollama:11434/v1
-  - LLM_MODEL=llama3.2:3b
   - REDIS_URL=redis://redis:6379/0
   - STOCKFISH_PATH=stockfish
 ```
 
-`LLM_MODEL` is pinned here (rather than left to `.env`) so the tag the app asks
-for always matches the one the `ollama` service pulls at startup.
+Everything else — `OPENROUTER_API_KEY` and `LLM_MODEL` included — comes straight
+from `.env`. The key is deliberately **not** named in the compose file: it is a
+secret, and the file is committed.
 
 So you can keep local values in `.env` and still `docker compose up` without
 editing anything.
@@ -110,99 +112,79 @@ linked binaries with the NNUE network **embedded** — there is nothing to compi
 and no weights file to fetch separately. The engine runs as a short-lived local
 subprocess per analysis (`chess.engine.popen_uci`), with a 2-second limit, and is
 always terminated in a `finally` block.
-
 ## LLM
 
-The `ollama` service runs `ollama/ollama:latest`. Ollama exposes an
-OpenAI-compatible API under `/v1`, so the app talks to it with the standard
-`openai` async client and a dummy API key — nothing in
-[`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) is
-Ollama-specific.
+The coach prose comes from [OpenRouter](https://openrouter.ai), which fronts many
+providers behind one OpenAI-compatible API. The app talks to it with the standard
+`openai` async client and a pinned `https://openrouter.ai/api/v1` endpoint — there
+is no local model, no container and nothing to download.
 
-A 3B model is deliberate: ~2GB loaded, against ~5–6GB for the 8B build, which
-keeps the whole stack inside an 8GB node.
+There is also no second provider. That shapes everything below: a missing key is
+a misconfiguration, not a degraded mode, while a *failing call* is the opposite.
 
-### Keep alive — why Ollama and not llama-server
+### The API key
 
-```yaml
-environment:
-  - OLLAMA_KEEP_ALIVE=30s
-```
-
-This is the reason the project uses Ollama. `llama-server` keeps the weights
-resident for the process's entire lifetime; Ollama **unloads the model 30
-seconds after the last request**, so between analyses the ~2GB goes back to the
-node. On an 8GB box shared with Postgres, Redis, `web` and `worker`, that
-headroom is what makes the stack fit.
-
-The trade-off: a request that arrives after an idle gap also pays for reloading
-the model. That is bounded (a few seconds for a 3B Q4) and covered by the
-150-second client timeout. Raise the value if you analyse in long bursts and have
-the RAM; lower it to `0` to unload immediately.
-
-Check what is loaded right now:
+`OPENROUTER_API_KEY` is **required**. Create one at
+[openrouter.ai/keys](https://openrouter.ai/keys) and put it in `.env`:
 
 ```bash
-docker compose exec ollama ollama ps    # empty once the keep-alive window closes
+OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-### Pulling the model
+Without it, [`settings.py`](../chessdotcom_ai_coach/settings.py) raises
+`ImproperlyConfigured` at import — the same treatment a missing `SECRET_KEY`
+would get. That covers `web`, `worker` and every `manage.py` command from one
+place, so a container with no key exits at `migrate` instead of booting into a
+coach that can only recite Stockfish. The error names the variable:
 
-Ollama does **not** download anything on its own — there is no `-hf`-style
-auto-pull. A freshly created `ollama-data` volume is empty, and until you pull the
-model **every analysis falls back to Stockfish-only text**. That is the single
-manual step of a first install.
+```
+django.core.exceptions.ImproperlyConfigured: OPENROUTER_API_KEY is not set. ...
+```
 
-After the first `docker compose up`:
+This is deliberate. A deployment with a typo in the key name is now *down* rather
+than quietly serving Stockfish-only text, which is the harder failure to notice.
+
+Two consequences worth stating plainly:
+
+- **It costs money.** Every analysed move is one API request, billed per token.
+  Analysing a whole game is dozens of them. Watch the spend on your OpenRouter
+  dashboard, and treat the key as the secret it is — it is passed via `.env` and
+  never written into [`docker-compose.yaml`](../docker-compose.yaml).
+- **Positions leave the machine.** The FEN and the PGN of the analysed game are
+  sent to OpenRouter and on to whichever provider serves the model.
+
+### Choosing a model
+
+`LLM_MODEL` takes an OpenRouter model slug; browse them at
+[openrouter.ai/models](https://openrouter.ai/models). The default is:
 
 ```bash
-docker compose exec ollama ollama pull llama3.2:3b
+LLM_MODEL=anthropic/claude-haiku-4.5
 ```
 
-~2GB, a few minutes on a normal connection. It is stored in the `ollama-data`
-volume, so it survives restarts and `docker compose down` — you only repeat this
-if the volume is deleted.
-
-Check what is in the store:
+It is a compromise between prose quality and the fact that the app calls the
+model once per analysed move: a frontier model writes a better comment and costs
+several times as much per game. Changing it is one line and a restart of `web`
+and `worker` — there is nothing to pull and no tag to keep in sync.
 
 ```bash
-docker compose exec ollama ollama list
-curl http://localhost:11434/api/tags     # same thing, over HTTP
+docker compose up -d web worker
 ```
 
-Running locally instead of in Compose (Ollama installed on the host), it is just:
+An unknown slug is not caught at startup: the request fails and that analysis
+falls back to Stockfish-only text, with `LLM Error` in the worker log.
 
-```bash
-ollama pull llama3.2:3b
-```
+### Timeout and fallback
 
-#### Using a different model
+The request uses a **60-second timeout** and `temperature=0.7`. If it fails for
+any reason — a `401` on a revoked key, a `429` from a rate limit, a timeout, a
+network error — `get_best_move` returns the Stockfish-only fallback prose and the
+analysis still completes. There is no retry: a rate-limited move is left to the
+fallback, and **Re-analyse this game** is the way to ask again.
 
-The tag you pull and `LLM_MODEL` **must match** — the app names the tag in every
-request, and Ollama returns an error for one it hasn't got. So it is two steps:
-
-```bash
-docker compose exec ollama ollama pull qwen2.5:3b
-```
-
-then set `LLM_MODEL=qwen2.5:3b` on `web` and `worker` (it is pinned in
-[`docker-compose.yaml`](../docker-compose.yaml), so edit it there rather than in
-`.env`) and `docker compose up -d web worker`.
-
-Browse the tags at [ollama.com/library](https://ollama.com/library). Mind the RAM:
-the `:3b` builds sit around 2GB, `:7b`/`:8b` around 5–6GB, which no longer fits an
-8GB node alongside Postgres, Redis, `web` and `worker`.
-
-Health check:
-
-```bash
-curl http://localhost:11434/api/tags     # server up, and what it can serve
-```
-
-The request itself uses a **150-second timeout** (CPU inference for this model
-runs 20–30s, and worst cases are much slower) and `temperature=0.7`. If it fails
-for any reason, `get_best_move` returns the Stockfish-only fallback prose — a
-missing LLM degrades the analysis, it never breaks it.
+So the two failure modes are deliberately different. No key at all: the app will
+not start. A key that stops working: every analysis still finishes, just without
+the coaching prose.
 
 ## Behind a reverse proxy
 

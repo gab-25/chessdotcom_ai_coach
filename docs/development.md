@@ -7,11 +7,10 @@
   [`docker-compose.yaml`](../docker-compose.yaml) work fine on their own:
   `docker compose up -d postgres redis`
 - **Stockfish** — see [configuration.md](configuration.md#stockfish)
-- **Ollama** (optional) — without it the coach falls back to Stockfish-only
-  prose, which is perfectly usable for development. To get real coach prose:
-  `docker compose up -d ollama` and then, once,
-  `docker compose exec ollama ollama pull llama3.2:3b`
-  (see [configuration.md](configuration.md#pulling-the-model))
+- **An OpenRouter API key** — not optional, and not only for the coach: without
+  `OPENROUTER_API_KEY` in `.env` nothing starts, `manage.py` commands included.
+  Grab one at [openrouter.ai/keys](https://openrouter.ai/keys)
+  (see [configuration.md](configuration.md#the-api-key))
 
 ## Setup
 

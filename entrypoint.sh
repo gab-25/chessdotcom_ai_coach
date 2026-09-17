@@ -5,6 +5,7 @@ set -e
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 
-# --timeout 180: Stockfish analysis (~2s) plus llama3.2:3b CPU inference (~20-30s)
-# can exceed gunicorn's default 30s worker timeout, which would kill the request.
+# --timeout 180: generous headroom over gunicorn's 30s default. No view calls
+# Stockfish or the LLM — analysis runs in the Celery worker — so this only has to
+# cover a slow database read on a page that renders a whole game.
 exec gunicorn chessdotcom_ai_coach.wsgi:application --bind 0.0.0.0:8000 --timeout 180

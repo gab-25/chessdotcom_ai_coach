@@ -10,13 +10,25 @@ from openai import AsyncOpenAI
 # points at the binary (see the Dockerfile). Defaults to "stockfish" on PATH.
 STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 
-# LLM Configuration (Local Llama 3.2 via Ollama)
-# Ollama exposes an OpenAI-compatible endpoint on /v1, so we talk to it with the
-# OpenAI async client. A 3B model is used to keep RAM usage low enough for an
-# 8GB single-node cluster (~2GB loaded vs ~5-6GB for the 8B build), and Ollama's
-# OLLAMA_KEEP_ALIVE unloads it between analyses so that RAM comes back.
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
+# LLM Configuration (OpenRouter)
+# OpenRouter is the only supported provider and speaks the OpenAI wire protocol,
+# so the standard async client works unchanged. The endpoint is not a knob; the
+# model is, since it names a model rather than a provider.
+#
+# Read straight from the environment, like STOCKFISH_PATH above, so this module
+# stays importable without Django configured (see docs/configuration.md). The key
+# is guaranteed to be set: settings.py raises ImproperlyConfigured at import when
+# it is not, and every entry point imports settings before this module.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# Default to "" rather than None: AsyncOpenAI(api_key=None) silently falls back to
+# the OPENAI_API_KEY environment variable, which would pick up an unrelated key on
+# a developer machine.
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4.5")
+
+# A hosted model answers in seconds, and there are no weights to reload, so 60s is
+# a generous cap on a slow response rather than a budget for one.
+LLM_TIMEOUT = 60.0
 
 
 class Suggestion(TypedDict):
@@ -119,7 +131,7 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
         best_move_san = board.san(best_move)
         best_move_uci = best_move.uci()
 
-        # Generate LLM response using Llama 3
+        # Ask the LLM for the coaching prose.
         prompt = f"""
 You are a Grandmaster AI Chess Coach. Analyze the following position and suggest the best move.
 
@@ -138,17 +150,20 @@ Instructions:
 """
 
         try:
-            # llama3.2:3b on CPU can take ~20-30s to produce a full analysis, and
-            # after an idle gap the request also pays for reloading the model that
-            # OLLAMA_KEEP_ALIVE unloaded, so allow a generous timeout; on failure
-            # we fall back to engine-only text.
+            # Any failure here — a 401, a 429, a timeout, a network error — falls
+            # back to engine-only text. The analysis degrades, it never fails.
             # `async with`: the client owns an httpx connection pool that must be
             # closed on this event loop. `async_to_sync` (how the Celery task calls
             # us) closes the loop as soon as we return, so a client left to its
             # finalizer tries to close its socket on a dead loop and logs
             # "RuntimeError: Event loop is closed" after an otherwise fine analysis.
             async with AsyncOpenAI(
-                base_url=LLM_BASE_URL, api_key="not-needed", timeout=150.0
+                base_url=OPENROUTER_BASE_URL,
+                api_key=OPENROUTER_API_KEY,
+                timeout=LLM_TIMEOUT,
+                # Attributes the requests to this app on OpenRouter's public
+                # rankings page. Cosmetic, and it carries no user data.
+                default_headers={"X-Title": "chessdotcom_ai_coach"},
             ) as client:
                 response = await client.chat.completions.create(
                     model=LLM_MODEL,

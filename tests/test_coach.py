@@ -1,8 +1,9 @@
 """Unit tests for the AI coach service.
 
 Both external dependencies are mocked: the Stockfish UCI engine (launched via
-``chess.engine.popen_uci``) and the OpenAI-compatible LLM client (Ollama).
-Real ``python-chess`` score objects drive the evaluation-text branches.
+``chess.engine.popen_uci``) and the OpenAI-compatible LLM client (OpenRouter).
+Real ``python-chess`` score objects drive the evaluation-text branches — no test
+here reaches the network.
 """
 
 from contextlib import contextmanager
@@ -34,7 +35,7 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
     # engine); stubbed here so no real subprocess is spawned.
     popen_uci = AsyncMock(return_value=(MagicMock(), engine))
 
-    # Ollama is reached through the OpenAI async client, entered as an async
+    # OpenRouter is reached through the OpenAI async client, entered as an async
     # context manager (it owns an httpx pool that must close on this event loop),
     # so the mock has to yield itself from `__aenter__`. The response shape is
     # ``response.choices[0].message.content``.
@@ -52,8 +53,8 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
 
     with patch.object(coach.chess.engine, "popen_uci", popen_uci), patch.object(
         coach, "AsyncOpenAI", return_value=llm_client
-    ):
-        yield
+    ) as async_openai:
+        yield async_openai
 
 
 class TestEvaluationText:
@@ -107,6 +108,15 @@ class TestBestMoveAndLLM:
             result = await coach.get_best_move(START_FEN)
         assert "Stockfish" in result["analysis"]
         assert result["best_move_san"] == "e4"  # SAN of the suggested move
+
+    async def test_client_is_built_against_openrouter(self):
+        """The endpoint is pinned and the key is the one from the environment."""
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN)
+        kwargs = async_openai.call_args.kwargs
+        assert kwargs["base_url"] == "https://openrouter.ai/api/v1"
+        assert kwargs["api_key"] == coach.OPENROUTER_API_KEY
+        assert kwargs["default_headers"] == {"X-Title": "chessdotcom_ai_coach"}
 
     async def test_no_best_move_identified(self):
         with _engine(PovScore(Cp(30), chess.WHITE), move=None):

@@ -6,6 +6,7 @@ import os
 import tomllib
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -130,8 +131,20 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Integrations ----------------------------------------------------------
-# Base URL of the OpenAI-compatible LLM endpoint (Ollama's /v1).
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")
+# The coaching prose comes from OpenRouter and there is no second provider to
+# fall back to, so a missing key is a misconfiguration rather than a degraded
+# mode: refuse to start instead of booting into a coach that can only ever
+# recite Stockfish, which is the harder failure to notice.
+#
+# Validated here because settings is the one module every entry point loads —
+# `web`, `worker` and every `manage.py` command. The value itself is *read* by
+# services/coach.py straight from the environment (see docs/configuration.md).
+if not os.getenv("OPENROUTER_API_KEY"):
+    raise ImproperlyConfigured(
+        "OPENROUTER_API_KEY is not set. Create a key at "
+        "https://openrouter.ai/keys and put it in .env; the AI coach has no "
+        "other LLM provider and the app will not start without it."
+    )
 
 # --- Celery ----------------------------------------------------------------
 # Redis is the broker and result backend. Both of the app's background jobs are
@@ -162,10 +175,10 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 #
 # This bounds what a worker *reserves*, not what it *runs*: concurrency is a
 # separate knob, and Celery defaults it to one process per CPU core. That
-# default is wrong here — Ollama serves one request at a time, so parallel
-# analyses queue behind it until they exceed the coach's 150s timeout. The cap
-# lives with the worker command in `docker-compose.yaml` (`--concurrency=2`),
-# since it depends on the machine and the LLM runtime rather than on the app.
+# default is the right one here — the LLM call is a remote request OpenRouter
+# serves in parallel, so the only local ceiling is Stockfish, which is
+# CPU-bound. Hence no `--concurrency` flag on the worker command in
+# `docker-compose.yaml`: one process per core is exactly the shape of the work.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # How long a user's archive sync claim holds, in seconds. Requests to Chess.com
