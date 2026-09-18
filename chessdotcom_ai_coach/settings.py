@@ -6,7 +6,6 @@ import os
 import tomllib
 from pathlib import Path
 
-from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -129,22 +128,6 @@ STORAGES = {
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
-# --- Integrations ----------------------------------------------------------
-# The coaching prose comes from OpenRouter and there is no second provider to
-# fall back to, so a missing key is a misconfiguration rather than a degraded
-# mode: refuse to start instead of booting into a coach that can only ever
-# recite Stockfish, which is the harder failure to notice.
-#
-# Validated here because settings is the one module every entry point loads —
-# `web`, `worker` and every `manage.py` command. The value itself is *read* by
-# services/coach.py straight from the environment (see docs/configuration.md).
-if not os.getenv("OPENROUTER_API_KEY"):
-    raise ImproperlyConfigured(
-        "OPENROUTER_API_KEY is not set. Create a key at "
-        "https://openrouter.ai/keys and put it in .env; the AI coach has no "
-        "other LLM provider and the app will not start without it."
-    )
 
 # --- Celery ----------------------------------------------------------------
 # Redis is the broker and result backend. Both of the app's background jobs are

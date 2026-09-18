@@ -49,12 +49,12 @@ history — but budget minutes, not seconds, when the worker died badly.
 
 ### Before the first start: the API key
 
-`OPENROUTER_API_KEY` must be in `.env` before you bring the stack up. Without it
-`web` and `worker` exit at `migrate` with an `ImproperlyConfigured` naming the
-variable — there is no degraded mode to fall back into. See
-[configuration.md](configuration.md#the-api-key).
+Put `OPENROUTER_API_KEY` in `.env` before bringing the stack up. The app starts
+fine without it, but there is no LLM to ask, so every analysis completes on
+Stockfish-only text — which looks like a working deployment until you read the
+coach cards. See [configuration.md](configuration.md#the-api-key).
 
-There is no model to download and no first-install step beyond that.
+There is nothing to download, so that is the whole first-install step.
 
 ### Volumes
 
@@ -144,9 +144,11 @@ than following `latest`.
 - Neither Redis nor Postgres is authenticated or firewalled in the Compose file,
   and both publish their ports to the host. Fine locally; not fine on a public
   machine.
-- Treat `OPENROUTER_API_KEY` as a real secret: it is injected from `.env` and
-  never named in [`docker-compose.yaml`](../docker-compose.yaml), so keep it out
-  of the image and out of version control. Analysis is billed per request — one
-  per analysed move — so watch the spend, and remember that FEN and PGN of the
-  analysed games are sent to a third party. See
-  [configuration.md](configuration.md#the-api-key).
+- Check `OPENROUTER_API_KEY` actually reached the containers: a typo in the name
+  is not an error, it is a stack that serves Stockfish-only prose and looks
+  healthy. `docker compose logs worker | grep "LLM Error"` tells you in one line.
+- Treat the key as the secret it is: it is injected from `.env` and never named in
+  [`docker-compose.yaml`](../docker-compose.yaml), so keep it out of the image and
+  out of version control. Analysis is billed per request — one per analysed move —
+  so watch the spend, and remember that FEN and PGN of the analysed games are sent
+  to a third party. See [configuration.md](configuration.md#the-api-key).

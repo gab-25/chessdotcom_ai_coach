@@ -17,7 +17,7 @@ Copy [`.env.example`](../.env.example) to `.env` and edit.
 | `POSTGRES_PASSWORD` | Database password | `password` | `password` |
 | `POSTGRES_HOST` | Database host | `localhost` | `localhost` |
 | `POSTGRES_PORT` | Database port | `5432` | `5432` |
-| `OPENROUTER_API_KEY` | OpenRouter API key | **none — required**, the app will not start without it | same |
+| `OPENROUTER_API_KEY` | OpenRouter API key | empty — without it the coach falls back to Stockfish-only prose | same |
 | `LLM_MODEL` | Model slug sent with each request | `anthropic/claude-haiku-4.5` | same |
 | `REDIS_URL` | Celery broker **and** result backend | `redis://redis:6379/0` | `redis://localhost:6379/0` |
 | `SYNC_COOLDOWN_SECONDS` | How long a user's archive-sync claim holds | `300` | same |
@@ -28,15 +28,11 @@ Note that the **defaults are the Docker values**, not the local ones —
 therefore fails by trying to reach a hostname that only exists inside the Compose
 network; if analysis silently never completes locally, check `REDIS_URL` first.
 
-`OPENROUTER_API_KEY` is the exception, and deliberately so: it has no default and
-an incomplete `.env` fails **immediately, by name** (see [The API key](#the-api-key)).
-
 `LLM_MODEL` and `OPENROUTER_API_KEY` are read directly by
 [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) at import time
 (`os.getenv`), not through Django settings — which keeps that module importable
-without a configured Django. [`settings.py`](../chessdotcom_ai_coach/settings.py)
-does not store the key, it only *insists* on it, because it is the one module
-every entry point loads.
+without a configured Django. Nothing in
+[`settings.py`](../chessdotcom_ai_coach/settings.py) knows about the LLM at all.
 
 ## Celery settings
 
@@ -119,39 +115,42 @@ providers behind one OpenAI-compatible API. The app talks to it with the standar
 `openai` async client and a pinned `https://openrouter.ai/api/v1` endpoint — there
 is no local model, no container and nothing to download.
 
-There is also no second provider. That shapes everything below: a missing key is
-a misconfiguration, not a degraded mode, while a *failing call* is the opposite.
+There is also no second provider, and no local one. Without a key the coach still
+works — it just stops coaching, and every analysis completes on Stockfish-only
+prose.
 
 ### The API key
 
-`OPENROUTER_API_KEY` is **required**. Create one at
+`OPENROUTER_API_KEY` is optional. Create one at
 [openrouter.ai/keys](https://openrouter.ai/keys) and put it in `.env`:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-Without it, [`settings.py`](../chessdotcom_ai_coach/settings.py) raises
-`ImproperlyConfigured` at import — the same treatment a missing `SECRET_KEY`
-would get. That covers `web`, `worker` and every `manage.py` command from one
-place, so a container with no key exits at `migrate` instead of booting into a
-coach that can only recite Stockfish. The error names the variable:
+Leave it empty and the app starts and runs perfectly normally, but there is no
+LLM to ask: the coach card shows the Stockfish-only fallback text on every move.
+Nothing else breaks, and nothing is sent anywhere.
+
+That degradation is quiet by design — it is the same path a `401` or a `429`
+takes — so the worker log is where you see it. A missing key is named explicitly
+rather than left to surface as an opaque `401`:
 
 ```
-django.core.exceptions.ImproperlyConfigured: OPENROUTER_API_KEY is not set. ...
+LLM Error: OPENROUTER_API_KEY is not set; skipping the LLM and using Stockfish-only prose.
 ```
 
-This is deliberate. A deployment with a typo in the key name is now *down* rather
-than quietly serving Stockfish-only text, which is the harder failure to notice.
+**If you are getting fallback prose everywhere, check this first.**
 
-Two consequences worth stating plainly:
+Two consequences of *setting* a key, worth stating plainly:
 
 - **It costs money.** Every analysed move is one API request, billed per token.
   Analysing a whole game is dozens of them. Watch the spend on your OpenRouter
   dashboard, and treat the key as the secret it is — it is passed via `.env` and
   never written into [`docker-compose.yaml`](../docker-compose.yaml).
 - **Positions leave the machine.** The FEN and the PGN of the analysed game are
-  sent to OpenRouter and on to whichever provider serves the model.
+  sent to OpenRouter and on to whichever provider serves the model. With no key
+  set, nothing leaves the machine at all.
 
 ### Choosing a model
 
@@ -171,20 +170,19 @@ and `worker` — there is nothing to pull and no tag to keep in sync.
 docker compose up -d web worker
 ```
 
-An unknown slug is not caught at startup: the request fails and that analysis
-falls back to Stockfish-only text, with `LLM Error` in the worker log.
+An unknown slug is not validated anywhere: the request simply fails and that
+analysis falls back to Stockfish-only text, with `LLM Error` in the worker log.
 
 ### Timeout and fallback
 
 The request uses a **60-second timeout** and `temperature=0.7`. If it fails for
-any reason — a `401` on a revoked key, a `429` from a rate limit, a timeout, a
-network error — `get_best_move` returns the Stockfish-only fallback prose and the
-analysis still completes. There is no retry: a rate-limited move is left to the
-fallback, and **Re-analyse this game** is the way to ask again.
+any reason — no key, a `401` on a revoked key, a `429` from a rate limit, a
+timeout, a network error — `get_best_move` returns the Stockfish-only fallback
+prose and the analysis still completes. There is no retry: a rate-limited move is
+left to the fallback, and **Re-analyse this game** is the way to ask again.
 
-So the two failure modes are deliberately different. No key at all: the app will
-not start. A key that stops working: every analysis still finishes, just without
-the coaching prose.
+So there is exactly one failure mode, and it is never fatal: the analysis always
+finishes, with or without the coaching prose.
 
 ## Behind a reverse proxy
 

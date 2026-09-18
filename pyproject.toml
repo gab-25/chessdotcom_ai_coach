@@ -33,12 +33,6 @@ package = false
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "chessdotcom_ai_coach.settings"
-# pytest_bootstrap sets OPENROUTER_API_KEY, which settings.py requires at import.
-# It has to be a plugin rather than a conftest: pytest-django imports the settings
-# before any conftest is loaded. `pythonpath` puts the repo root on sys.path early
-# enough for `-p` to resolve it.
-pythonpath = ["."]
-addopts = "-p pytest_bootstrap"
 python_files = "test_*.py"
 asyncio_mode = "auto"
 testpaths = ["tests"]

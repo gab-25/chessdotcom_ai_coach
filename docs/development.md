@@ -7,9 +7,11 @@
   [`docker-compose.yaml`](../docker-compose.yaml) work fine on their own:
   `docker compose up -d postgres redis`
 - **Stockfish** — see [configuration.md](configuration.md#stockfish)
-- **An OpenRouter API key** — not optional, and not only for the coach: without
-  `OPENROUTER_API_KEY` in `.env` nothing starts, `manage.py` commands included.
-  Grab one at [openrouter.ai/keys](https://openrouter.ai/keys)
+- **An OpenRouter API key** (optional) — without `OPENROUTER_API_KEY` the coach
+  falls back to Stockfish-only prose, which is perfectly usable for development.
+  To get real coach prose, grab a key at
+  [openrouter.ai/keys](https://openrouter.ai/keys) and put it in `.env`; there is
+  nothing to install or run locally
   (see [configuration.md](configuration.md#the-api-key))
 
 ## Setup

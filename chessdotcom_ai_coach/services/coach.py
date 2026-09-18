@@ -16,13 +16,12 @@ STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 # model is, since it names a model rather than a provider.
 #
 # Read straight from the environment, like STOCKFISH_PATH above, so this module
-# stays importable without Django configured (see docs/configuration.md). The key
-# is guaranteed to be set: settings.py raises ImproperlyConfigured at import when
-# it is not, and every entry point imports settings before this module.
+# stays importable without Django configured (see docs/configuration.md).
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-# Default to "" rather than None: AsyncOpenAI(api_key=None) silently falls back to
-# the OPENAI_API_KEY environment variable, which would pick up an unrelated key on
-# a developer machine.
+# Optional: with no key the coach falls back to Stockfish-only prose, same as for
+# any other LLM failure. Default to "" rather than None, because
+# AsyncOpenAI(api_key=None) silently falls back to the OPENAI_API_KEY environment
+# variable, which would pick up an unrelated key on a developer machine.
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4.5")
 
@@ -150,8 +149,17 @@ Instructions:
 """
 
         try:
-            # Any failure here — a 401, a 429, a timeout, a network error — falls
-            # back to engine-only text. The analysis degrades, it never fails.
+            # Any failure here — no key at all, a 401, a 429, a timeout, a
+            # network error — falls back to engine-only text below. The analysis
+            # degrades, it never fails.
+            #
+            # Checked rather than left to the API so the log line names the cause:
+            # an empty key would otherwise surface as an opaque 401.
+            if not OPENROUTER_API_KEY:
+                raise RuntimeError(
+                    "OPENROUTER_API_KEY is not set; skipping the LLM and using "
+                    "Stockfish-only prose. See docs/configuration.md#the-api-key."
+                )
             # `async with`: the client owns an httpx connection pool that must be
             # closed on this event loop. `async_to_sync` (how the Celery task calls
             # us) closes the loop as soon as we return, so a client left to its

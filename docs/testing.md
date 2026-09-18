@@ -33,8 +33,7 @@ and `pytest-django`.
 | [`test_views.py`](../tests/test_views.py) | 64 tests — the largest by far. Grouped into classes per concern: `TestHome`, `TestGameDetail`, `TestAnalyzePosition`, `TestCoachCardModes`, `TestMovesGrid`, `TestLiveMoveSlot`, `TestHistoryList`, … |
 | [`test_sync.py`](../tests/test_sync.py) | The request-driven jobs: which archive months a sync reads (including resuming an interrupted backfill), the per-user sync claim, and the two sweeps that revive a stuck analysis |
 | [`test_chess_client.py`](../tests/test_chess_client.py) | Chess.com response parsing, including the archive result codes |
-| [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch, how the OpenRouter client is built, and the LLM fallback |
-| [`test_settings.py`](../tests/test_settings.py) | That settings.py refuses to import without `OPENROUTER_API_KEY` |
+| [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch, how the OpenRouter client is built, and the LLM fallback — including the no-key path |
 | [`test_board.py`](../tests/test_board.py) | FEN/PGN expansion |
 | [`test_game_store.py`](../tests/test_game_store.py) | Upsert, retire, result persistence |
 | [`test_analysis.py`](../tests/test_analysis.py) | Whole-game enqueue idempotency |
@@ -56,14 +55,9 @@ time (`services/coach.py` reads `OPENROUTER_API_KEY`, `STOCKFISH_PATH` and
 `LLM_MODEL` with `os.getenv` at module level), so setting them later would be too
 late.
 
-`OPENROUTER_API_KEY` is the one that cannot live here, and it has its own file:
-[`pytest_bootstrap.py`](../pytest_bootstrap.py), loaded through `-p
-pytest_bootstrap` in `pyproject.toml`. `settings.py` refuses to start without the
-key, and pytest-django imports the settings from its
-`pytest_load_initial_conftests` hook — while pytest's *own* conftest loader is
-registered `trylast` on that same hook. So the settings are imported before any
-conftest is read, and a `setdefault` here would come too late to help. A plugin
-named with `-p` is imported earlier still, during `_preparse`.
+`OPENROUTER_API_KEY` needs no default: it is optional, and every test that
+exercises the LLM path patches `coach.OPENROUTER_API_KEY` directly — reading it at
+import time is exactly why `setenv` would not work.
 
 ### 2. The database is swapped for SQLite
 

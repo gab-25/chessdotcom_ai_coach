@@ -20,12 +20,15 @@ E2E4 = chess.Move.from_uci("e2e4")  # legal in the start position -> SAN "e4"
 
 
 @contextmanager
-def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False):
+def _engine(
+    score, move=E2E4, llm_content="LLM analysis text", llm_raises=False, api_key="sk-or-test"
+):
     """Patch the engine subprocess and OpenAI-compatible LLM client for one call.
 
     ``score`` is placed in ``result.info["score"]``; ``move`` becomes
     ``result.move``. If ``llm_raises`` the chat-completions call raises, forcing
-    the Stockfish fallback branch.
+    the Stockfish fallback branch. ``api_key`` is patched onto the module because
+    it is read at import time; set it to "" to exercise the no-key path.
     """
     engine = MagicMock()
     engine.play = AsyncMock(return_value=SimpleNamespace(move=move, info={"score": score}))
@@ -52,8 +55,8 @@ def _engine(score, move=E2E4, llm_content="LLM analysis text", llm_raises=False)
         )
 
     with patch.object(coach.chess.engine, "popen_uci", popen_uci), patch.object(
-        coach, "AsyncOpenAI", return_value=llm_client
-    ) as async_openai:
+        coach, "OPENROUTER_API_KEY", api_key
+    ), patch.object(coach, "AsyncOpenAI", return_value=llm_client) as async_openai:
         yield async_openai
 
 
@@ -109,13 +112,21 @@ class TestBestMoveAndLLM:
         assert "Stockfish" in result["analysis"]
         assert result["best_move_san"] == "e4"  # SAN of the suggested move
 
+    async def test_no_api_key_falls_back_without_calling_the_api(self):
+        """The key is optional: with none, the coach never leaves the machine."""
+        with _engine(PovScore(Cp(30), chess.WHITE), api_key="") as async_openai:
+            result = await coach.get_best_move(START_FEN)
+        async_openai.assert_not_called()
+        assert "Stockfish" in result["analysis"]
+        assert result["best_move_san"] == "e4"
+
     async def test_client_is_built_against_openrouter(self):
         """The endpoint is pinned and the key is the one from the environment."""
-        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+        with _engine(PovScore(Cp(30), chess.WHITE), api_key="sk-or-test") as async_openai:
             await coach.get_best_move(START_FEN)
         kwargs = async_openai.call_args.kwargs
         assert kwargs["base_url"] == "https://openrouter.ai/api/v1"
-        assert kwargs["api_key"] == coach.OPENROUTER_API_KEY
+        assert kwargs["api_key"] == "sk-or-test"  # the key from the environment
         assert kwargs["default_headers"] == {"X-Title": "chessdotcom_ai_coach"}
 
     async def test_no_best_move_identified(self):

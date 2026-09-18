@@ -16,10 +16,11 @@ until you ask — a full archive is more games than any worker would get through
 - **PostgreSQL** — via `psycopg2-binary`
 - **OpenRouter** — the LLM behind the AI coach prose, reached with the `openai`
   async client against its OpenAI-compatible `/v1`
-  (`chessdotcom_ai_coach/services/coach.py`). It is the **only** provider: an
-  `OPENROUTER_API_KEY` is required and the app will not start without one. That
-  makes the coach a paid, networked dependency — each analysed move is one billed
-  request, and the FEN and PGN of the game go to a third party
+  (`chessdotcom_ai_coach/services/coach.py`). It is the only provider, and it is
+  optional: without an `OPENROUTER_API_KEY` every analysis falls back to
+  Stockfish-only text. With one, the coach becomes a paid, networked dependency —
+  each analysed move is one billed request, and the FEN and PGN of the game go to
+  a third party
 - **Stockfish** — UCI engine for move evaluation, run as a local subprocess via
   `python-chess` (`chessdotcom_ai_coach/services/coach.py`)
 - **Chess.com API** — via `chess-com` (`chessdotcom_ai_coach/services/chess_client.py`)
@@ -57,7 +58,7 @@ until you ask — a full archive is more games than any worker would get through
 
 ```bash
 cp .env.example .env
-# put your OpenRouter key in .env, then:
+# optional: put your OpenRouter key in .env for real coach prose
 docker compose up --build
 ```
 
@@ -69,11 +70,11 @@ Compose overrides `POSTGRES_HOST`, `REDIS_URL` and `STOCKFISH_PATH` so the
 containers reach each other by service name; everything else, the OpenRouter key
 included, comes from `.env`.
 
-**`OPENROUTER_API_KEY` is required** — get one at
-[openrouter.ai/keys](https://openrouter.ai/keys). Leave it empty and `web` and
-`worker` exit at `migrate` with an error naming the variable, rather than booting
-into a coach that can only recite Stockfish. There is no model to download and no
-other first-install step. See
+**Set `OPENROUTER_API_KEY` for real coach prose** — get one at
+[openrouter.ai/keys](https://openrouter.ai/keys). Leave it empty and the app still
+works, but every analysis falls back to Stockfish-only text with no coaching
+prose; `docker compose logs worker` says so on every move. There is no model to
+download and no other first-install step. See
 [configuration.md](docs/configuration.md#choosing-a-model) for how to use a
 different model.
 
@@ -94,9 +95,10 @@ The line to watch for is `Task ... succeeded in Ns`. Reading the log:
   finishing. Stockfish is the local suspect; the LLM call is capped at 60s and
   falls back rather than hanging.
 - **`LLM Error` followed by a task that still succeeds** → the analysis fell back
-  to Stockfish-only text. A `401` means the key is wrong or revoked; a `429` in
-  bursts means you are past your OpenRouter rate limit, and the fix is fewer
-  `worker` replicas or a higher limit.
+  to Stockfish-only text. `OPENROUTER_API_KEY is not set` means exactly that; a
+  `401` means the key is wrong or revoked; a `429` in bursts means you are past
+  your OpenRouter rate limit, and the fix is fewer `worker` replicas or a higher
+  limit.
 - **`Giving up on analysis ... after 3 attempts`** → that position is `failed`
   and is not retried automatically. Use the card's "Try again", or
   `manage.py analyze_game <game_id>`.

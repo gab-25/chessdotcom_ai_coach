@@ -5,9 +5,6 @@ Keeps the test suite self-contained: it must run without a live PostgreSQL, a
 Stockfish engine or network access to OpenRouter. We (1) provide safe defaults for
 the environment variables that modules read at import time, and (2) swap the
 database for a file-backed SQLite so no PostgreSQL server is needed.
-
-Anything *settings.py* reads goes in `pytest_bootstrap.py` instead — this file is
-loaded after pytest-django has already imported the settings.
 """
 
 import os
