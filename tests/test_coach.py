@@ -21,17 +21,25 @@ E2E4 = chess.Move.from_uci("e2e4")  # legal in the start position -> SAN "e4"
 
 @contextmanager
 def _engine(
-    score, move=E2E4, llm_content="LLM analysis text", llm_raises=False, api_key="sk-or-test"
+    score,
+    move=E2E4,
+    llm_content="LLM analysis text",
+    llm_raises=False,
+    api_key="sk-or-test",
+    pv=None,
 ):
     """Patch the engine subprocess and OpenAI-compatible LLM client for one call.
 
-    ``score`` is placed in ``result.info["score"]``; ``move`` becomes
-    ``result.move``. If ``llm_raises`` the chat-completions call raises, forcing
+    ``score`` is placed in ``result.info["score"]`` and ``pv`` in
+    ``result.info["pv"]``; ``move`` becomes ``result.move``. If ``llm_raises`` the chat-completions call raises, forcing
     the Stockfish fallback branch. ``api_key`` is patched onto the module because
     it is read at import time; set it to "" to exercise the no-key path.
     """
     engine = MagicMock()
-    engine.play = AsyncMock(return_value=SimpleNamespace(move=move, info={"score": score}))
+    info = {"score": score}
+    if pv is not None:
+        info["pv"] = pv
+    engine.play = AsyncMock(return_value=SimpleNamespace(move=move, info=info))
     engine.quit = AsyncMock()
 
     # The code launches Stockfish via popen_uci, which returns (transport,
@@ -134,6 +142,65 @@ class TestBestMoveAndLLM:
             result = await coach.get_best_move(START_FEN)
         assert "No clear best move identified." in result["analysis"]
         assert result["best_move_san"] is None
+
+
+class TestPromptGrounding:
+    """What the model is told about the position.
+
+    Every factual slip in the coach prose traces back to something the prompt did
+    not say, so these assert the grounding is actually sent rather than assumed.
+    """
+
+    @staticmethod
+    def _prompt(async_openai):
+        client = async_openai.return_value
+        messages = client.chat.completions.create.call_args.kwargs["messages"]
+        return next(m["content"] for m in messages if m["role"] == "user")
+
+    async def test_prompt_carries_the_board_not_just_the_fen(self):
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN)
+        prompt = self._prompt(async_openai)
+        assert "8 r n b q k b n r" in prompt  # the back rank, as a labelled grid
+        assert "  a b c d e f g h" in prompt
+        assert START_FEN in prompt  # the FEN is still there, alongside
+
+    async def test_prompt_carries_side_to_move_and_material(self):
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN)
+        prompt = self._prompt(async_openai)
+        assert "Side to move: White" in prompt
+        assert "Material: level" in prompt
+        assert "Castling rights: KQkq" in prompt
+
+    async def test_prompt_carries_the_engine_main_line(self):
+        """The PV is what stops the coach inventing a plan of its own."""
+        pv = [chess.Move.from_uci(u) for u in ("e2e4", "e7e5", "g1f3")]
+        with _engine(PovScore(Cp(30), chess.WHITE), pv=pv) as async_openai:
+            await coach.get_best_move(START_FEN)
+        assert "Main line: 1. e4 e5 2. Nf3" in self._prompt(async_openai)
+
+    async def test_prompt_says_so_when_there_is_no_main_line(self):
+        """No PV must read as absent, never as a line the engine did not give."""
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN)
+        assert "Main line: not available" in self._prompt(async_openai)
+
+    async def test_unplayable_main_line_is_dropped(self):
+        """A PV that does not replay from this position is discarded, not sent."""
+        illegal = [chess.Move.from_uci("a1a8")]
+        with _engine(PovScore(Cp(30), chess.WHITE), pv=illegal) as async_openai:
+            await coach.get_best_move(START_FEN)
+        assert "Main line: not available" in self._prompt(async_openai)
+
+    async def test_main_line_is_truncated_at_the_first_unplayable_move(self):
+        """A good prefix still grounds the comment; the bad tail is cut, not kept."""
+        pv = [chess.Move.from_uci(u) for u in ("e2e4", "e7e5", "a1a8")]
+        with _engine(PovScore(Cp(30), chess.WHITE), pv=pv) as async_openai:
+            await coach.get_best_move(START_FEN)
+        prompt = self._prompt(async_openai)
+        assert "Main line: 1. e4 e5" in prompt
+        assert "a8" not in prompt.split("Main line:")[1].split("\n")[0]
 
 
 class TestErrorHandling:

@@ -148,9 +148,9 @@ Two consequences of *setting* a key, worth stating plainly:
   Analysing a whole game is dozens of them. Watch the spend on your OpenRouter
   dashboard, and treat the key as the secret it is — it is passed via `.env` and
   never written into [`docker-compose.yaml`](../docker-compose.yaml).
-- **Positions leave the machine.** The FEN and the PGN of the analysed game are
-  sent to OpenRouter and on to whichever provider serves the model. With no key
-  set, nothing leaves the machine at all.
+- **Positions leave the machine.** The analysed position — the board, its FEN, the
+  game's PGN and Stockfish's main line — is sent to OpenRouter and on to whichever
+  provider serves the model. With no key set, nothing leaves the machine at all.
 
 ### Choosing a model
 

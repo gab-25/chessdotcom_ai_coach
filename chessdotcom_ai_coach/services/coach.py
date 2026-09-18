@@ -56,6 +56,63 @@ def _suggestion(
     }
 
 
+# Standard piece values, used only to tell the coach who is up material. The
+# evaluation itself is Stockfish's job, not this table's.
+_PIECE_VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+
+
+def _ascii_board(board: chess.Board) -> str:
+    """Render the board as a labelled grid, uppercase White and lowercase Black.
+
+    The FEN alone is a poor input: a model reconstructing a position from it
+    routinely places pieces on squares they are not on, and then explains the
+    move in terms of that imagined position. A grid is read far more reliably.
+    """
+    rows = [
+        f"{rank + 1} "
+        + " ".join(
+            (piece.symbol() if (piece := board.piece_at(chess.square(file, rank))) else ".")
+            for file in range(8)
+        )
+        for rank in range(7, -1, -1)
+    ]
+    return "\n".join(rows) + "\n  a b c d e f g h"
+
+
+def _material_balance(board: chess.Board) -> str:
+    """Who is up material, in pawns — a fact the coach should not have to infer."""
+    totals = {
+        color: sum(len(board.pieces(piece, color)) * value for piece, value in _PIECE_VALUES.items())
+        for color in (chess.WHITE, chess.BLACK)
+    }
+    diff = totals[chess.WHITE] - totals[chess.BLACK]
+    if diff == 0:
+        return "level"
+    return f"{'White' if diff > 0 else 'Black'} is up {abs(diff)} (pawns)"
+
+
+def _principal_variation(board: chess.Board, info, plies: int = 6) -> Optional[str]:
+    """The engine's main line in SAN, e.g. ``4...e5 5. O-O Be7 6. d3``.
+
+    This is the single most useful thing to hand the coach. Given only the best
+    move it has to invent a reason the move is good; given the line that follows,
+    it can describe what actually happens. Capped at ``plies`` because the tail of
+    a 2-second PV is noise.
+
+    Only the longest prefix that actually replays from this position is kept: a
+    line cut short still grounds the comment, whereas one that does not fit the
+    board is worse than none at all. Returns ``None`` if nothing replays.
+    """
+    probe = board.copy()
+    playable = []
+    for move in list(info.get("pv") or ())[:plies]:
+        if move not in probe.legal_moves:
+            break
+        probe.push(move)
+        playable.append(move)
+    return board.variation_san(playable) if playable else None
+
+
 async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
     """
     Uses the Stockfish engine to act as an AI Chess Coach.
@@ -79,10 +136,14 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
             board = chess.Board(fen)
 
             # Analyze to find the best move (2-second limit).
-            # play() returns no analysis info by default, so request the score
-            # explicitly; result.info then carries the evaluation used below.
+            # play() returns no analysis info by default, so ask for the score and
+            # the principal variation explicitly; result.info then carries both.
+            # The PV is what lets the coach describe the plan that follows the
+            # move instead of guessing at one.
             result = await engine.play(
-                board, chess.engine.Limit(time=2.0), info=chess.engine.INFO_SCORE
+                board,
+                chess.engine.Limit(time=2.0),
+                info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
             )
             best_move = result.move
             info = result.info
@@ -131,21 +192,38 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
         best_move_uci = best_move.uci()
 
         # Ask the LLM for the coaching prose.
+        #
+        # Everything the model could otherwise only guess at is spelled out: the
+        # board as a grid (not just a FEN), whose turn it is, the material count,
+        # the castling rights, and above all the engine's main line. Given only a
+        # move and an evaluation, a model invents a justification — pawns on
+        # squares they are not on, plans the position does not allow — and the
+        # prose reads fluently while being wrong about the board in front of it.
+        pv_san = _principal_variation(board, info)
         prompt = f"""
-You are a Grandmaster AI Chess Coach. Analyze the following position and suggest the best move.
+You are a Grandmaster AI Chess Coach. Comment on the following position and on the move the engine recommends.
 
-Context:
+Position:
+- Side to move: {"White" if board.turn == chess.WHITE else "Black"}
+- Board (uppercase = White, lowercase = Black, "." = empty):
+{_ascii_board(board)}
 - FEN: {fen}
-- PGN (History): {pgn if pgn else "N/A"}
-- Engine Evaluation: {eval_text}
-- Suggested Best Move: {best_move_san}
+- Castling rights: {board.fen().split()[2]}
+- Material: {_material_balance(board)}
+- Moves so far (PGN): {pgn if pgn else "N/A"}
+
+Engine analysis:
+- Evaluation: {eval_text}
+- Best move: {best_move_san}
+- Main line: {pv_san if pv_san else "not available"}
 
 Instructions:
 1. Briefly comment on the evaluation of the position.
-2. Explain why {best_move_san} is the best move in strategic or tactical terms.
+2. Explain why {best_move_san} is the best move in strategic or tactical terms. When a main line is given, use it: describe what actually follows rather than a plan of your own.
 3. Provide a short piece of advice for the continuation of the game.
-4. Respond in a professional, encouraging, and educational manner in English.
-5. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
+4. Ground every claim in the board above. Do not refer to pawns or pieces on squares where this position does not have them, do not name an opening unless the moves listed support it, and do not describe plans the position does not allow. If the main line is not available and you cannot justify the move concretely, keep the comment general and say the engine prefers it — never invent a reason.
+5. Respond in a professional, encouraging, and educational manner in English.
+6. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
 """
 
         try:
@@ -178,7 +256,13 @@ Instructions:
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are an expert chess coach analyzing games in real-time. Never end your reply with a question or a call to respond; the user has no way to answer back.",
+                            "content": (
+                                "You are an expert chess coach analyzing games in real-time. "
+                                "Describe only what is present in the position you are given: "
+                                "a confident claim about a piece that is not there is worse than "
+                                "a general comment. Never end your reply with a question or a "
+                                "call to respond; the user has no way to answer back."
+                            ),
                         },
                         {"role": "user", "content": prompt},
                     ],

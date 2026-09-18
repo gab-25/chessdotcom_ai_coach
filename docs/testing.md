@@ -33,7 +33,7 @@ and `pytest-django`.
 | [`test_views.py`](../tests/test_views.py) | 64 tests — the largest by far. Grouped into classes per concern: `TestHome`, `TestGameDetail`, `TestAnalyzePosition`, `TestCoachCardModes`, `TestMovesGrid`, `TestLiveMoveSlot`, `TestHistoryList`, … |
 | [`test_sync.py`](../tests/test_sync.py) | The request-driven jobs: which archive months a sync reads (including resuming an interrupted backfill), the per-user sync claim, and the two sweeps that revive a stuck analysis |
 | [`test_chess_client.py`](../tests/test_chess_client.py) | Chess.com response parsing, including the archive result codes |
-| [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch, how the OpenRouter client is built, and the LLM fallback — including the no-key path |
+| [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch, what grounding the prompt carries, how the OpenRouter client is built, and the LLM fallback — including the no-key path |
 | [`test_board.py`](../tests/test_board.py) | FEN/PGN expansion |
 | [`test_game_store.py`](../tests/test_game_store.py) | Upsert, retire, result persistence |
 | [`test_analysis.py`](../tests/test_analysis.py) | Whole-game enqueue idempotency |
