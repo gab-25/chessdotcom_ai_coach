@@ -173,6 +173,21 @@ class TestPromptGrounding:
         assert "Material: level" in prompt
         assert "Castling rights: KQkq" in prompt
 
+    async def test_prompt_names_each_bishop_square_colour(self):
+        """Where a bishop stands is on the grid; what colour it works on is not."""
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN)
+        prompt = self._prompt(async_openai)
+        assert "Bishops: White c1 (dark), f1 (light); Black c8 (light), f8 (dark)" in prompt
+
+    async def test_bishopless_side_is_stated_not_omitted(self):
+        """An endgame with no bishops must read as "none", not as a missing field."""
+        fen = "4k3/8/8/8/8/8/8/4K2B w - - 0 1"  # White keeps one, Black has none
+        h1 = chess.Move.from_uci("h1g2")
+        with _engine(PovScore(Cp(30), chess.WHITE), move=h1) as async_openai:
+            await coach.get_best_move(fen)
+        assert "Bishops: White h1 (light); Black none" in self._prompt(async_openai)
+
     async def test_prompt_carries_the_engine_main_line(self):
         """The PV is what stops the coach inventing a plan of its own."""
         pv = [chess.Move.from_uci(u) for u in ("e2e4", "e7e5", "g1f3")]

@@ -138,6 +138,29 @@ def _history_before(fen: str, pgn: Optional[str]) -> Optional[str]:
     return None
 
 
+def _bishops(board: chess.Board) -> str:
+    """Each side's bishops, with the colour of the square each one stands on.
+
+    The grid says where a bishop is; it does not say what colour it operates on,
+    and working that out from the coordinates is exactly the step a model gets
+    wrong — calling f8 light-squared while correctly naming the piece. Worth a
+    line of its own because so much chess commentary turns on it: good and bad
+    bishops, opposite-coloured bishops, the bishop pair.
+    """
+
+    def side(color: chess.Color) -> str:
+        squares = sorted(board.pieces(chess.BISHOP, color))
+        if not squares:
+            return "none"
+        return ", ".join(
+            f"{chess.square_name(square)} "
+            f"({'light' if chess.BB_SQUARES[square] & chess.BB_LIGHT_SQUARES else 'dark'})"
+            for square in squares
+        )
+
+    return f"White {side(chess.WHITE)}; Black {side(chess.BLACK)}"
+
+
 def _principal_variation(board: chess.Board, info, plies: int = 6) -> Optional[str]:
     """The engine's main line in SAN, e.g. ``4...e5 5. O-O Be7 6. d3``.
 
@@ -258,6 +281,7 @@ Position:
 - FEN: {fen}
 - Castling rights: {board.fen().split()[2]}
 - Material: {_material_balance(board)}
+- Bishops: {_bishops(board)}
 - Moves played so far: {history_san if history_san else "none — this is the start of the game"}
 
 Engine analysis:
