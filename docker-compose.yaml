@@ -6,8 +6,6 @@ services:
       - .env
     environment:
       - POSTGRES_HOST=postgres
-      - LLM_BASE_URL=http://ollama:11434/v1
-      - LLM_MODEL=llama3.2:3b
       - REDIS_URL=redis://redis:6379/0
       - STOCKFISH_PATH=stockfish
     ports:
@@ -15,8 +13,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
-        condition: service_started
       redis:
         condition: service_healthy
 
@@ -26,16 +22,12 @@ services:
       - .env
     environment:
       - POSTGRES_HOST=postgres
-      - LLM_BASE_URL=http://ollama:11434/v1
-      - LLM_MODEL=llama3.2:3b
       - REDIS_URL=redis://redis:6379/0
       - STOCKFISH_PATH=stockfish
-    command: celery -A chessdotcom_ai_coach worker -l info --concurrency=2
+    command: celery -A chessdotcom_ai_coach worker -l info
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
-        condition: service_started
       redis:
         condition: service_healthy
 
@@ -69,16 +61,6 @@ services:
       retries: 10
       start_period: 5s
 
-  ollama:
-    image: ollama/ollama:latest
-    environment:
-      - OLLAMA_KEEP_ALIVE=30s
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-
 volumes:
   postgres-data:
-  ollama-data:
   redis-data:

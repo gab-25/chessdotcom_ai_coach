@@ -129,10 +129,6 @@ STORAGES = {
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# --- Integrations ----------------------------------------------------------
-# Base URL of the OpenAI-compatible LLM endpoint (Ollama's /v1).
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-
 # --- Celery ----------------------------------------------------------------
 # Redis is the broker and result backend. Both of the app's background jobs are
 # enqueued from the request path — `analyze_game_task` when the user asks for an
@@ -162,10 +158,10 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 #
 # This bounds what a worker *reserves*, not what it *runs*: concurrency is a
 # separate knob, and Celery defaults it to one process per CPU core. That
-# default is wrong here — Ollama serves one request at a time, so parallel
-# analyses queue behind it until they exceed the coach's 150s timeout. The cap
-# lives with the worker command in `docker-compose.yaml` (`--concurrency=2`),
-# since it depends on the machine and the LLM runtime rather than on the app.
+# default is the right one here — the LLM call is a remote request OpenRouter
+# serves in parallel, so the only local ceiling is Stockfish, which is
+# CPU-bound. Hence no `--concurrency` flag on the worker command in
+# `docker-compose.yaml`: one process per core is exactly the shape of the work.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # How long a user's archive sync claim holds, in seconds. Requests to Chess.com

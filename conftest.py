@@ -1,10 +1,10 @@
 """
 Global pytest configuration.
 
-Keeps the test suite self-contained: it must run without a live PostgreSQL,
-LLM server or Stockfish engine. We (1) provide safe defaults for the environment
-variables that modules read at import time, and (2) swap the database for a
-file-backed SQLite so no PostgreSQL server is needed.
+Keeps the test suite self-contained: it must run without a live PostgreSQL, a
+Stockfish engine or network access to OpenRouter. We (1) provide safe defaults for
+the environment variables that modules read at import time, and (2) swap the
+database for a file-backed SQLite so no PostgreSQL server is needed.
 """
 
 import os
@@ -12,7 +12,6 @@ import tempfile
 
 # Defaults for env vars read at import time.
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
-os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
 # Point the broker at localhost, not the compose hostname: a test that reaches it
 # by accident then fails at once on a closed port instead of hanging on DNS.
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")

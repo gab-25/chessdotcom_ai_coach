@@ -222,7 +222,7 @@ there a worker on this row or not?**
 
 - **`PENDING` — no worker yet.** The message is on the broker, waiting its turn.
   It can wait a long time and be perfectly healthy: one press of **Analyse this
-  game** queues ~40 analyses at 2s of Stockfish plus up to 150s of LLM each, so
+  game** queues ~40 analyses at 2s of Stockfish plus up to 60s of LLM each, so
   the last one may not start for the better part of an hour. Recovery here is Celery's:
   `CELERY_TASK_ACKS_LATE` means the task is acknowledged after it ran, so a worker
   that dies holding it hands the message back (on a graceful stop) or leaves it
@@ -241,7 +241,7 @@ there a worker on this row or not?**
 - **`RUNNING` — a worker claimed it.** `analyze_game_task` sets this as it starts
   and `updated_at` records when. Now there *is* a bound on how long it may take,
   so `sync.requeue_stale_analyses()` sweeps anything older than
-  `ANALYSIS_TIMEOUT` (10 minutes — a wide margin over the ~152s worst case) back
+  `ANALYSIS_TIMEOUT` (10 minutes — a wide margin over the ~62s worst case) back
   to `PENDING` and onto the queue. It runs in the **web** process, not the
   worker: its job is to rescue analyses from a wedged worker, and queued behind
   that worker it could not run in the one case it exists for.

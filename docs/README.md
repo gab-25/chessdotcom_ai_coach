@@ -2,8 +2,8 @@
 
 Chessdotcom AI Coach mirrors your whole Chess.com archive locally — **every
 finished game, live and daily** — and replays any of them move by move. Ask it to
-analyse a game and, for each move you played, it runs Stockfish and a local LLM
-to produce a grandmaster-style comment on the position you faced.
+analyse a game and, for each move you played, it runs Stockfish and asks an LLM
+through OpenRouter for a grandmaster-style comment on the position you faced.
 
 It is a review tool, not a live assistant: a game you are still playing does not
 appear until it ends, a move you have not played is never analysed, and nothing

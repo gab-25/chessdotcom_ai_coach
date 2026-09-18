@@ -3,8 +3,8 @@
 The app is not a single Django process. It is **two processes plus two backing
 services**, and understanding why is the fastest way into the codebase.
 
-The reason is latency: a coach analysis costs ~2s of Stockfish plus 20–30s of
-CPU LLM inference. That can't happen inside a request, so it happens in a Celery
+The reason is latency: a coach analysis costs ~2s of Stockfish plus a round trip
+to a remote LLM. That can't happen inside a request, so it happens in a Celery
 worker. Keeping the local mirror of your games up to date is slow for a different
 reason — one HTTP call per archive month — so it goes to the same worker. The web
 process, as a result, never talks to Chess.com and never runs the engine: it only
@@ -45,10 +45,10 @@ graph TD
         Redis[("Redis<br/>broker + results")]
     end
 
-    subgraph ext["External / local engines"]
+    subgraph ext["External APIs / local engines"]
         ChessCom["Chess.com public API"]
         SF["Stockfish<br/><i>local subprocess</i>"]
-        LLM["Ollama<br/><i>OpenAI-compatible</i>"]
+        LLM["OpenRouter<br/><i>OpenAI-compatible API</i>"]
     end
 
     Browser -->|"navigation, paging, analyse request<br/>detail page load (+ recovery sweeps)"| Web
@@ -87,7 +87,7 @@ the worker. Opening a page claims nothing: the home page is a plain DB read, so 
 user who never presses Sync costs no Chess.com traffic at all.
 
 **Analysis is requested, never scheduled.** An imported archive is thousands of
-games; at dozens of analyses each, and up to 152s apiece, no schedule could drain
+games; at dozens of analyses each, and up to 62s apiece, no schedule could drain
 that queue. So the coach runs when you press **Analyse this game** (or ask for a
 single move), and `enqueue_game_analysis` — idempotent, as ever — turns that into
 one task per move you played. Once the game is fully analysed that button becomes
@@ -146,7 +146,7 @@ sequenceDiagram
     W->>DB: claim the row: status RUNNING, attempts += 1
     W->>E: get_best_move(fen, pgn)
     E-->>W: eval + best move (Stockfish, 2s limit)
-    E-->>W: coaching prose (LLM, 150s timeout)
+    E-->>W: coaching prose (LLM, 60s timeout)
     Note over W,E: LLM failure → Stockfish-only fallback text,<br/>the analysis still completes
     W->>DB: update_or_create → status DONE
 
@@ -217,7 +217,7 @@ position as FAILED instead of running it again.
 | Archive import | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `sync_user` — where games come from, run in the worker as `tasks.sync_user_task`. `_due_months` asks for every month with no `ArchiveImport` row plus the current one, so a first sync reads the whole history and an interrupted one resumes at the gaps. `import_all_archives` re-reads regardless, behind `manage.py import_archives`. |
 | Stuck-analysis recovery | [`services/sync.py`](../chessdotcom_ai_coach/services/sync.py) | `recover_stuck_analyses`, called from `views.game_detail` once the game is known to be reviewable (the detail page load), at most every `RECOVERY_INTERVAL`. Two halves: `requeue_stale_analyses` for a row whose *worker* died (RUNNING past `ANALYSIS_TIMEOUT`), `requeue_orphaned_analyses` for one whose *message* did (PENDING while the broker queue is empty and nothing is RUNNING). Never raises. |
 | Celery task | [`tasks.py`](../chessdotcom_ai_coach/tasks.py) | `analyze_game_task` claims the row (RUNNING, `attempts += 1`), then wraps the async coach in `async_to_sync`. Kept thin deliberately, so `services/coach.py` stays untouched and its test mocking seam still applies. |
-| Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s), then the LLM (150s timeout); on LLM error it returns Stockfish-only prose rather than failing. |
+| Coach | [`services/coach.py`](../chessdotcom_ai_coach/services/coach.py) | `get_best_move(fen, pgn)` → a `Suggestion` TypedDict. Stockfish first (2s, asked for the score **and** the principal variation), then OpenRouter (60s timeout); on LLM error it returns Stockfish-only prose rather than failing. The prompt carries the board as a labelled grid, the side to move, material, castling rights, each bishop's square colour, the engine's main line and the moves played **up to this position** — a model given only a FEN and a move invents the reason the move is good, and one given the whole game's PGN alongside a one-ply FEN describes the wrong position entirely. |
 | Chess.com IO | [`services/chess_client.py`](../chessdotcom_ai_coach/services/chess_client.py) | `archive_months()` and `finished_games(y, m)` — the archives, and the only endpoints used. Pure IO + shape normalisation, no DB access. |
 | Persistence | [`services/game_store.py`](../chessdotcom_ai_coach/services/game_store.py) | Pure DB reads/writes: `upsert_finished_games` (the one writer), `past_games` (a **queryset**, so the home page pages in the database), `time_classes`, `stored_game`. No Chess.com access. |
 | Board rendering | [`services/board.py`](../chessdotcom_ai_coach/services/board.py) | Expands FEN/PGN into what templates can iterate over. |

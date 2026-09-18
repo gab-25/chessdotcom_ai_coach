@@ -1,8 +1,11 @@
+import io
 import os
+import re
 from typing import Optional, TypedDict
 
 import chess
 import chess.engine
+import chess.pgn
 from openai import AsyncOpenAI
 
 # Stockfish Engine Configuration.
@@ -10,13 +13,24 @@ from openai import AsyncOpenAI
 # points at the binary (see the Dockerfile). Defaults to "stockfish" on PATH.
 STOCKFISH_PATH = os.getenv("STOCKFISH_PATH", "stockfish")
 
-# LLM Configuration (Local Llama 3.2 via Ollama)
-# Ollama exposes an OpenAI-compatible endpoint on /v1, so we talk to it with the
-# OpenAI async client. A 3B model is used to keep RAM usage low enough for an
-# 8GB single-node cluster (~2GB loaded vs ~5-6GB for the 8B build), and Ollama's
-# OLLAMA_KEEP_ALIVE unloads it between analyses so that RAM comes back.
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
+# LLM Configuration (OpenRouter)
+# OpenRouter is the only supported provider and speaks the OpenAI wire protocol,
+# so the standard async client works unchanged. The endpoint is not a knob; the
+# model is, since it names a model rather than a provider.
+#
+# Read straight from the environment, like STOCKFISH_PATH above, so this module
+# stays importable without Django configured (see docs/configuration.md).
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# Optional: with no key the coach falls back to Stockfish-only prose, same as for
+# any other LLM failure. Default to "" rather than None, because
+# AsyncOpenAI(api_key=None) silently falls back to the OPENAI_API_KEY environment
+# variable, which would pick up an unrelated key on a developer machine.
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4.5")
+
+# A hosted model answers in seconds, and there are no weights to reload, so 60s is
+# a generous cap on a slow response rather than a budget for one.
+LLM_TIMEOUT = 60.0
 
 
 class Suggestion(TypedDict):
@@ -45,6 +59,157 @@ def _suggestion(
     }
 
 
+# Standard piece values, used only to tell the coach who is up material. The
+# evaluation itself is Stockfish's job, not this table's.
+_PIECE_VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+
+
+def _ascii_board(board: chess.Board) -> str:
+    """Render the board as a labelled grid, uppercase White and lowercase Black.
+
+    The FEN alone is a poor input: a model reconstructing a position from it
+    routinely places pieces on squares they are not on, and then explains the
+    move in terms of that imagined position. A grid is read far more reliably.
+    """
+    rows = [
+        f"{rank + 1} "
+        + " ".join(
+            (piece.symbol() if (piece := board.piece_at(chess.square(file, rank))) else ".")
+            for file in range(8)
+        )
+        for rank in range(7, -1, -1)
+    ]
+    return "\n".join(rows) + "\n  a b c d e f g h"
+
+
+def _material_balance(board: chess.Board) -> str:
+    """Who is up material, in pawns — a fact the coach should not have to infer."""
+    totals = {
+        color: sum(len(board.pieces(piece, color)) * value for piece, value in _PIECE_VALUES.items())
+        for color in (chess.WHITE, chess.BLACK)
+    }
+    diff = totals[chess.WHITE] - totals[chess.BLACK]
+    if diff == 0:
+        return "level"
+    return f"{'White' if diff > 0 else 'Black'} is up {abs(diff)} (pawns)"
+
+
+def _history_before(fen: str, pgn: Optional[str]) -> Optional[str]:
+    """The moves actually played up to the analysed position, in SAN.
+
+    The callers hand us the game's **whole** PGN — `enqueue_game_analysis` and the
+    recovery sweeps queue one task per ply and pass `game.pgn` unchanged — while
+    the FEN is the position *before* the move being reviewed. Passing both to the
+    model is worse than passing neither: it reads the game's later moves as
+    already played, describes a position dozens of plies away from the one it was
+    asked about, and gets to see how the game ends.
+
+    So replay the PGN and cut it where the board matches. Comparison is on the
+    EPD, not the FEN, because the move counters are not part of the position and
+    rows can carry either spelling (see `analysis._rows_by_ply`).
+
+    Returns ``None`` when nothing has been played yet, and also when the position
+    is not on the game's main line — an unrelated history is precisely the input
+    this exists to remove.
+    """
+    if not pgn:
+        return None
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn))
+    except Exception:
+        return None
+    if game is None:
+        return None
+
+    target = chess.Board(fen).epd()
+    start = game.board()
+    if start.epd() == target:
+        return None  # the opening position: there is no history to give
+
+    board = start.copy()
+    played: list[chess.Move] = []
+    for move in game.mainline_moves():
+        try:
+            board.push(move)
+        except Exception:
+            break  # malformed movetext — stop at the last legal ply
+        played.append(move)
+        if board.epd() == target:
+            return start.variation_san(played)
+    return None
+
+
+# Markdown the prompt asks the model not to produce, stripped anyway: an
+# instruction is a request, and one non-compliant reply is a card full of
+# asterisks. Deliberately narrow — see `_plain_text`.
+# `[ \t]{0,3}`, not `\s{0,3}`: Markdown allows three *spaces* of indent, and
+# `\s` would swallow the newline before the heading, welding two paragraphs
+# together in a card whose CSS renders line breaks (`white-space: pre-line`).
+_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.MULTILINE)
+_EMPHASIS = re.compile(r"(\*{1,3}|_{2,3})(\S.*?\S|\S)\1", re.DOTALL)
+
+
+def _plain_text(text: str) -> str:
+    """Strip the Markdown the card would otherwise render as literal punctuation.
+
+    Only two things are touched, and narrowly:
+
+    * heading markers, and only at the start of a line — because ``#`` is
+      checkmate in SAN, and "Qh5#" must survive untouched;
+    * emphasis markers wrapped around text, so ``**Evaluation:**`` loses the
+      asterisks and keeps the words.
+
+    List bullets are left alone: "- Control the centre" reads perfectly well as
+    plain text, whereas "**" never does.
+    """
+    return _EMPHASIS.sub(r"\2", _HEADING.sub("", text)).strip()
+
+
+def _bishops(board: chess.Board) -> str:
+    """Each side's bishops, with the colour of the square each one stands on.
+
+    The grid says where a bishop is; it does not say what colour it operates on,
+    and working that out from the coordinates is exactly the step a model gets
+    wrong — calling f8 light-squared while correctly naming the piece. Worth a
+    line of its own because so much chess commentary turns on it: good and bad
+    bishops, opposite-coloured bishops, the bishop pair.
+    """
+
+    def side(color: chess.Color) -> str:
+        squares = sorted(board.pieces(chess.BISHOP, color))
+        if not squares:
+            return "none"
+        return ", ".join(
+            f"{chess.square_name(square)} "
+            f"({'light' if chess.BB_SQUARES[square] & chess.BB_LIGHT_SQUARES else 'dark'})"
+            for square in squares
+        )
+
+    return f"White {side(chess.WHITE)}; Black {side(chess.BLACK)}"
+
+
+def _principal_variation(board: chess.Board, info, plies: int = 6) -> Optional[str]:
+    """The engine's main line in SAN, e.g. ``4...e5 5. O-O Be7 6. d3``.
+
+    This is the single most useful thing to hand the coach. Given only the best
+    move it has to invent a reason the move is good; given the line that follows,
+    it can describe what actually happens. Capped at ``plies`` because the tail of
+    a 2-second PV is noise.
+
+    Only the longest prefix that actually replays from this position is kept: a
+    line cut short still grounds the comment, whereas one that does not fit the
+    board is worse than none at all. Returns ``None`` if nothing replays.
+    """
+    probe = board.copy()
+    playable = []
+    for move in list(info.get("pv") or ())[:plies]:
+        if move not in probe.legal_moves:
+            break
+        probe.push(move)
+        playable.append(move)
+    return board.variation_san(playable) if playable else None
+
+
 async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
     """
     Uses the Stockfish engine to act as an AI Chess Coach.
@@ -68,10 +233,14 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
             board = chess.Board(fen)
 
             # Analyze to find the best move (2-second limit).
-            # play() returns no analysis info by default, so request the score
-            # explicitly; result.info then carries the evaluation used below.
+            # play() returns no analysis info by default, so ask for the score and
+            # the principal variation explicitly; result.info then carries both.
+            # The PV is what lets the coach describe the plan that follows the
+            # move instead of guessing at one.
             result = await engine.play(
-                board, chess.engine.Limit(time=2.0), info=chess.engine.INFO_SCORE
+                board,
+                chess.engine.Limit(time=2.0),
+                info=chess.engine.INFO_SCORE | chess.engine.INFO_PV,
             )
             best_move = result.move
             info = result.info
@@ -119,50 +288,91 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
         best_move_san = board.san(best_move)
         best_move_uci = best_move.uci()
 
-        # Generate LLM response using Llama 3
+        # Ask the LLM for the coaching prose.
+        #
+        # Everything the model could otherwise only guess at is spelled out: the
+        # board as a grid (not just a FEN), whose turn it is, the material count,
+        # the castling rights, and above all the engine's main line. Given only a
+        # move and an evaluation, a model invents a justification — pawns on
+        # squares they are not on, plans the position does not allow — and the
+        # prose reads fluently while being wrong about the board in front of it.
+        pv_san = _principal_variation(board, info)
+        history_san = _history_before(fen, pgn)
         prompt = f"""
-You are a Grandmaster AI Chess Coach. Analyze the following position and suggest the best move.
+You are a Grandmaster AI Chess Coach. Comment on the following position and on the move the engine recommends.
 
-Context:
+Position:
+- Side to move: {"White" if board.turn == chess.WHITE else "Black"}
+- Board (uppercase = White, lowercase = Black, "." = empty):
+{_ascii_board(board)}
 - FEN: {fen}
-- PGN (History): {pgn if pgn else "N/A"}
-- Engine Evaluation: {eval_text}
-- Suggested Best Move: {best_move_san}
+- Castling rights: {board.fen().split()[2]}
+- Material: {_material_balance(board)}
+- Bishops: {_bishops(board)}
+- Moves played so far: {history_san if history_san else "none — this is the start of the game"}
+
+Engine analysis:
+- Evaluation: {eval_text}
+- Best move: {best_move_san}
+- Main line: {pv_san if pv_san else "not available"}
 
 Instructions:
 1. Briefly comment on the evaluation of the position.
-2. Explain why {best_move_san} is the best move in strategic or tactical terms.
+2. Explain why {best_move_san} is the best move in strategic or tactical terms. When a main line is given, use it: describe what actually follows rather than a plan of your own.
 3. Provide a short piece of advice for the continuation of the game.
-4. Respond in a professional, encouraging, and educational manner in English.
-5. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
+4. Ground every claim in the board above. Do not refer to pawns or pieces on squares where this position does not have them, do not name an opening unless the moves listed support it, and do not describe plans the position does not allow. If the main line is not available and you cannot justify the move concretely, keep the comment general and say the engine prefers it — never invent a reason.
+5. Respond in a professional, encouraging, and educational manner in English.
+6. Write plain prose: a few short paragraphs separated by a blank line, and nothing else. No Markdown, no headings, no bullet or numbered lists, no bold or italics, no asterisks or hashes of any kind. The card renders your reply as text, so any markup shows up literally as punctuation the reader has to look past. Emphasise with the sentence, not with symbols.
+7. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
 """
 
         try:
-            # llama3.2:3b on CPU can take ~20-30s to produce a full analysis, and
-            # after an idle gap the request also pays for reloading the model that
-            # OLLAMA_KEEP_ALIVE unloaded, so allow a generous timeout; on failure
-            # we fall back to engine-only text.
+            # Any failure here — no key at all, a 401, a 429, a timeout, a
+            # network error — falls back to engine-only text below. The analysis
+            # degrades, it never fails.
+            #
+            # Checked rather than left to the API so the log line names the cause:
+            # an empty key would otherwise surface as an opaque 401.
+            if not OPENROUTER_API_KEY:
+                raise RuntimeError(
+                    "OPENROUTER_API_KEY is not set; skipping the LLM and using "
+                    "Stockfish-only prose. See docs/configuration.md#the-api-key."
+                )
             # `async with`: the client owns an httpx connection pool that must be
             # closed on this event loop. `async_to_sync` (how the Celery task calls
             # us) closes the loop as soon as we return, so a client left to its
             # finalizer tries to close its socket on a dead loop and logs
             # "RuntimeError: Event loop is closed" after an otherwise fine analysis.
             async with AsyncOpenAI(
-                base_url=LLM_BASE_URL, api_key="not-needed", timeout=150.0
+                base_url=OPENROUTER_BASE_URL,
+                api_key=OPENROUTER_API_KEY,
+                timeout=LLM_TIMEOUT,
+                # Attributes the requests to this app on OpenRouter's public
+                # rankings page. Cosmetic, and it carries no user data.
+                default_headers={"X-Title": "chessdotcom_ai_coach"},
             ) as client:
                 response = await client.chat.completions.create(
                     model=LLM_MODEL,
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are an expert chess coach analyzing games in real-time. Never end your reply with a question or a call to respond; the user has no way to answer back.",
+                            "content": (
+                                "You are an expert chess coach analyzing games in real-time. "
+                                "Describe only what is present in the position you are given: "
+                                "a confident claim about a piece that is not there is worse than "
+                                "a general comment. Write plain prose in short paragraphs, never "
+                                "Markdown: the interface renders your reply as text, so headings "
+                                "and asterisks reach the reader as literal characters. Never end "
+                                "your reply with a question or a call to respond; the user has no "
+                                "way to answer back."
+                            ),
                         },
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
                 )
             content = response.choices[0].message.content
-            analysis = content.strip() if content else eval_text
+            analysis = _plain_text(content) if content else eval_text
             return _suggestion(
                 eval_text=eval_text,
                 eval_cp=eval_cp,

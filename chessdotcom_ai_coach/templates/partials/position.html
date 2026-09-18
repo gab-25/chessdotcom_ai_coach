@@ -80,6 +80,13 @@
         user asks again — which is also what runs the stuck-analysis sweeps, in
         `views.game_detail`.
 
+        `show:window:top` on the swap: the button sits below the board, but it
+        replaces the whole #gr-view above it — including the coach card and the
+        state line that just changed. Without it the swap lands off-screen and the
+        press looks like it did nothing. Only the two analyse buttons do this; the
+        move navigation swaps the same target and must NOT scroll, since reading a
+        game move by move means staying where you are.
+
         The state line says which of three things is true and no more: a count
         that only moves when you press a button reads as a stalled count. The
         third state — nothing queued, something still un-analysed — is both the
@@ -101,7 +108,7 @@
         {% if analysis_complete %}
         <button type="button" class="btn btn--ghost btn--sm"
                 hx-post="{% url 'analyze_game' id %}?sel={{ sel }}&amp;force=1"
-                hx-target="#gr-view" hx-swap="outerHTML">
+                hx-target="#gr-view" hx-swap="outerHTML show:window:top">
           <i class="fa-solid fa-rotate-right"></i> Re-analyse this game
         </button>
         {% elif analysis_pending %}
@@ -116,7 +123,7 @@
         {% else %}
         <button type="button" class="btn btn--accent btn--sm"
                 hx-post="{% url 'analyze_game' id %}?sel={{ sel }}"
-                hx-target="#gr-view" hx-swap="outerHTML">
+                hx-target="#gr-view" hx-swap="outerHTML show:window:top">
           <i class="fa-solid fa-wand-magic-sparkles"></i> Analyse this game
         </button>
         {% endif %}

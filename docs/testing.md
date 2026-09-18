@@ -33,7 +33,7 @@ and `pytest-django`.
 | [`test_views.py`](../tests/test_views.py) | 64 tests — the largest by far. Grouped into classes per concern: `TestHome`, `TestGameDetail`, `TestAnalyzePosition`, `TestCoachCardModes`, `TestMovesGrid`, `TestLiveMoveSlot`, `TestHistoryList`, … |
 | [`test_sync.py`](../tests/test_sync.py) | The request-driven jobs: which archive months a sync reads (including resuming an interrupted backfill), the per-user sync claim, and the two sweeps that revive a stuck analysis |
 | [`test_chess_client.py`](../tests/test_chess_client.py) | Chess.com response parsing, including the archive result codes |
-| [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch and the LLM fallback |
+| [`test_coach.py`](../tests/test_coach.py) | Every evaluation branch, what grounding the prompt carries, how the OpenRouter client is built, and the LLM fallback — including the no-key path |
 | [`test_board.py`](../tests/test_board.py) | FEN/PGN expansion |
 | [`test_game_store.py`](../tests/test_game_store.py) | Upsert, retire, result persistence |
 | [`test_analysis.py`](../tests/test_analysis.py) | Whole-game enqueue idempotency |
@@ -49,10 +49,15 @@ before you touch it.
 
 ### 1. Environment defaults before import
 
-`SECRET_KEY` and `LLM_BASE_URL` are `setdefault`-ed at the very top of the file,
+`SECRET_KEY` and `REDIS_URL` are `setdefault`-ed at the very top of the file,
 **before** `import pytest`. Several modules read environment variables at import
-time (`services/coach.py` reads `LLM_BASE_URL`, `STOCKFISH_PATH` and `LLM_MODEL`
-with `os.getenv` at module level), so setting them later would be too late.
+time (`services/coach.py` reads `OPENROUTER_API_KEY`, `STOCKFISH_PATH` and
+`LLM_MODEL` with `os.getenv` at module level), so setting them later would be too
+late.
+
+`OPENROUTER_API_KEY` needs no default: it is optional, and every test that
+exercises the LLM path patches `coach.OPENROUTER_API_KEY` directly — reading it at
+import time is exactly why `setenv` would not work.
 
 ### 2. The database is swapped for SQLite
 
@@ -80,7 +85,7 @@ inventing their own.
 | Dependency | Patch target |
 | --- | --- |
 | **Stockfish** | `chess.engine.popen_uci` — returns `(transport, engine)`, so the stub returns a pair of mocks with `engine.play` as an `AsyncMock`. No subprocess is ever spawned. |
-| **LLM** | `AsyncOpenAI` — the response shape the code reads is `response.choices[0].message.content`. Making the call raise exercises the Stockfish-only fallback branch. |
+| **LLM (OpenRouter)** | `AsyncOpenAI` — the response shape the code reads is `response.choices[0].message.content`. Making the call raise exercises the Stockfish-only fallback branch. |
 | **Celery** | `analyze_game_task` at its *import site* — `chessdotcom_ai_coach.services.sync.analyze_game_task` and `...services.analysis.analyze_game_task`. Tests assert on `.delay` calls; nothing is ever enqueued. `sync_user_task` is the exception: `request_sync` imports it *inside the function* to break a cycle, so it is patched at `chessdotcom_ai_coach.tasks.sync_user_task`. |
 
 Chess.com is patched the same way, at the import site:

@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 
 # How long an analysis may stay RUNNING before it's assumed dead. This bounds a
 # *single* analysis, not a queue wait: `coach.get_best_move` is capped at 2s of
-# Stockfish plus a 150s LLM timeout, so ten minutes is already a wide margin.
+# Stockfish plus a 60s LLM timeout, so ten minutes is already a wide margin. Kept
+# wide on purpose — requeueing a live analysis burns one of its attempts.
 # Queued work is not measured against it — a PENDING row has no worker on it yet
 # and is recovered by the broker redelivering the message (`task_acks_late`).
 ANALYSIS_TIMEOUT = timedelta(minutes=10)
