@@ -349,7 +349,13 @@ Instructions:
                 timeout=LLM_TIMEOUT,
                 # Attributes the requests to this app on OpenRouter's public
                 # rankings page. Cosmetic, and it carries no user data.
-                default_headers={"X-Title": "chessdotcom_ai_coach"},
+                # HTTP-Referer is what identifies the app: without it OpenRouter
+                # files the usage under "Unknown" and X-Title alone is ignored,
+                # since the title only renames an app the referer already named.
+                default_headers={
+                    "HTTP-Referer": "https://github.com/gab-25/chessdotcom_ai_coach",
+                    "X-Title": "chessdotcom_ai_coach",
+                },
             ) as client:
                 response = await client.chat.completions.create(
                     model=LLM_MODEL,

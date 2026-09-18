@@ -135,7 +135,12 @@ class TestBestMoveAndLLM:
         kwargs = async_openai.call_args.kwargs
         assert kwargs["base_url"] == "https://openrouter.ai/api/v1"
         assert kwargs["api_key"] == "sk-or-test"  # the key from the environment
-        assert kwargs["default_headers"] == {"X-Title": "chessdotcom_ai_coach"}
+        # HTTP-Referer is the header OpenRouter attributes the app by; X-Title
+        # only renames it, so a missing referer files the usage under "Unknown".
+        assert kwargs["default_headers"] == {
+            "HTTP-Referer": "https://github.com/gab-25/chessdotcom_ai_coach",
+            "X-Title": "chessdotcom_ai_coach",
+        }
 
     async def test_no_best_move_identified(self):
         with _engine(PovScore(Cp(30), chess.WHITE), move=None):
