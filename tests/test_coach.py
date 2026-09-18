@@ -203,6 +203,46 @@ class TestPromptGrounding:
         assert "a8" not in prompt.split("Main line:")[1].split("\n")[0]
 
 
+class TestHistoryTruncation:
+    """The PGN must be cut at the analysed position.
+
+    Callers pass the game's whole PGN with a FEN from one ply, so an untruncated
+    history describes a position the coach was not asked about — and shows it how
+    the game ends.
+    """
+
+    FULL_PGN = "1. e4 c5 2. Nc3 Nc6 3. Nf3 d6 4. Bc4"
+
+    @staticmethod
+    def _fen_after(*sans):
+        board = chess.Board()
+        for san in sans:
+            board.push_san(san)
+        return board.fen()
+
+    async def test_history_stops_at_the_analysed_position(self):
+        fen = self._fen_after("e4", "c5", "Nc3")  # Black to move at ply 4
+        nf6 = chess.Move.from_uci("g8f6")  # legal here, unlike the default e2e4
+        with _engine(PovScore(Cp(30), chess.WHITE), move=nf6) as async_openai:
+            await coach.get_best_move(fen, self.FULL_PGN)
+        prompt = TestPromptGrounding._prompt(async_openai)
+        assert "Moves played so far: 1. e4 c5 2. Nc3" in prompt
+        assert "Nc6" not in prompt.split("Moves played so far:")[1].split("\n")[0]
+
+    async def test_start_of_game_has_no_history(self):
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN, self.FULL_PGN)
+        assert "Moves played so far: none" in TestPromptGrounding._prompt(async_openai)
+
+    async def test_position_off_the_main_line_gets_no_history(self):
+        """Better no history than one from a game that never reached here."""
+        fen = self._fen_after("d4", "d5")  # not a position in FULL_PGN
+        c4 = chess.Move.from_uci("c2c4")  # legal here, unlike the default e2e4
+        with _engine(PovScore(Cp(30), chess.WHITE), move=c4) as async_openai:
+            await coach.get_best_move(fen, self.FULL_PGN)
+        assert "Moves played so far: none" in TestPromptGrounding._prompt(async_openai)
+
+
 class TestErrorHandling:
     async def test_invalid_fen_returns_error_string(self):
         with _engine(PovScore(Cp(0), chess.WHITE)):

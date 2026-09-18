@@ -1,8 +1,10 @@
+import io
 import os
 from typing import Optional, TypedDict
 
 import chess
 import chess.engine
+import chess.pgn
 from openai import AsyncOpenAI
 
 # Stockfish Engine Configuration.
@@ -89,6 +91,51 @@ def _material_balance(board: chess.Board) -> str:
     if diff == 0:
         return "level"
     return f"{'White' if diff > 0 else 'Black'} is up {abs(diff)} (pawns)"
+
+
+def _history_before(fen: str, pgn: Optional[str]) -> Optional[str]:
+    """The moves actually played up to the analysed position, in SAN.
+
+    The callers hand us the game's **whole** PGN — `enqueue_game_analysis` and the
+    recovery sweeps queue one task per ply and pass `game.pgn` unchanged — while
+    the FEN is the position *before* the move being reviewed. Passing both to the
+    model is worse than passing neither: it reads the game's later moves as
+    already played, describes a position dozens of plies away from the one it was
+    asked about, and gets to see how the game ends.
+
+    So replay the PGN and cut it where the board matches. Comparison is on the
+    EPD, not the FEN, because the move counters are not part of the position and
+    rows can carry either spelling (see `analysis._rows_by_ply`).
+
+    Returns ``None`` when nothing has been played yet, and also when the position
+    is not on the game's main line — an unrelated history is precisely the input
+    this exists to remove.
+    """
+    if not pgn:
+        return None
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn))
+    except Exception:
+        return None
+    if game is None:
+        return None
+
+    target = chess.Board(fen).epd()
+    start = game.board()
+    if start.epd() == target:
+        return None  # the opening position: there is no history to give
+
+    board = start.copy()
+    played: list[chess.Move] = []
+    for move in game.mainline_moves():
+        try:
+            board.push(move)
+        except Exception:
+            break  # malformed movetext — stop at the last legal ply
+        played.append(move)
+        if board.epd() == target:
+            return start.variation_san(played)
+    return None
 
 
 def _principal_variation(board: chess.Board, info, plies: int = 6) -> Optional[str]:
@@ -200,6 +247,7 @@ async def get_best_move(fen: str, pgn: str | None = None) -> Suggestion:
         # squares they are not on, plans the position does not allow — and the
         # prose reads fluently while being wrong about the board in front of it.
         pv_san = _principal_variation(board, info)
+        history_san = _history_before(fen, pgn)
         prompt = f"""
 You are a Grandmaster AI Chess Coach. Comment on the following position and on the move the engine recommends.
 
@@ -210,7 +258,7 @@ Position:
 - FEN: {fen}
 - Castling rights: {board.fen().split()[2]}
 - Material: {_material_balance(board)}
-- Moves so far (PGN): {pgn if pgn else "N/A"}
+- Moves played so far: {history_san if history_san else "none — this is the start of the game"}
 
 Engine analysis:
 - Evaluation: {eval_text}
