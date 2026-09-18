@@ -651,6 +651,21 @@ class TestCoachCardModes:
         assert "No suggestion for <b>Nf3</b> yet" in body
         assert "Analyse this game" in body
 
+    def test_analyse_button_scrolls_back_to_the_top(self, auth_client, user):
+        """The button sits below the board but replaces the view above it.
+
+        Without the swap modifier the replaced content lands off-screen and the
+        press reads as having done nothing. The move navigation swaps the same
+        target and deliberately does not scroll.
+        """
+        _make_game(user)
+
+        body = auth_client.get("/game/944768131/view", {"sel": "3"}).content.decode()
+
+        assert 'hx-swap="outerHTML show:window:top"' in body
+        assert body.count("show:window:top") == 1  # only the analyse control
+        assert 'hx-swap="outerHTML"' in body  # navigation stays where it is
+
     def test_pending_waits_to_be_reloaded(self, auth_client, user):
         """It used to promise the suggestion would "appear shortly", which a page
         that no longer polls cannot keep: it says what to do instead."""
