@@ -18,7 +18,7 @@ Copy [`.env.example`](../.env.example) to `.env` and edit.
 | `POSTGRES_HOST` | Database host | `localhost` | `localhost` |
 | `POSTGRES_PORT` | Database port | `5432` | `5432` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | empty — without it the coach falls back to Stockfish-only prose | same |
-| `LLM_MODEL` | Model slug sent with each request | `anthropic/claude-haiku-4.5` | same |
+| `LLM_MODEL` | Model slug sent with each request | `anthropic/claude-sonnet-4.5` | same |
 | `REDIS_URL` | Celery broker **and** result backend | `redis://redis:6379/0` | `redis://localhost:6379/0` |
 | `SYNC_COOLDOWN_SECONDS` | How long a user's archive-sync claim holds | `300` | same |
 | `STOCKFISH_PATH` | Path to the engine binary | `stockfish` (resolved on `PATH`) | `./stockfish` |
@@ -158,13 +158,21 @@ Two consequences of *setting* a key, worth stating plainly:
 [openrouter.ai/models](https://openrouter.ai/models). The default is:
 
 ```bash
-LLM_MODEL=anthropic/claude-haiku-4.5
+LLM_MODEL=anthropic/claude-sonnet-4.5
 ```
 
-It is a compromise between prose quality and the fact that the app calls the
-model once per analysed move: a frontier model writes a better comment and costs
-several times as much per game. Changing it is one line and a restart of `web`
-and `worker` — there is nothing to pull and no tag to keep in sync.
+The prose *is* the feature, so this is the one place the project does not
+optimise for cost. A smaller model on the same prompt describes the right
+position but overstates it — saying a move frees "both bishops" where it frees
+one — and those are the claims a learner has no way to catch. Everything the
+prompt could give it is already there (see the grounding in
+[`services/coach.py`](../chessdotcom_ai_coach/services/coach.py)), so the
+remaining gap is the model.
+
+If the per-move cost matters more to you than the last increment of accuracy,
+`anthropic/claude-haiku-4.5` is several times cheaper and still far beyond what a
+local 3B model managed. Changing it is one line and a restart of `web` and
+`worker` — there is nothing to pull and no tag to keep in sync.
 
 ```bash
 docker compose up -d web worker

@@ -25,7 +25,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # AsyncOpenAI(api_key=None) silently falls back to the OPENAI_API_KEY environment
 # variable, which would pick up an unrelated key on a developer machine.
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4.5")
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4.5")
 
 # A hosted model answers in seconds, and there are no weights to reload, so 60s is
 # a generous cap on a slow response rather than a budget for one.
