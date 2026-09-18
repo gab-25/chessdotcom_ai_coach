@@ -258,6 +258,41 @@ class TestHistoryTruncation:
         assert "Moves played so far: none" in TestPromptGrounding._prompt(async_openai)
 
 
+class TestPlainTextOutput:
+    """The card renders the prose as text, so Markdown reaches the reader raw.
+
+    The prompt forbids it, but an instruction is a request: these cover the reply
+    that ignores it.
+    """
+
+    async def test_headings_and_emphasis_are_stripped(self):
+        reply = "# Analysis\n\n## Evaluation\n\nThe move **e5** is *strong*."
+        with _engine(PovScore(Cp(30), chess.WHITE), llm_content=reply):
+            result = await coach.get_best_move(START_FEN)
+        assert result["analysis"] == "Analysis\n\nEvaluation\n\nThe move e5 is strong."
+
+    async def test_checkmate_notation_survives(self):
+        """`#` is checkmate in SAN — only a line-leading `# ` is a heading."""
+        reply = "White mates with Qh5#, or Rd8# after Kf1."
+        with _engine(PovScore(Cp(30), chess.WHITE), llm_content=reply):
+            result = await coach.get_best_move(START_FEN)
+        assert result["analysis"] == reply
+
+    async def test_paragraph_breaks_are_preserved(self):
+        """The card's CSS renders newlines, so welding paragraphs is a visible bug."""
+        reply = "## First\n\nOne.\n\n## Second\n\nTwo."
+        with _engine(PovScore(Cp(30), chess.WHITE), llm_content=reply):
+            result = await coach.get_best_move(START_FEN)
+        assert result["analysis"].count("\n\n") == 3
+
+    async def test_bullet_lists_are_left_alone(self):
+        """"- Develop" reads fine as plain text; "**" never does."""
+        reply = "Options:\n- Defend with Nc6\n- Counterattack with Nf6"
+        with _engine(PovScore(Cp(30), chess.WHITE), llm_content=reply):
+            result = await coach.get_best_move(START_FEN)
+        assert result["analysis"] == reply
+
+
 class TestErrorHandling:
     async def test_invalid_fen_returns_error_string(self):
         with _engine(PovScore(Cp(0), chess.WHITE)):

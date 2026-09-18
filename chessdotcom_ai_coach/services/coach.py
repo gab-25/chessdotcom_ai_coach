@@ -1,5 +1,6 @@
 import io
 import os
+import re
 from typing import Optional, TypedDict
 
 import chess
@@ -136,6 +137,32 @@ def _history_before(fen: str, pgn: Optional[str]) -> Optional[str]:
         if board.epd() == target:
             return start.variation_san(played)
     return None
+
+
+# Markdown the prompt asks the model not to produce, stripped anyway: an
+# instruction is a request, and one non-compliant reply is a card full of
+# asterisks. Deliberately narrow — see `_plain_text`.
+# `[ \t]{0,3}`, not `\s{0,3}`: Markdown allows three *spaces* of indent, and
+# `\s` would swallow the newline before the heading, welding two paragraphs
+# together in a card whose CSS renders line breaks (`white-space: pre-line`).
+_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.MULTILINE)
+_EMPHASIS = re.compile(r"(\*{1,3}|_{2,3})(\S.*?\S|\S)\1", re.DOTALL)
+
+
+def _plain_text(text: str) -> str:
+    """Strip the Markdown the card would otherwise render as literal punctuation.
+
+    Only two things are touched, and narrowly:
+
+    * heading markers, and only at the start of a line — because ``#`` is
+      checkmate in SAN, and "Qh5#" must survive untouched;
+    * emphasis markers wrapped around text, so ``**Evaluation:**`` loses the
+      asterisks and keeps the words.
+
+    List bullets are left alone: "- Control the centre" reads perfectly well as
+    plain text, whereas "**" never does.
+    """
+    return _EMPHASIS.sub(r"\2", _HEADING.sub("", text)).strip()
 
 
 def _bishops(board: chess.Board) -> str:
@@ -295,7 +322,8 @@ Instructions:
 3. Provide a short piece of advice for the continuation of the game.
 4. Ground every claim in the board above. Do not refer to pawns or pieces on squares where this position does not have them, do not name an opening unless the moves listed support it, and do not describe plans the position does not allow. If the main line is not available and you cannot justify the move concretely, keep the comment general and say the engine prefers it — never invent a reason.
 5. Respond in a professional, encouraging, and educational manner in English.
-6. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
+6. Write plain prose: a few short paragraphs separated by a blank line, and nothing else. No Markdown, no headings, no bullet or numbered lists, no bold or italics, no asterisks or hashes of any kind. The card renders your reply as text, so any markup shows up literally as punctuation the reader has to look past. Emphasise with the sentence, not with symbols.
+7. Do NOT end your response with a question or an invitation to reply (e.g. "Shall we proceed?"). The interface only offers a "Re-analyze" button, so the user cannot answer. Close with a concise, self-contained statement.
 """
 
         try:
@@ -332,8 +360,11 @@ Instructions:
                                 "You are an expert chess coach analyzing games in real-time. "
                                 "Describe only what is present in the position you are given: "
                                 "a confident claim about a piece that is not there is worse than "
-                                "a general comment. Never end your reply with a question or a "
-                                "call to respond; the user has no way to answer back."
+                                "a general comment. Write plain prose in short paragraphs, never "
+                                "Markdown: the interface renders your reply as text, so headings "
+                                "and asterisks reach the reader as literal characters. Never end "
+                                "your reply with a question or a call to respond; the user has no "
+                                "way to answer back."
                             ),
                         },
                         {"role": "user", "content": prompt},
@@ -341,7 +372,7 @@ Instructions:
                     temperature=0.7,
                 )
             content = response.choices[0].message.content
-            analysis = content.strip() if content else eval_text
+            analysis = _plain_text(content) if content else eval_text
             return _suggestion(
                 eval_text=eval_text,
                 eval_cp=eval_cp,
