@@ -303,3 +303,22 @@ class TestErrorHandling:
         with _engine(PovScore(Cp(0), chess.WHITE)):
             result = await coach.get_best_move("not-a-valid-fen")
         assert result["analysis"].startswith("Error during Stockfish analysis:")
+
+
+class TestRequestParameters:
+    """What is sent alongside the messages, and why it is sent."""
+
+    @staticmethod
+    def _kwargs(async_openai):
+        return async_openai.return_value.chat.completions.create.call_args.kwargs
+
+    async def test_reasoning_is_turned_off(self):
+        """Reasoning tokens are billed as output, and the coach never shows them.
+
+        The default model thinks by default, so leaving this out multiplies the
+        cost of every analysed move for prose the card would not print anyway.
+        """
+        with _engine(PovScore(Cp(30), chess.WHITE)) as async_openai:
+            await coach.get_best_move(START_FEN)
+        extra_body = self._kwargs(async_openai)["extra_body"]
+        assert extra_body["reasoning"] == {"enabled": False}

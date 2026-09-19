@@ -18,7 +18,7 @@ Copy [`.env.example`](../.env.example) to `.env` and edit.
 | `POSTGRES_HOST` | Database host | `localhost` | `localhost` |
 | `POSTGRES_PORT` | Database port | `5432` | `5432` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | empty — without it the coach falls back to Stockfish-only prose | same |
-| `LLM_MODEL` | Model slug sent with each request | `anthropic/claude-sonnet-4.5` | same |
+| `LLM_MODEL` | Model slug sent with each request | `google/gemini-2.5-flash` | same |
 | `REDIS_URL` | Celery broker **and** result backend | `redis://redis:6379/0` | `redis://localhost:6379/0` |
 | `SYNC_COOLDOWN_SECONDS` | How long a user's archive-sync claim holds | `300` | same |
 | `STOCKFISH_PATH` | Path to the engine binary | `stockfish` (resolved on `PATH`) | `./stockfish` |
@@ -158,21 +158,42 @@ Two consequences of *setting* a key, worth stating plainly:
 [openrouter.ai/models](https://openrouter.ai/models). The default is:
 
 ```bash
-LLM_MODEL=anthropic/claude-sonnet-4.5
+LLM_MODEL=google/gemini-2.5-flash
 ```
 
-The prose *is* the feature, so this is the one place the project does not
-optimise for cost. A smaller model on the same prompt describes the right
-position but overstates it — saying a move frees "both bishops" where it frees
-one — and those are the claims a learner has no way to catch. Everything the
-prompt could give it is already there (see the grounding in
-[`services/coach.py`](../chessdotcom_ai_coach/services/coach.py)), so the
-remaining gap is the model.
+**What a review costs.** Analysis is priced per move, not per game: one request
+per move you played, so a 40-move game is 40 requests. Each carries roughly 700
+input tokens and comes back with about 350 output tokens — and since output is
+billed several times higher than input, the prose is what you are paying for.
+At list prices that is about $0.04 a game on the default, against $0.29 on
+`anthropic/claude-sonnet-4.5` and $0.10 on `anthropic/claude-haiku-4.5`. Check
+the current numbers at [openrouter.ai/models](https://openrouter.ai/models)
+before treating any of them as a budget.
 
-If the per-move cost matters more to you than the last increment of accuracy,
-`anthropic/claude-haiku-4.5` is several times cheaper and still far beyond what a
-local 3B model managed. Changing it is one line and a restart of `web` and
-`worker` — there is nothing to pull and no tag to keep in sync.
+**Why this one.** The prose *is* the feature, so the model is not chosen on price
+alone. A model too small on the same prompt describes the right position but
+overstates it — saying a move frees "both bishops" where it frees one — and those
+are the claims a learner has no way to catch. Everything the prompt could give it
+is already there (see the grounding in
+[`services/coach.py`](../chessdotcom_ai_coach/services/coach.py)), so the
+remaining gap is the model. Gemini 2.5 Flash sits where the curve bends: a
+seventh of Sonnet's cost without the overconfident prose of the tier below it. If
+accuracy matters more than the bill, `anthropic/claude-sonnet-4.5` is still the
+best writer here; `google/gemini-2.5-flash-lite` is the other direction, and
+reads like it.
+
+**Reasoning is switched off** in the request (`reasoning: {"enabled": false}` in
+[`services/coach.py`](../chessdotcom_ai_coach/services/coach.py)). Reasoning
+tokens are billed as output — the expensive half — and the card never shows them:
+the position has already been solved by Stockfish, and what the model is asked
+for is a few paragraphs about it. Leaving it on would multiply the per-move cost
+quoted above, because the default model thinks unless told not to. OpenRouter
+accepts the flag for every model and ignores it where reasoning cannot be turned
+off, such as Gemini 2.5 Pro and the OpenAI o-series — pick one of those and the
+costs above no longer apply.
+
+Changing the model is one line and a restart of `web` and `worker` — there is
+nothing to pull and no tag to keep in sync.
 
 ```bash
 docker compose up -d web worker

@@ -26,7 +26,11 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # AsyncOpenAI(api_key=None) silently falls back to the OPENAI_API_KEY environment
 # variable, which would pick up an unrelated key on a developer machine.
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4.5")
+# One analysed move is one billed request, and a game is dozens of them, so the
+# default is chosen for cost as much as for prose: Gemini 2.5 Flash runs an
+# analysis for roughly a seventh of what Claude Sonnet 4.5 costs. Any slug from
+# https://openrouter.ai/models works — see docs/configuration.md#choosing-a-model.
+LLM_MODEL = os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
 
 # A hosted model answers in seconds, and there are no weights to reload, so 60s is
 # a generous cap on a slow response rather than a budget for one.
@@ -376,6 +380,16 @@ Instructions:
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
+                    # Reasoning tokens are billed as output tokens — the
+                    # expensive half of a request — and the card never shows
+                    # them: the coach prose is a few paragraphs about a position
+                    # the engine has already solved, not a problem the model has
+                    # to work out. The default model thinks unless told not to,
+                    # so this is the difference between the per-move cost the
+                    # docs quote and several times it. OpenRouter accepts the
+                    # flag for every model and ignores it where reasoning cannot
+                    # be switched off (Gemini 2.5 Pro, the o-series).
+                    extra_body={"reasoning": {"enabled": False}},
                 )
             content = response.choices[0].message.content
             analysis = _plain_text(content) if content else eval_text
